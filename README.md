@@ -9,7 +9,7 @@ Miles conducts a design interview, generates a strategic brief, creates multiple
 ## Install
 
 ```bash
-npx skills add bymilesai/miles-skill
+npx skills add bymilesai/skills
 ```
 
 Or manually place the `miles/` directory in your Claude Code skills folder:
@@ -34,7 +34,19 @@ The skill handles authentication, the design conversation with Miles, and the fu
 
 ## How it works
 
-The skill bundles a CLI client that communicates with the Miles API over WebSocket. A PostToolUse hook automatically captures Miles' responses and delivers them as context to your AI agent, enabling a seamless conversational flow.
+The skill bundles a lightweight CLI client (`miles/scripts/miles-cli.mjs`) that communicates with the Miles API over REST and WebSocket. When your agent runs a Miles command, a PostToolUse hook automatically captures Miles' response and delivers it as structured context — including questions, options, design direction previews, and build progress.
+
+The workflow looks like:
+
+1. **Authentication** — `miles login` opens a browser for device auth
+2. **Create site** — `miles create-site "description"` starts a conversation with Miles
+3. **Discovery** — Miles asks questions, your agent relays them to you, sends your answers back
+4. **Brief review** — Miles presents a design brief for your approval
+5. **Design directions** — Miles generates multiple design directions with preview URLs
+6. **Build** — You pick a direction, Miles builds the full site
+7. **Export** — Download as static HTML or convert to a WordPress block theme
+
+See [commands.md](miles/commands.md) for the full command reference and [examples.md](miles/examples.md) for workflow examples.
 
 ## License
 

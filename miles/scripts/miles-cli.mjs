@@ -120,10 +120,9 @@ function openUrl(url) {
 // Commands
 // ============================================================================
 
-async function cmdLogin(args) {
-  const serverUrl = args[0] || DEFAULT_SERVER_URL;
+async function cmdLogin() {
+  const serverUrl = DEFAULT_SERVER_URL;
   console.log(`Opening browser for Miles login...`);
-  console.log(`Server: ${serverUrl}`);
 
   // Request device code
   const data = await apiRequest('POST', '/api/v2/auth/device/device-code', {
@@ -156,7 +155,7 @@ async function cmdLogin(args) {
 
       if (tokenData.apiKey) {
         // Start fresh - clear stale site data from previous sessions
-        const creds = { apiKey: tokenData.apiKey, serverUrl };
+        const creds = { apiKey: tokenData.apiKey };
         saveCredentials(creds);
         console.log(`\nLogged in successfully!`);
         console.log(`API key: ${tokenData.keyPrefix}...`);
@@ -188,7 +187,6 @@ async function cmdWhoami() {
     return;
   }
 
-  console.log(`Server: ${creds.serverUrl || DEFAULT_SERVER_URL}`);
   console.log(`API Key: ${creds.apiKey.substring(0, 16)}...`);
 
   const site = getActiveSite(creds);
@@ -206,12 +204,7 @@ async function cmdCheckAuth() {
     process.exit(1);
   }
 
-  // Clear stale dev credentials pointing to localhost
-  const serverUrl = creds.serverUrl || DEFAULT_SERVER_URL;
-  if (serverUrl.includes('localhost') || serverUrl.includes('127.0.0.1')) {
-    saveCredentials({});
-    process.exit(1);
-  }
+  const serverUrl = DEFAULT_SERVER_URL;
 
   // Validate API key against server
   try {
@@ -254,7 +247,7 @@ async function cmdCreateSite(args) {
     process.exit(1);
   }
 
-  const serverUrl = creds.serverUrl || DEFAULT_SERVER_URL;
+  const serverUrl = DEFAULT_SERVER_URL;
 
   // Parse args
   let message = '';
@@ -328,7 +321,7 @@ async function cmdReply(args) {
     process.exit(1);
   }
 
-  const serverUrl = creds.serverUrl || DEFAULT_SERVER_URL;
+  const serverUrl = DEFAULT_SERVER_URL;
 
   await apiRequest(
     'POST',
@@ -351,7 +344,7 @@ async function cmdWait() {
     process.exit(1);
   }
 
-  const serverUrl = creds.serverUrl || DEFAULT_SERVER_URL;
+  const serverUrl = DEFAULT_SERVER_URL;
   await doWait(creds, site.conversationId, serverUrl);
 }
 
@@ -967,7 +960,7 @@ async function cmdStatus() {
     process.exit(1);
   }
 
-  const serverUrl = creds.serverUrl || DEFAULT_SERVER_URL;
+  const serverUrl = DEFAULT_SERVER_URL;
   const data = await apiRequest(
     'GET',
     `/api/v2/headless/conversations/${site.conversationId}/status`,
@@ -1010,7 +1003,7 @@ async function cmdDesignDirections() {
     process.exit(1);
   }
 
-  const serverUrl = creds.serverUrl || DEFAULT_SERVER_URL;
+  const serverUrl = DEFAULT_SERVER_URL;
   const data = await apiRequest(
     'GET',
     `/api/v2/headless/conversations/${site.conversationId}/design-directions`,
@@ -1056,7 +1049,7 @@ async function cmdSelectDesignDirection(args) {
     process.exit(1);
   }
 
-  const serverUrl = creds.serverUrl || DEFAULT_SERVER_URL;
+  const serverUrl = DEFAULT_SERVER_URL;
 
   console.log(`Selecting design direction ${directionNumber}...`);
 
@@ -1124,7 +1117,7 @@ async function cmdScreenshot(args) {
     process.exit(1);
   }
 
-  const serverUrl = creds.serverUrl || DEFAULT_SERVER_URL;
+  const serverUrl = DEFAULT_SERVER_URL;
 
   // Fetch screenshot as binary image from the server
   const encodedUrl = encodeURIComponent(url);
@@ -1162,7 +1155,7 @@ async function cmdSites() {
     process.exit(1);
   }
 
-  const serverUrl = creds.serverUrl || DEFAULT_SERVER_URL;
+  const serverUrl = DEFAULT_SERVER_URL;
   const data = await apiRequest('GET', '/api/v2/headless/sites', {
     auth: creds.apiKey,
     serverUrl,
@@ -1224,7 +1217,7 @@ async function cmdBalance() {
     process.exit(1);
   }
 
-  const serverUrl = creds.serverUrl || DEFAULT_SERVER_URL;
+  const serverUrl = DEFAULT_SERVER_URL;
 
   // Use the wait endpoint with a quick timeout to get credits
   const data = await apiRequest(
@@ -1258,7 +1251,7 @@ async function cmdMessages() {
     process.exit(1);
   }
 
-  const serverUrl = creds.serverUrl || DEFAULT_SERVER_URL;
+  const serverUrl = DEFAULT_SERVER_URL;
   const data = await apiRequest(
     'GET',
     `/api/v2/headless/conversations/${site.conversationId}/messages`,
@@ -1281,7 +1274,7 @@ async function cmdBuildTheme() {
     process.exit(1);
   }
 
-  const serverUrl = creds.serverUrl || DEFAULT_SERVER_URL;
+  const serverUrl = DEFAULT_SERVER_URL;
   const dashboardUrl = `${site.dashboardUrl}?agent=true`;
 
   // Check if Playground is already connected (opened during select-design-direction)
@@ -1352,7 +1345,7 @@ async function cmdExportTheme() {
     process.exit(1);
   }
 
-  const serverUrl = creds.serverUrl || DEFAULT_SERVER_URL;
+  const serverUrl = DEFAULT_SERVER_URL;
   const data = await apiRequest(
     'GET',
     `/api/v2/headless/conversations/${site.conversationId}/export/theme`,
@@ -1373,7 +1366,7 @@ async function cmdExportSite() {
     process.exit(1);
   }
 
-  const serverUrl = creds.serverUrl || DEFAULT_SERVER_URL;
+  const serverUrl = DEFAULT_SERVER_URL;
   const data = await apiRequest(
     'GET',
     `/api/v2/headless/conversations/${site.conversationId}/export/html`,

@@ -206,7 +206,12 @@ async function cmdCheckAuth() {
     process.exit(1);
   }
 
+  // Clear stale dev credentials pointing to localhost
   const serverUrl = creds.serverUrl || DEFAULT_SERVER_URL;
+  if (serverUrl.includes('localhost') || serverUrl.includes('127.0.0.1')) {
+    saveCredentials({});
+    process.exit(1);
+  }
 
   // Validate API key against server
   try {

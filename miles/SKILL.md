@@ -5,13 +5,13 @@ hooks:
   SessionStart:
     - hooks:
         - type: command
-          command: "chmod +x ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs && : > ~/.miles/last-response && node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs check-auth 2>/dev/null || true"
+          command: "chmod +x ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs && : > ~/.miles/last-response && ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs check-auth 2>/dev/null || true"
           once: true
   PostToolUse:
     - matcher: "Bash"
       hooks:
         - type: command
-          command: "node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs hook"
+          command: "${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs hook"
 ---
 
 # Miles AI Website Designer
@@ -41,20 +41,20 @@ This is the complete set of commands. Do not invent others.
 | `miles build-theme` | Convert HTML site to WordPress theme |
 | `miles export-theme` | Get WordPress theme download URL |
 
-Run all miles commands as: `node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs <command>`
+Run all miles commands as: `${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs <command>`
 
 Set the Bash timeout to 10 minutes (600000ms) for all miles commands — site building and theme conversion can take several minutes.
 
 ## Step 1: Authenticate
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs whoami
+${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs whoami
 ```
 
 If not logged in:
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs login
+${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs login
 ```
 
 This opens a browser URL for approval. Tell the user to approve in their browser.
@@ -64,13 +64,13 @@ This opens a browser URL for approval. Tell the user to approve in their browser
 Pass the user's description directly to create-site — the richer the initial description, the fewer follow-up questions Miles will ask:
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs create-site "<user's description>"
+${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs create-site "<user's description>"
 ```
 
 If the user provided a written brief, save it to a temp file and use `--brief`:
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs create-site --brief /tmp/brief.md "<summary>"
+${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs create-site --brief /tmp/brief.md "<summary>"
 ```
 
 ## Step 3: Relay the Conversation
@@ -92,7 +92,7 @@ A detailed initial prompt (e.g. "Build me a website for my yoga studio in Portla
 The hook context includes structured tags like `[question: ...]` with question text and numbered options. Use `AskUserQuestion` to present these to the user, copying the question text and options directly from the context. Then send the user's answer:
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs reply "<user's exact answer>"
+${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs reply "<user's exact answer>"
 ```
 
 Pass the user's words through unchanged. If the user says "Modern and clean", send "Modern and clean" — Miles knows how to work with brief answers. Go straight to the next action after each reply; skip commentary like "Great choice!".
@@ -102,16 +102,16 @@ Pass the user's words through unchanged. If the user says "Modern and clean", se
 <example>
 User prompt: "Build a website for my yoga studio"
 
-1. Run: `node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs create-site "Build a website for my yoga studio"`
+1. Run: `${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs create-site "Build a website for my yoga studio"`
 2. Hook context arrives with: `[question: What's the name of your studio?]`
 3. Use AskUserQuestion: "What's the name of your studio?"
 4. User answers: "Breathe Portland Yoga"
-5. Run: `node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs reply "Breathe Portland Yoga"`
+5. Run: `${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs reply "Breathe Portland Yoga"`
 6. Hook context arrives with next question → repeat relay
 7. Miles presents brief (phase: brief_review) → show brief to user, ask approval
-8. User approves → `node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs reply "Looks good, approved"`
+8. User approves → `${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs reply "Looks good, approved"`
 9. Miles generates design directions → present to user for selection
-10. User picks design 2 → `node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs select-design-direction 2`
+10. User picks design 2 → `${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs select-design-direction 2`
 11. Miles builds the site → `[site_ready: true]`
 </example>
 
@@ -126,7 +126,7 @@ When Miles finishes generating design directions (phase: `design_directions_read
 Visually inspect each design before presenting to the user. If a browser is available, open the preview URLs. Otherwise, use `miles screenshot` to capture them — it saves a JPEG and prints the path, then use `Read` to view the image:
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs screenshot /preview/abc123/previews/hero-xyz/index.html
+${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs screenshot /preview/abc123/previews/hero-xyz/index.html
 ```
 
 When evaluating designs, consider: visual hierarchy, tone match with the business, layout quality, image quality, overall polish.
@@ -134,14 +134,14 @@ When evaluating designs, consider: visual hierarchy, tone match with the busines
 If none fit, ask Miles for new directions with feedback:
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs reply "None of these feel right. I want something more modern and minimal."
-node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs wait
+${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs reply "None of these feel right. I want something more modern and minimal."
+${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs wait
 ```
 
 Use `AskUserQuestion` to ask the user which design they prefer. Then select it — this command triggers the full site build and waits for completion:
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs select-design-direction <number>
+${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs select-design-direction <number>
 ```
 
 The select command already waits for the build, so there's no need to run `miles wait` after it.
@@ -151,9 +151,9 @@ The select command already waits for the build, so there's no need to run `miles
 When `select-design-direction` finishes (indicated by `[site_ready: true]`), Miles has built a complete static HTML website. This is the first deliverable.
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs preview              # Open live preview in browser
-node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs screenshot <url>     # Screenshot a preview URL
-node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs export-site          # Get static HTML download URL and file info
+${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs preview              # Open live preview in browser
+${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs screenshot <url>     # Screenshot a preview URL
+${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs export-site          # Get static HTML download URL and file info
 ```
 
 ## Step 6: WordPress Theme (Separate Step)
@@ -161,8 +161,8 @@ node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs export-site          # Get static
 Converting the HTML site into a WordPress block theme is a separate operation from the site build.
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs build-theme          # Triggers theme conversion
-node ${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs export-theme         # Get WordPress theme download URL
+${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs build-theme          # Triggers theme conversion
+${CLAUDE_SKILL_DIR}/scripts/miles-cli.mjs export-theme         # Get WordPress theme download URL
 ```
 
 ## How the Hook Works

@@ -1,10 +1,12 @@
-# Miles AI – Agent Skill
+# Miles (bymiles.ai) Agent Skill
 
-Design complete websites through conversation with [Miles AI](https://bymiles.ai). This skill lets AI coding agents (Claude Code, Cursor, etc.) create professional websites — from initial brief through design direction selection to a fully built site.
+Design and build beautiful WordPress websites with [Miles](https://bymiles.ai). This skill will allow your agent (Claude Code, CoWork, Codex, OpenClaw etc.) to create professional WordPress websites — from initial brief through design direction selection to a fully built WordPress site.
+
+Miles provides instant cloud sandboxes for WordPress so you can build and experiment with WordPress immediately. When you're ready you can export to a local environment or push to a host.
 
 ## What it does
 
-Miles conducts a design interview, generates a strategic brief, creates multiple design directions for review, then builds a complete static HTML website. Optionally converts it to a WordPress block theme.
+Miles can conduct a design interview, generates a strategic website brief, create multiple design directions for review. You or your agent can decide which design to build and continue to iterate on the design and structure.
 
 ## Install
 
@@ -26,15 +28,11 @@ Or manually place the `miles/` directory in your Claude Code skills folder:
 
 ## Usage
 
-Once installed, just ask your AI agent to build a website:
+Once installed, just ask your AI agent to build a website with Miles:
 
-> "Build a website for my yoga studio in Portland"
+> "Ask Miles to build a website for my yoga studio in Portland"
 
-The skill handles authentication, the design conversation with Miles, and the full build process. Your agent will relay Miles' questions to you and present design options for your approval.
-
-## How it works
-
-The skill bundles a lightweight CLI client (`miles/scripts/miles-cli.mjs`) that communicates with the Miles API over REST and WebSocket. When your agent runs a Miles command, a PostToolUse hook automatically captures Miles' response and delivers it as structured context — including questions, options, design direction previews, and build progress.
+The skill handles authentication, the design conversation with Miles, and the full build process. Your agent will relay Miles' questions to you and present design options for your approval. You can continue to make changes to your WordPress site with Miles.
 
 The workflow looks like:
 
@@ -43,11 +41,8 @@ The workflow looks like:
 3. **Discovery** — Miles asks questions, your agent relays them to you, sends your answers back
 4. **Brief review** — Miles presents a design brief for your approval
 5. **Design directions** — Miles generates multiple design directions with preview URLs
-6. **Build** — You pick a direction, Miles builds the full site
-7. **Export** — Download as static HTML or convert to a WordPress block theme
+6. **Build** — You pick a direction, Miles builds the full site in both HTML and as a WordPress block theme
+7. **Export** — Download as static HTML site or export a full WordPress sandbox instance you can drop into Local or WP Studio
+8. **Edit** - Continue to make direct edits to your WordPress using Miles and the cloud sandbox it provides
 
 See [commands.md](miles/commands.md) for the full command reference and [examples.md](miles/examples.md) for workflow examples.
-
-## License
-
-MIT

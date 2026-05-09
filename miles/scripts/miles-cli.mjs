@@ -9,20 +9,42 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { homedir } from 'os';
-import { join } from 'path';
+import { dirname, join, resolve } from 'path';
 import { execFileSync } from 'child_process';
 import { randomUUID } from 'crypto';
+import { fileURLToPath } from 'url';
 
 // ============================================================================
 // Config
 // ============================================================================
 
-const CREDENTIALS_DIR = join(homedir(), '.miles');
+const SCRIPT_PATH = fileURLToPath(import.meta.url);
+const SCRIPT_DIR = dirname(SCRIPT_PATH);
+const DEFAULT_SKILL_DIR = resolve(SCRIPT_DIR, '..');
+const MILES_SKILL_DIR =
+  process.env.MILES_SKILL_DIR || process.env.CLAUDE_SKILL_DIR || DEFAULT_SKILL_DIR;
+const MILES_CLI = process.env.MILES_CLI || SCRIPT_PATH;
+
+function expandHomePath(path) {
+  if (!path) return path;
+  if (path === '~') return homedir();
+  if (path.startsWith('~/')) return join(homedir(), path.slice(2));
+  return path;
+}
+
+const MILES_HOME = resolve(
+  expandHomePath(process.env.MILES_HOME || join(homedir(), '.miles')),
+);
+const CREDENTIALS_DIR = MILES_HOME;
 const CREDENTIALS_FILE = join(CREDENTIALS_DIR, 'credentials.json');
 const LAST_RESPONSE_FILE = join(CREDENTIALS_DIR, 'last-response');
+const SCREENSHOTS_DIR = join(CREDENTIALS_DIR, 'screenshots');
 const DEFAULT_SERVER_URL = 'https://api.bymiles.ai';
 const MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
 const POLL_TIMEOUT_MS = 10000; // 10 second poll for faster progress updates
+const ERROR_BODY_MAX_CHARS = 2048;
+
+let cliOptions = { json: false };
 
 // Track hero preview statuses across data parts for aggregate progress display
 const heroProgressTracker = new Map();
@@ -55,6 +77,93 @@ function getActiveSite(creds) {
 function writeLastResponse(text) {
   mkdirSync(CREDENTIALS_DIR, { recursive: true });
   writeFileSync(LAST_RESPONSE_FILE, text);
+}
+
+function emitJson(value) {
+  console.log(JSON.stringify(value, null, 2));
+}
+
+function parseGlobalArgs(argv) {
+  const args = [];
+  const options = { json: false };
+
+  for (const arg of argv) {
+    if (arg === '--json') {
+      options.json = true;
+    } else {
+      args.push(arg);
+    }
+  }
+
+  return {
+    command: args[0],
+    args: args.slice(1),
+    options,
+  };
+}
+
+function getActiveSiteSummary(creds) {
+  const site = getActiveSite(creds);
+  if (!site) return null;
+
+  return {
+    id: site.id,
+    name: site.name || null,
+    conversationId: site.conversationId || null,
+    dashboardUrl: site.dashboardUrl || null,
+  };
+}
+
+function getLocalRuntimeSummary(creds = loadCredentials()) {
+  return {
+    paths: {
+      milesHome: MILES_HOME,
+      credentialsFile: CREDENTIALS_FILE,
+      lastResponseFile: LAST_RESPONSE_FILE,
+      screenshotsDir: SCREENSHOTS_DIR,
+      skillDir: MILES_SKILL_DIR,
+      cli: MILES_CLI,
+    },
+    runtime: {
+      node: process.version,
+      platform: process.platform,
+      websocket: typeof globalThis.WebSocket !== 'undefined',
+    },
+    auth: {
+      authenticated: Boolean(creds.apiKey),
+      activeSite: getActiveSiteSummary(creds),
+    },
+  };
+}
+
+function truncateText(text, maxChars = ERROR_BODY_MAX_CHARS) {
+  if (text.length <= maxChars) return { text, truncated: false };
+  return {
+    text: `${text.slice(0, maxChars - '...[truncated]'.length)}...[truncated]`,
+    truncated: true,
+  };
+}
+
+async function readResponseErrorBody(response) {
+  const contentType = response.headers.get('content-type') || '';
+  const text = await response.text();
+
+  if (!text) {
+    return { contentType, body: null };
+  }
+
+  try {
+    return { contentType, body: JSON.parse(text) };
+  } catch {
+    const { text: truncatedText, truncated } = truncateText(text);
+    return {
+      contentType,
+      body: {
+        raw: truncatedText,
+        truncated,
+      },
+    };
+  }
 }
 
 // ============================================================================
@@ -177,13 +286,35 @@ async function cmdLogin() {
 
 async function cmdLogout() {
   saveCredentials({});
-  console.log('Logged out. Credentials cleared.');
+  if (cliOptions.json) {
+    emitJson({ ok: true, authenticated: false, milesHome: MILES_HOME });
+  } else {
+    console.log('Logged out. Credentials cleared.');
+  }
 }
 
 async function cmdWhoami() {
   const creds = loadCredentials();
   if (!creds.apiKey) {
+    if (cliOptions.json) {
+      emitJson({
+        authenticated: false,
+        activeSite: null,
+        milesHome: MILES_HOME,
+      });
+      return;
+    }
     console.log('Not logged in. Use `miles login`.');
+    return;
+  }
+
+  if (cliOptions.json) {
+    emitJson({
+      authenticated: true,
+      apiKeyPrefix: `${creds.apiKey.substring(0, 16)}...`,
+      activeSite: getActiveSiteSummary(creds),
+      milesHome: MILES_HOME,
+    });
     return;
   }
 
@@ -195,6 +326,70 @@ async function cmdWhoami() {
     console.log(`Conversation: ${site.conversationId || 'none'}`);
   } else {
     console.log('No active site. Use `miles create-site` to start.');
+  }
+}
+
+async function cmdDoctor() {
+  const creds = loadCredentials();
+  const summary = getLocalRuntimeSummary(creds);
+  const nodeMajor = Number(process.versions.node.split('.')[0]);
+  const checks = [
+    {
+      name: 'node',
+      ok: nodeMajor >= 20,
+      detail: `Node ${process.version}`,
+    },
+    {
+      name: 'websocket',
+      ok: summary.runtime.websocket,
+      detail: summary.runtime.websocket
+        ? 'WebSocket is available'
+        : 'WebSocket is not available; polling fallback will be used',
+    },
+    {
+      name: 'milesHome',
+      ok: true,
+      detail: MILES_HOME,
+    },
+    {
+      name: 'credentials',
+      ok: summary.auth.authenticated,
+      detail: summary.auth.authenticated
+        ? 'Miles credentials are present'
+        : 'Not logged in. Run `miles login`.',
+    },
+  ];
+
+  const result = {
+    status: checks.every((check) => check.ok) ? 'ok' : 'needs_setup',
+    checks,
+    ...summary,
+  };
+
+  if (cliOptions.json) {
+    emitJson(result);
+    return;
+  }
+
+  console.log(`Miles CLI doctor: ${result.status}`);
+  checks.forEach((check) => {
+    console.log(`${check.ok ? 'ok' : 'needs setup'} - ${check.name}: ${check.detail}`);
+  });
+  console.log(`Miles home: ${summary.paths.milesHome}`);
+  console.log(`CLI: ${summary.paths.cli}`);
+  if (summary.auth.activeSite) {
+    console.log(`Active site: ${summary.auth.activeSite.name || summary.auth.activeSite.id}`);
+  }
+}
+
+async function cmdHookInit() {
+  writeLastResponse('');
+  if (cliOptions.json) {
+    emitJson({
+      ok: true,
+      lastResponseFile: LAST_RESPONSE_FILE,
+      milesHome: MILES_HOME,
+    });
   }
 }
 
@@ -495,23 +690,8 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
         if (data.status !== 'running') {
           const output = formatWaitResponse(data);
           writeLastResponse(output);
-          // Print design direction preview URLs only during direction selection phase
-          if (
-            data.directions?.length &&
-            data.phase === 'design_directions_ready'
-          ) {
-            console.log('');
-            data.directions.forEach((h) => {
-              const name = h.directionName || `Design ${h.number}`;
-              const previewPath =
-                h.previewUrl?.replace(/^https?:\/\/[^/]+/, '') || h.previewUrl;
-              console.log(`Design ${h.number}: ${name}`);
-              console.log(`  Preview: ${h.previewUrl}`);
-              console.log(
-                `  Screenshot: miles screenshot ${previewPath}`,
-              );
-            });
-          }
+          console.log('');
+          console.log(output);
           return true;
         }
       } catch {}
@@ -617,9 +797,7 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
               hasStreamedText = true;
             }
           }
-          // User input required — print narrative. The server-side fix
-          // (pauseRequested propagation) ensures the coordinator stops quickly
-          // and emits a finish chunk. The setTimeout is a safety-net fallback.
+          // User input required. Poll as a fallback in case the finish event is delayed.
           else if (chunk.type === 'data-user-question') {
             const firstQ = chunk.data?.questions?.[0];
             if (firstQ?.question) {
@@ -713,8 +891,8 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
 /**
  * Connection watchdog: monitors the Playground WebSocket connection and
  * reopens the browser if it drops. Runs as a background loop alongside
- * doWait. The server's REST proxy retry logic bridges the gap while
- * the Playground reboots (~15-20s).
+ * doWait. This keeps long-running browser-dependent work visible if
+ * the Playground reconnects during the run.
  *
  * Returns a stop function to call when the wait is complete.
  */
@@ -858,6 +1036,8 @@ async function doWait(creds, conversationId, serverUrl, maxWaitMs) {
 
       const output = formatWaitResponse(data);
       writeLastResponse(output);
+      console.log('');
+      console.log(output);
       return;
     }
 
@@ -967,6 +1147,19 @@ async function cmdStatus() {
     { auth: site.siteToken, serverUrl },
   );
 
+  if (cliOptions.json) {
+    emitJson({
+      status: data.status,
+      phase: data.phase,
+      conversationStatus: data.conversationStatus,
+      directionCount: data.directionCount || 0,
+      selectedDirectionId: data.selectedDirectionId || null,
+      siteReady: Boolean(data.siteReady),
+      activeSite: getActiveSiteSummary(creds),
+    });
+    return;
+  }
+
   console.log(`[status: ${data.status}]`);
   console.log(`[phase: ${data.phase}]`);
   console.log(`[conversation_status: ${data.conversationStatus}]`);
@@ -1009,6 +1202,22 @@ async function cmdDesignDirections() {
     `/api/v2/headless/conversations/${site.conversationId}/design-directions`,
     { auth: site.siteToken, serverUrl },
   );
+
+  if (cliOptions.json) {
+    emitJson({
+      phase: data.phase || null,
+      selectedDirectionId: data.selectedDirectionId || null,
+      directions: (data.directions || []).map((h) => ({
+        number: h.number,
+        name: h.directionName || `Design ${h.number}`,
+        previewUrl: h.previewUrl || null,
+        screenshotCommand: h.previewUrl
+          ? `miles screenshot ${h.previewUrl.replace(/^https?:\/\/[^/]+/, '')}`
+          : null,
+      })),
+    });
+    return;
+  }
 
   if (data.directions?.length === 0) {
     console.log(
@@ -1128,24 +1337,51 @@ async function cmdScreenshot(args) {
   });
 
   if (!response.ok) {
+    const errorBody = await readResponseErrorBody(response);
+    const body = errorBody.body;
     let msg = `Screenshot failed (HTTP ${response.status})`;
-    try {
-      const err = await response.json();
-      if (err.error) msg = err.error;
-    } catch {}
-    console.error(msg);
+    if (body?.error) msg = body.error;
+    if (body?.message) msg = body.message;
+    if (cliOptions.json) {
+      console.error(
+        JSON.stringify(
+          {
+            ok: false,
+            error: msg,
+            status: response.status,
+            targetUrl: url,
+            detail: body,
+            contentType: errorBody.contentType,
+          },
+          null,
+          2,
+        ),
+      );
+    } else {
+      console.error(msg);
+      if (body?.raw) console.error(`Body: ${body.raw}`);
+    }
     process.exit(1);
   }
 
   // Save to temp file
   const imageBuffer = Buffer.from(await response.arrayBuffer());
-  const tmpDir = join(homedir(), '.miles', 'screenshots');
-  mkdirSync(tmpDir, { recursive: true });
+  mkdirSync(SCREENSHOTS_DIR, { recursive: true });
   const filename = `screenshot-${Date.now()}.jpg`;
-  const filepath = join(tmpDir, filename);
+  const filepath = join(SCREENSHOTS_DIR, filename);
   writeFileSync(filepath, imageBuffer);
 
-  console.log(filepath);
+  if (cliOptions.json) {
+    emitJson({
+      ok: true,
+      path: filepath,
+      targetUrl: url,
+      bytes: imageBuffer.byteLength,
+      contentType: response.headers.get('content-type') || null,
+    });
+  } else {
+    console.log(filepath);
+  }
 }
 
 async function cmdSites() {
@@ -1160,6 +1396,20 @@ async function cmdSites() {
     auth: creds.apiKey,
     serverUrl,
   });
+
+  if (cliOptions.json) {
+    emitJson({
+      activeSiteId: creds.activeSite || null,
+      sites: (data.sites || []).map((site) => ({
+        id: site.id,
+        name: site.name || null,
+        phase: site.phase || null,
+        dashboardUrl: site.dashboardUrl || null,
+        active: site.id === creds.activeSite,
+      })),
+    });
+    return;
+  }
 
   if (!data.sites?.length) {
     console.log('No sites found. Use `miles create-site` to create one.');
@@ -1193,7 +1443,14 @@ async function cmdUse(args) {
 
   creds.activeSite = siteId;
   saveCredentials(creds);
-  console.log(`Switched to site: ${creds.sites[siteId].name || siteId}`);
+  if (cliOptions.json) {
+    emitJson({
+      ok: true,
+      activeSite: getActiveSiteSummary(creds),
+    });
+  } else {
+    console.log(`Switched to site: ${creds.sites[siteId].name || siteId}`);
+  }
 }
 
 async function cmdPreview() {
@@ -1205,7 +1462,12 @@ async function cmdPreview() {
   }
 
   const url = `${site.dashboardUrl}?agent=true`;
-  console.log(url);
+  if (cliOptions.json) {
+    emitJson({ url, activeSite: getActiveSiteSummary(creds) });
+    return;
+  } else {
+    console.log(url);
+  }
   openUrl(url);
 }
 
@@ -1227,6 +1489,17 @@ async function cmdBalance() {
   );
 
   if (data.credits) {
+    if (cliOptions.json) {
+      emitJson({
+        planUsagePercent: data.credits.usagePercent,
+        topUpCredits: data.credits.topUpCredits || 0,
+        billingUrl:
+          data.credits.usagePercent >= 95 && data.credits.topUpCredits === 0
+            ? `${site.dashboardUrl}/settings/billing`
+            : null,
+      });
+      return;
+    }
     console.log(`Plan usage: ${data.credits.usagePercent}%`);
     if (data.credits.topUpCredits > 0) {
       console.log(
@@ -1239,6 +1512,10 @@ async function cmdBalance() {
       );
     }
   } else {
+    if (cliOptions.json) {
+      emitJson({ error: 'Could not retrieve balance.' });
+      return;
+    }
     console.log('Could not retrieve balance.');
   }
 }
@@ -1257,6 +1534,16 @@ async function cmdMessages() {
     `/api/v2/headless/conversations/${site.conversationId}/messages`,
     { auth: site.siteToken, serverUrl },
   );
+
+  if (cliOptions.json) {
+    emitJson({
+      messages: (data.messages || []).map((msg) => ({
+        role: msg.role,
+        text: msg.text || '',
+      })),
+    });
+    return;
+  }
 
   data.messages?.forEach((msg) => {
     const role = msg.role === 'assistant' ? 'Miles' : 'You';
@@ -1352,6 +1639,11 @@ async function cmdExportTheme() {
     { auth: site.siteToken, serverUrl },
   );
 
+  if (cliOptions.json) {
+    emitJson(data);
+    return;
+  }
+
   console.log(`Theme: ${data.themeSlug}`);
   console.log(`Download: ${data.downloadUrl}`);
   if (data.editorUrl) console.log(`Editor: ${data.editorUrl}`);
@@ -1372,6 +1664,11 @@ async function cmdExportSite() {
     `/api/v2/headless/conversations/${site.conversationId}/export/html`,
     { auth: site.siteToken, serverUrl },
   );
+
+  if (cliOptions.json) {
+    emitJson(data);
+    return;
+  }
 
   console.log(`Preview: ${data.previewUrl}`);
   console.log(`Slug: ${data.slug}`);
@@ -1398,8 +1695,7 @@ async function cmdHook() {
 
   // Check if this was a miles CLI command (stdin uses snake_case field names)
   const toolCommand = hookData?.tool_input?.command || '';
-  if (!toolCommand.includes('miles') && !toolCommand.includes('.miles/bin/')) {
-    // Not a miles command, exit silently
+  if (!isMilesToolCommand(toolCommand)) {
     process.exit(0);
   }
 
@@ -1425,18 +1721,31 @@ async function cmdHook() {
   process.exit(0);
 }
 
+function isMilesToolCommand(commandText) {
+  if (typeof commandText !== 'string') return false;
+  return (
+    /\bMILES_CLI\b/i.test(commandText) ||
+    /\bmiles-cli\.mjs\b/i.test(commandText) ||
+    /(?:^|[^\w-])miles(?:\s|$)/i.test(commandText) ||
+    /\.miles\/bin\//i.test(commandText)
+  );
+}
+
 // ============================================================================
 // Main
 // ============================================================================
 
-const command = process.argv[2];
-const args = process.argv.slice(3);
+const parsed = parseGlobalArgs(process.argv.slice(2));
+const { command, args } = parsed;
+cliOptions = parsed.options;
 
 const commands = {
+  doctor: cmdDoctor,
   login: cmdLogin,
   logout: cmdLogout,
   whoami: cmdWhoami,
   'check-auth': cmdCheckAuth,
+  'hook-init': cmdHookInit,
   'create-site': cmdCreateSite,
   reply: cmdReply,
   wait: cmdWait,
@@ -1459,6 +1768,7 @@ if (!command || command === 'help' || command === '--help') {
   console.log(`Miles CLI - Design websites with Miles AI
 
 Authentication:
+  miles doctor                      Check local CLI setup
   miles login [server-url]          Device auth flow (opens browser)
   miles logout                      Clear stored credentials
   miles whoami                      Show current auth + active site
@@ -1475,7 +1785,7 @@ Conversation:
   miles reply "<message>"           Send message to Miles, wait for response
   miles wait                        Long-poll for Miles' response
   miles status                      Quick status check (non-blocking)
-  miles design-directions             Get design direction preview URLs
+  miles design-directions           Get design direction preview URLs
   miles select-design-direction <n> Choose a design direction
   miles build-theme                 Build WordPress theme (opens browser, waits, converts)
   miles screenshot <preview-url>    Screenshot a preview URL (saves JPEG, prints path)
@@ -1483,7 +1793,10 @@ Conversation:
 
 Export:
   miles export-theme                Download WordPress theme info
-  miles export-site                 Get static HTML files info`);
+  miles export-site                 Get static HTML files info
+
+Options:
+  --json                            Emit JSON for inspection commands`);
   process.exit(0);
 }
 
@@ -1496,6 +1809,35 @@ if (!handler) {
 }
 
 handler(args).catch((err) => {
+  if (cliOptions.json) {
+    if (err instanceof ApiError) {
+      console.error(
+        JSON.stringify(
+          {
+            ok: false,
+            error: err.message,
+            status: err.status,
+            detail: err.data || null,
+          },
+          null,
+          2,
+        ),
+      );
+    } else {
+      console.error(
+        JSON.stringify(
+          {
+            ok: false,
+            error: err.message,
+          },
+          null,
+          2,
+        ),
+      );
+    }
+    process.exit(1);
+  }
+
   if (err instanceof ApiError) {
     console.error(`Error: ${err.message}`);
     if (err.data?.details) {

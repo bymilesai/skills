@@ -1,5 +1,16 @@
 # Miles Workflow Examples
 
+## Clean Install Check
+
+Use an isolated `MILES_HOME` when testing the skill from a separate environment:
+
+```bash
+export MILES_HOME=/tmp/miles-skill-smoke
+export MILES_CLI=/path/to/miles/scripts/miles
+miles doctor --json
+miles whoami --json
+```
+
 ## Solo User - Interactive Design
 
 User says: "Build me a website for my yoga studio"
@@ -19,6 +30,25 @@ miles design-directions
 miles select-design-direction 2
 # Miles builds the site (streams progress, returns when done)
 miles preview
+```
+
+## Verify a Design Direction
+
+```bash
+miles design-directions --json
+miles screenshot /preview/site-id/previews/hero-id/index.html --json
+# Open or inspect the returned screenshot path before asking the user to choose.
+```
+
+## Multi-Page Update
+
+After a site exists, request additional pages or multi-page edits through Miles and verify the resulting state:
+
+```bash
+miles reply "Add About and Services pages that match the current design direction."
+miles wait
+miles status --json
+miles screenshot /preview/site-id/index.html --json
 ```
 
 ## Agency Automation - Brief-Driven

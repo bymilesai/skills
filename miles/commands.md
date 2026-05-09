@@ -2,15 +2,23 @@
 
 ## Authentication
 
+### `miles doctor [--json]`
+Checks the local CLI runtime, skill path, `MILES_HOME`, credentials file, hook relay file, screenshot directory, Node version, WebSocket support, and active site state.
+
+Use this first when validating an install or when an agent cannot find the Miles CLI.
+
 ### `miles login [server-url]`
-Opens browser for device auth. Gets an API key stored in `~/.miles/credentials.json`.
+Opens browser for device auth. Gets an API key stored in `$MILES_HOME/credentials.json`.
 Default server: `https://api.bymiles.ai`
+
+By default, `MILES_HOME` is `~/.miles`. Set `MILES_HOME=/path/to/isolated/state` for clean-machine smoke tests or separate agent environments.
 
 ### `miles logout`
 Clears all stored credentials.
 
 ### `miles whoami`
 Shows current auth state, server URL, and active site.
+Supports `--json`.
 
 ## Site Management
 
@@ -22,15 +30,19 @@ Creates a new Playground site and starts a conversation with Miles.
 
 ### `miles sites`
 Lists all sites created via the API with their current phase.
+Supports `--json`.
 
 ### `miles use <siteId>`
 Switches the active site for subsequent commands.
+Supports `--json`.
 
 ### `miles preview`
 Gets and opens the dashboard URL for the active site. Appends `?agent=true` to hide the conversation panel.
+Supports `--json`.
 
 ### `miles balance`
 Shows remaining credits. Provides billing URL if credits are low.
+Supports `--json`.
 
 ## Conversation
 
@@ -43,27 +55,36 @@ Long-polls for Miles' response. Rarely needed — `create-site`, `reply`, and `s
 
 ### `miles status`
 Quick non-blocking check of conversation state. Returns phase, streaming status, direction count.
+Supports `--json`.
 
 ## Design Directions
 
 ### `miles design-directions`
 Returns design direction preview image URLs. These are publicly accessible and can be embedded anywhere.
 If no directions exist yet, shows the current phase and what's needed.
+Supports `--json`.
 
 ### `miles select-design-direction <number>`
 Selects a design direction by number (1, 2, or 3). Triggers Miles to build the full site.
 Auto-waits for the build to start.
 
+### `miles screenshot <preview-url>`
+Captures a preview URL to a JPEG under `$MILES_HOME/screenshots` and prints the file path.
+Supports `--json`, including target URL, path, byte count, and content type.
+
 ## Export
 
 ### `miles export-theme`
 Returns WordPress theme slug and download URL. Only available after theme conversion is complete.
+Supports `--json`.
 
 ### `miles export-site`
 Returns static HTML preview URL and storage slug. Available after site generation is complete.
+Supports `--json`.
 
 ### `miles messages`
 Shows simplified conversation history (user and assistant text only).
+Supports `--json`.
 
 ## Output Format
 
@@ -74,3 +95,7 @@ The CLI outputs plain text optimized for LLM consumption. Status tags appear in 
 - `[directions]` - Design direction list follows
 - `[site_ready: true]` - Site is complete
 - `[credits: N]` - Remaining credits
+
+For agent composition, use `--json` with non-streaming inspection commands such as `doctor`, `whoami`, `status`, `sites`, `design-directions`, `screenshot`, `messages`, `export-site`, and `export-theme`.
+
+Long-running commands such as `create-site`, `reply`, `wait`, `select-design-direction`, and `build-theme` stream progress as text, print the final Miles response to stdout, and write the same response to the hook relay file in `MILES_HOME`.

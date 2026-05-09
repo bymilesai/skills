@@ -1,0 +1,19 @@
+#!/usr/bin/env sh
+
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+if [ ! -f "$SCRIPT_DIR/miles-cli.mjs" ]; then
+  echo "Miles CLI script not found: $SCRIPT_DIR/miles-cli.mjs" >&2
+  exit 1
+fi
+
+if [ ! -x "$SCRIPT_DIR/miles-cli.mjs" ]; then
+  chmod +x "$SCRIPT_DIR/miles-cli.mjs" 2>/dev/null || {
+    echo "Miles CLI script is not executable: $SCRIPT_DIR/miles-cli.mjs" >&2
+    exit 1
+  }
+fi
+
+exec "$SCRIPT_DIR/miles-cli.mjs" "$@"

@@ -7,7 +7,7 @@ Checks the local CLI runtime, skill path, `MILES_HOME`, credentials file, hook r
 
 Use this first when validating an install or when an agent cannot find the Miles CLI.
 
-### `miles login [server-url]`
+### `miles login`
 Opens browser for device auth. Gets an API key stored in `$MILES_HOME/credentials.json`.
 Default server: `https://api.bymiles.ai`
 
@@ -17,7 +17,7 @@ By default, `MILES_HOME` is `~/.miles`. Set `MILES_HOME=/path/to/isolated/state`
 Clears all stored credentials.
 
 ### `miles whoami`
-Shows current auth state, server URL, and active site.
+Shows current auth state and active site.
 Supports `--json`.
 
 ## Site Management
@@ -50,7 +50,7 @@ Supports `--json`.
 Sends a message to Miles and auto-waits for the response.
 Use this to answer Miles' questions during discovery, approve the brief, or give feedback.
 
-### `miles wait [timeout]`
+### `miles wait`
 Long-polls for Miles' response. Rarely needed — `create-site`, `reply`, and `select-design-direction` all stream activity and wait automatically (up to 10 minutes). Use `miles wait` only as a recovery if a command was interrupted.
 
 ### `miles status`
@@ -90,11 +90,11 @@ Supports `--json`.
 
 The CLI outputs plain text optimized for LLM consumption. Status tags appear in brackets:
 - `[status: idle|streaming|completed|aborted]` - Streaming state
-- `[phase: discovery|brief_review|generating_design_directions|design_directions_ready|building|converting|complete]`
+- `[phase: discovery|brief_review|generating_design_directions|design_directions_ready|building|site_preview|site_generation|converting|complete]`
 - `[question: ask_user_question|request_confirmation|open_ended]`
 - `[directions]` - Design direction list follows
 - `[site_ready: true]` - Site is complete
-- `[credits: N]` - Remaining credits
+- `[warning: ...]` or `[error: ...]` - Credit warnings when usage is high
 
 For agent composition, use `--json` with non-streaming inspection commands such as `doctor`, `whoami`, `status`, `sites`, `design-directions`, `screenshot`, `messages`, `export-site`, and `export-theme`.
 

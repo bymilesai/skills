@@ -1,26 +1,60 @@
 #!/usr/bin/env node
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join, resolve } from 'path';
-import { execFileSync, spawnSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
+const skillDir = resolve(scriptDir, '..');
+const launcherPath = join(scriptDir, 'miles');
 const cliPath = join(scriptDir, 'miles-cli.mjs');
-const milesHome = mkdtempSync(join(tmpdir(), 'miles-cli-test-'));
+const tempRoots = [];
+
+function makeTempDir(prefix = 'miles-cli-test-') {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempRoots.push(dir);
+  return dir;
+}
+
+function envFor(milesHome, overrides = {}) {
+  return {
+    ...process.env,
+    PATH: `/opt/homebrew/bin:${process.env.PATH || ''}`,
+    MILES_HOME: milesHome,
+    MILES_CLI: launcherPath,
+    MILES_SKILL_DIR: skillDir,
+    ...overrides,
+  };
+}
 
 function run(args, options = {}) {
-  return execFileSync(process.execPath, [cliPath, ...args], {
+  const milesHome = options.milesHome || makeTempDir();
+  return spawnSync(launcherPath, args, {
     encoding: 'utf8',
-    env: {
-      ...process.env,
-      MILES_HOME: milesHome,
-      MILES_CLI: cliPath,
-      MILES_SKILL_DIR: resolve(scriptDir, '..'),
-    },
-    ...options,
+    input: options.input,
+    env: envFor(milesHome, options.env),
   });
+}
+
+function runJson(args, options = {}) {
+  const result = run(args, options);
+  let json;
+  try {
+    json = JSON.parse(result.stdout);
+  } catch (err) {
+    throw new Error(
+      `Expected JSON stdout for ${args.join(' ')}: ${err.message}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+  }
+  return { result, json };
 }
 
 function assert(condition, message) {
@@ -29,44 +63,175 @@ function assert(condition, message) {
   }
 }
 
-try {
-  const doctor = JSON.parse(run(['doctor', '--json']));
-  assert(doctor.paths.milesHome === milesHome, 'doctor should honor MILES_HOME');
-  assert(doctor.paths.cli === cliPath, 'doctor should report MILES_CLI');
-  assert(doctor.runtime.node, 'doctor should report Node version');
+function assertIncludes(text, expected, message) {
+  assert(
+    text.includes(expected),
+    `${message}\nExpected to include: ${expected}\nActual:\n${text}`,
+  );
+}
 
-  const whoami = JSON.parse(run(['whoami', '--json']));
-  assert(whoami.authenticated === false, 'whoami should report unauthenticated JSON');
-  assert(whoami.milesHome === milesHome, 'whoami should honor MILES_HOME');
-
-  run(['hook-init']);
-  const responsePath = join(milesHome, 'last-response');
-  writeFileSync(responsePath, '[status: completed]\nMiles response body');
-
-  const hook = spawnSync(process.execPath, [cliPath, 'hook'], {
-    encoding: 'utf8',
-    input: JSON.stringify({
-      tool_input: {
-        command: '"$MILES_CLI" whoami',
-      },
-    }),
-    env: {
-      ...process.env,
-      MILES_HOME: milesHome,
-      MILES_CLI: cliPath,
-      MILES_SKILL_DIR: resolve(scriptDir, '..'),
+function hookPayload(command) {
+  return JSON.stringify({
+    tool_input: {
+      command,
     },
   });
+}
 
-  assert(hook.status === 0, 'hook should exit 0');
-  const hookOutput = JSON.parse(hook.stdout);
+function runHook(command, milesHome) {
+  return run(['hook'], {
+    milesHome,
+    input: hookPayload(command),
+  });
+}
+
+try {
+  const doctorHome = makeTempDir();
+  const { result: doctorResult, json: doctor } = runJson(['doctor', '--json'], {
+    milesHome: doctorHome,
+  });
+  assert(doctorResult.status === 1, 'doctor should fail when setup is incomplete');
+  assert(doctor.paths.milesHome === doctorHome, 'doctor should honor MILES_HOME');
+  assert(doctor.paths.cli === launcherPath, 'doctor should report the launcher path');
+  assert(doctor.runtime.node, 'doctor should report Node version');
   assert(
-    hookOutput.hookSpecificOutput.additionalContext.includes('Miles response body'),
-    'hook should relay last response for MILES_CLI commands',
+    doctor.checks.some((check) => check.name === 'milesHome' && check.ok),
+    'doctor should verify MILES_HOME writability',
+  );
+  assert(
+    doctor.checks.some((check) => check.name === 'credentials' && !check.ok),
+    'doctor should report missing credentials as setup needed',
   );
 
-  mkdirSync(join(milesHome, 'screenshots'), { recursive: true });
+  const whoamiHome = makeTempDir();
+  const { result: whoamiResult, json: whoami } = runJson(['whoami', '--json'], {
+    milesHome: whoamiHome,
+  });
+  assert(whoamiResult.status === 0, 'whoami --json should exit 0 when logged out');
+  assert(whoami.authenticated === false, 'whoami should report unauthenticated JSON');
+  assert(whoami.milesHome === whoamiHome, 'whoami should honor MILES_HOME');
+
+  const { result: statusResult, json: status } = runJson(['status', '--json']);
+  assert(statusResult.status === 1, 'status --json should fail without an active site');
+  assert(status.ok === false, 'status --json failure should be structured');
+  assertIncludes(status.error, 'No active conversation', 'status should explain the precondition');
+
+  const replyResult = run(['reply', 'Use --json output']);
+  assert(replyResult.status === 1, 'reply without an active conversation should fail');
+  assert(
+    !replyResult.stdout.includes('The --json option'),
+    'reply prose containing --json should not be treated as a global option',
+  );
+  assertIncludes(
+    replyResult.stderr,
+    'No active conversation',
+    'reply should preserve --json inside user prose',
+  );
+
+  const { result: unsupportedJsonResult, json: unsupportedJson } = runJson([
+    '--json',
+    'reply',
+    'hello',
+  ]);
+  assert(
+    unsupportedJsonResult.status === 2,
+    'global --json should be rejected on streaming commands',
+  );
+  assertIncludes(
+    unsupportedJson.error,
+    'only supported for inspection commands',
+    'unsupported JSON command should explain the contract',
+  );
+
+  const badCredsHome = makeTempDir();
+  writeFileSync(join(badCredsHome, 'credentials.json'), '{not json');
+  const { result: badCredsResult, json: badCreds } = runJson(['whoami', '--json'], {
+    milesHome: badCredsHome,
+  });
+  assert(badCredsResult.status === 1, 'malformed credentials should fail loudly');
+  assertIncludes(
+    badCreds.error,
+    'Could not read Miles credentials',
+    'malformed credentials should not masquerade as logged out',
+  );
+
+  const fakeHomeRoot = makeTempDir('miles-cli-home-');
+  const tildeMilesHome = '~/isolated-miles-state';
+  const expandedMilesHome = join(fakeHomeRoot, 'isolated-miles-state');
+  const { json: tildeDoctor } = runJson(['doctor', '--json'], {
+    milesHome: tildeMilesHome,
+    env: { HOME: fakeHomeRoot },
+  });
+  assert(
+    tildeDoctor.paths.milesHome === expandedMilesHome,
+    'doctor should expand MILES_HOME paths that start with ~/',
+  );
+
+  run(['hook-init']);
+
+  const positiveHookCommands = [
+    '"$MILES_CLI" whoami',
+    'MILES_CLI=/tmp/miles "$MILES_CLI" whoami',
+    `${cliPath} whoami`,
+    `${launcherPath} whoami`,
+    `cd /tmp && ${launcherPath} whoami`,
+  ];
+
+  for (const command of positiveHookCommands) {
+    const hookHome = makeTempDir();
+    const responsePath = join(hookHome, 'last-response');
+    writeFileSync(responsePath, `[status: completed]\nResponse for ${command}`);
+
+    const hook = runHook(command, hookHome);
+    assert(hook.status === 0, `hook should exit 0 for ${command}`);
+    const hookOutput = JSON.parse(hook.stdout);
+    assertIncludes(
+      hookOutput.hookSpecificOutput.additionalContext,
+      `Response for ${command}`,
+      `hook should relay last response for ${command}`,
+    );
+
+    const secondHook = runHook(command, hookHome);
+    assert(secondHook.status === 0, `second hook should exit 0 for ${command}`);
+    assert(secondHook.stdout === '', `hook should clear relay after ${command}`);
+  }
+
+  const negativeHookCommands = [
+    'echo miles',
+    'git log --author miles',
+    'smiles whoami',
+    'compiled-miles whoami',
+  ];
+
+  for (const command of negativeHookCommands) {
+    const hookHome = makeTempDir();
+    const responsePath = join(hookHome, 'last-response');
+    writeFileSync(responsePath, `[status: completed]\nShould not relay ${command}`);
+
+    const hook = runHook(command, hookHome);
+    assert(hook.status === 0, `non-Miles hook should exit 0 for ${command}`);
+    assert(hook.stdout === '', `non-Miles hook should not relay for ${command}`);
+    assert(
+      readFileSync(responsePath, 'utf8').includes('Should not relay'),
+      `non-Miles hook should not clear relay for ${command}`,
+    );
+  }
+
+  const badHook = run(['hook'], {
+    input: '{not json',
+  });
+  assert(badHook.status === 0, 'malformed hook payload should exit 0');
+  assert(badHook.stdout === '', 'malformed hook payload should not emit context');
+  assertIncludes(
+    badHook.stderr,
+    'Miles hook warning: could not parse hook payload',
+    'malformed hook payload should warn on stderr',
+  );
+
+  assert(existsSync(launcherPath), 'launcher should exist');
   console.log('Miles CLI smoke tests passed.');
 } finally {
-  rmSync(milesHome, { recursive: true, force: true });
+  for (const root of tempRoots.reverse()) {
+    rmSync(root, { recursive: true, force: true });
+  }
 }

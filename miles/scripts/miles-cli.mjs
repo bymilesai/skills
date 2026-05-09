@@ -7,7 +7,14 @@
  * Wraps the Miles headless REST API for agent-to-agent workflows.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import {
+  accessSync,
+  constants,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'fs';
 import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
 import { execFileSync } from 'child_process';
@@ -43,6 +50,21 @@ const DEFAULT_SERVER_URL = 'https://api.bymiles.ai';
 const MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
 const POLL_TIMEOUT_MS = 10000; // 10 second poll for faster progress updates
 const ERROR_BODY_MAX_CHARS = 2048;
+const JSON_COMMANDS = new Set([
+  'doctor',
+  'logout',
+  'whoami',
+  'status',
+  'design-directions',
+  'screenshot',
+  'sites',
+  'use',
+  'preview',
+  'balance',
+  'messages',
+  'export-theme',
+  'export-site',
+]);
 
 let cliOptions = { json: false };
 
@@ -54,14 +76,17 @@ const heroProgressTracker = new Map();
 // ============================================================================
 
 function loadCredentials() {
-  try {
-    if (existsSync(CREDENTIALS_FILE)) {
-      return JSON.parse(readFileSync(CREDENTIALS_FILE, 'utf-8'));
-    }
-  } catch {
-    // Corrupted file, start fresh
+  if (!existsSync(CREDENTIALS_FILE)) {
+    return {};
   }
-  return {};
+
+  try {
+    return JSON.parse(readFileSync(CREDENTIALS_FILE, 'utf-8'));
+  } catch (err) {
+    throw new Error(
+      `Could not read Miles credentials at ${CREDENTIALS_FILE}: ${err.message}`,
+    );
+  }
 }
 
 function saveCredentials(creds) {
@@ -83,22 +108,40 @@ function emitJson(value) {
   console.log(JSON.stringify(value, null, 2));
 }
 
-function parseGlobalArgs(argv) {
-  const args = [];
-  const options = { json: false };
+function exitWithError(message, status = 1, detail = null) {
+  if (cliOptions.json) {
+    const payload = { ok: false, error: message };
+    if (detail !== null) payload.detail = detail;
+    emitJson(payload);
+  } else {
+    console.error(message);
+  }
+  process.exit(status);
+}
 
-  for (const arg of argv) {
-    if (arg === '--json') {
-      options.json = true;
-    } else {
-      args.push(arg);
-    }
+function parseGlobalArgs(argv) {
+  const globalJson = argv[0] === '--json';
+  const rawCommand = globalJson ? argv[1] : argv[0];
+  const rawArgs = globalJson ? argv.slice(2) : argv.slice(1);
+  const commandSupportsJson = JSON_COMMANDS.has(rawCommand);
+  const argsContainJson = commandSupportsJson && rawArgs.includes('--json');
+  const json = commandSupportsJson && (globalJson || argsContainJson);
+
+  if (globalJson && !commandSupportsJson) {
+    return {
+      command: rawCommand,
+      args: rawArgs,
+      options: {
+        json: true,
+        unsupportedJson: true,
+      },
+    };
   }
 
   return {
-    command: args[0],
-    args: args.slice(1),
-    options,
+    command: rawCommand,
+    args: json ? rawArgs.filter((arg) => arg !== '--json') : rawArgs,
+    options: { json, unsupportedJson: false },
   };
 }
 
@@ -183,10 +226,11 @@ async function apiRequest(method, path, { body, auth, serverUrl } = {}) {
 
   const res = await fetch(url, opts);
   const text = await res.text();
+  const contentType = res.headers.get('content-type') || '';
 
   let data;
   try {
-    data = JSON.parse(text);
+    data = text ? JSON.parse(text) : {};
   } catch {
     data = { raw: text };
   }
@@ -194,6 +238,13 @@ async function apiRequest(method, path, { body, auth, serverUrl } = {}) {
   if (!res.ok) {
     const errMsg = data.error || data.message || `HTTP ${res.status}`;
     throw new ApiError(errMsg, res.status, data);
+  }
+
+  if (text && !contentType.includes('application/json')) {
+    throw new ApiError('Expected JSON response from Miles.', 502, {
+      contentType,
+      raw: truncateText(text).text,
+    });
   }
 
   return data;
@@ -220,8 +271,13 @@ function openUrl(url) {
     } else {
       execFileSync('xdg-open', [url], { stdio: 'ignore' });
     }
-  } catch {
-    // Silently fail - URL is printed to console as fallback
+  } catch (err) {
+    console.error(
+      `Could not open browser automatically. Open this URL manually: ${url}`,
+    );
+    if (process.env.MILES_DEBUG) {
+      console.error(`Browser open error: ${err.message}`);
+    }
   }
 }
 
@@ -230,6 +286,7 @@ function openUrl(url) {
 // ============================================================================
 
 async function cmdLogin() {
+  loadCredentials();
   const serverUrl = DEFAULT_SERVER_URL;
   console.log(`Opening browser for Miles login...`);
 
@@ -238,6 +295,15 @@ async function cmdLogin() {
     serverUrl,
   });
   const { deviceCode, userCode, verificationUrl, interval } = data;
+  if (!deviceCode || !userCode || !verificationUrl) {
+    throw new ApiError('Invalid login response from Miles.', 502, {
+      missing: {
+        deviceCode: !deviceCode,
+        userCode: !userCode,
+        verificationUrl: !verificationUrl,
+      },
+    });
+  }
 
   console.log(`\nYour code: ${userCode}`);
   console.log(`Opening: ${verificationUrl}\n`);
@@ -330,9 +396,34 @@ async function cmdWhoami() {
 }
 
 async function cmdDoctor() {
-  const creds = loadCredentials();
+  let creds = {};
+  let credentialsError = null;
+  try {
+    creds = loadCredentials();
+  } catch (err) {
+    credentialsError = err;
+  }
   const summary = getLocalRuntimeSummary(creds);
   const nodeMajor = Number(process.versions.node.split('.')[0]);
+  let milesHomeDetail = MILES_HOME;
+  let milesHomeWritable = true;
+  try {
+    mkdirSync(MILES_HOME, { recursive: true });
+    accessSync(MILES_HOME, constants.W_OK);
+  } catch (err) {
+    milesHomeWritable = false;
+    milesHomeDetail = `${MILES_HOME} (${err.message})`;
+  }
+  let credentialsReadable = true;
+  let credentialsDetail = 'No credentials file found';
+  if (existsSync(CREDENTIALS_FILE)) {
+    if (credentialsError) {
+      credentialsReadable = false;
+      credentialsDetail = credentialsError.message;
+    } else {
+      credentialsDetail = 'Credentials file is readable';
+    }
+  }
   const checks = [
     {
       name: 'node',
@@ -348,8 +439,13 @@ async function cmdDoctor() {
     },
     {
       name: 'milesHome',
-      ok: true,
-      detail: MILES_HOME,
+      ok: milesHomeWritable,
+      detail: milesHomeDetail,
+    },
+    {
+      name: 'credentialsFile',
+      ok: credentialsReadable,
+      detail: credentialsDetail,
     },
     {
       name: 'credentials',
@@ -368,7 +464,7 @@ async function cmdDoctor() {
 
   if (cliOptions.json) {
     emitJson(result);
-    return;
+    process.exit(result.status === 'ok' ? 0 : 1);
   }
 
   console.log(`Miles CLI doctor: ${result.status}`);
@@ -380,6 +476,7 @@ async function cmdDoctor() {
   if (summary.auth.activeSite) {
     console.log(`Active site: ${summary.auth.activeSite.name || summary.auth.activeSite.id}`);
   }
+  process.exit(result.status === 'ok' ? 0 : 1);
 }
 
 async function cmdHookInit() {
@@ -407,9 +504,10 @@ async function cmdCheckAuth() {
       auth: creds.apiKey,
       serverUrl,
     });
-  } catch {
-    // API key is invalid - clear all credentials
-    saveCredentials({});
+  } catch (err) {
+    if (err instanceof ApiError && [401, 403].includes(err.status)) {
+      saveCredentials({});
+    }
     process.exit(1);
   }
 
@@ -422,11 +520,12 @@ async function cmdCheckAuth() {
         `/api/v2/headless/conversations/${site.conversationId}/status`,
         { auth: site.siteToken, serverUrl },
       );
-    } catch {
-      // Site token is stale - clear site data but keep API key
-      delete creds.sites;
-      delete creds.activeSite;
-      saveCredentials(creds);
+    } catch (err) {
+      if (err instanceof ApiError && [401, 403].includes(err.status)) {
+        delete creds.sites;
+        delete creds.activeSite;
+        saveCredentials(creds);
+      }
     }
   }
 
@@ -436,10 +535,7 @@ async function cmdCheckAuth() {
 async function cmdCreateSite(args) {
   const creds = loadCredentials();
   if (!creds.apiKey) {
-    console.error(
-      'Not logged in. Use `miles login` first.',
-    );
-    process.exit(1);
+    exitWithError('Not logged in. Use `miles login` first.');
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -454,9 +550,10 @@ async function cmdCreateSite(args) {
       const briefPath = args[++i];
       try {
         brief = readFileSync(briefPath, 'utf-8');
-      } catch {
-        console.error(`Could not read brief file: ${briefPath}`);
-        process.exit(1);
+      } catch (err) {
+        exitWithError(`Could not read brief file: ${briefPath}`, 1, {
+          cause: err.message,
+        });
       }
     } else if (args[i] === '--name' && args[i + 1]) {
       name = args[++i];
@@ -466,10 +563,9 @@ async function cmdCreateSite(args) {
   }
 
   if (!message) {
-    console.error(
+    exitWithError(
       'Usage: miles create-site "<description>" [--name "Site Name"] [--brief <file>]',
     );
-    process.exit(1);
   }
 
   console.log('Creating site and starting conversation with Miles...');
@@ -504,16 +600,14 @@ async function cmdReply(args) {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    console.error(
+    exitWithError(
       'No active conversation. Use `miles create-site` to start one.',
     );
-    process.exit(1);
   }
 
   const message = args.join(' ');
   if (!message) {
-    console.error('Usage: miles reply "<message>"');
-    process.exit(1);
+    exitWithError('Usage: miles reply "<message>"');
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -535,8 +629,7 @@ async function cmdWait() {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    console.error('No active conversation.');
-    process.exit(1);
+    exitWithError('No active conversation.');
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -677,6 +770,15 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
         ws.close();
       } catch {}
     };
+    const fallBackToPolling = (err) => {
+      if (finished) return;
+      console.error(
+        `Miles stream error. Falling back to polling: ${err?.message || err}`,
+      );
+      cleanup();
+      clearTimeout(timeoutTimer);
+      resolve(false);
+    };
 
     // Helper: fetch final response via REST and output it
     // Use short timeoutMs for race-condition checks, longer for final fetch
@@ -694,7 +796,11 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
           console.log(output);
           return true;
         }
-      } catch {}
+      } catch (err) {
+        console.error(
+          `Could not fetch Miles response over HTTP: ${err?.message || err}`,
+        );
+      }
       return false;
     };
 
@@ -815,12 +921,16 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
             lastProgressMsg = 'question';
             // Safety-net fallback: poll REST if finish chunk is delayed
             setTimeout(async () => {
-              if (finished) return;
-              const done = await fetchAndOutput(5000);
-              if (done) {
-                cleanup();
-                clearTimeout(timeoutTimer);
-                resolve(true);
+              try {
+                if (finished) return;
+                const done = await fetchAndOutput(5000);
+                if (done) {
+                  cleanup();
+                  clearTimeout(timeoutTimer);
+                  resolve(true);
+                }
+              } catch (err) {
+                fallBackToPolling(err);
               }
             }, 5000);
           } else if (chunk.type === 'data-brief-editor') {
@@ -830,12 +940,16 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
             lastProgressMsg = 'brief';
             // Safety-net fallback: poll REST if finish chunk is delayed
             setTimeout(async () => {
-              if (finished) return;
-              const done = await fetchAndOutput(5000);
-              if (done) {
-                cleanup();
-                clearTimeout(timeoutTimer);
-                resolve(true);
+              try {
+                if (finished) return;
+                const done = await fetchAndOutput(5000);
+                if (done) {
+                  cleanup();
+                  clearTimeout(timeoutTimer);
+                  resolve(true);
+                }
+              } catch (err) {
+                fallBackToPolling(err);
               }
             }, 5000);
           }
@@ -867,7 +981,9 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
             return;
           }
         }
-      } catch {}
+      } catch (err) {
+        fallBackToPolling(err);
+      }
     };
 
     ws.onerror = () => {
@@ -955,8 +1071,7 @@ async function doWait(creds, conversationId, serverUrl, maxWaitMs) {
   const site = getActiveSite(creds);
   const token = site?.siteToken;
   if (!token) {
-    console.error('No site token. Use `miles create-site` first.');
-    process.exit(1);
+    exitWithError('No site token. Use `miles create-site` first.');
   }
 
   // Start connection watchdog to auto-recover if the browser closes
@@ -1136,8 +1251,7 @@ async function cmdStatus() {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    console.error('No active conversation.');
-    process.exit(1);
+    exitWithError('No active conversation.');
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -1192,8 +1306,7 @@ async function cmdDesignDirections() {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    console.error('No active conversation.');
-    process.exit(1);
+    exitWithError('No active conversation.');
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -1248,14 +1361,12 @@ async function cmdSelectDesignDirection(args) {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    console.error('No active conversation.');
-    process.exit(1);
+    exitWithError('No active conversation.');
   }
 
   const directionNumber = parseInt(args[0]);
   if (!directionNumber || directionNumber < 1) {
-    console.error('Usage: miles select-design-direction <number>');
-    process.exit(1);
+    exitWithError('Usage: miles select-design-direction <number>');
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -1312,18 +1423,20 @@ async function cmdScreenshot(args) {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.siteToken) {
-    console.error('No active site. Use `miles create-site` first.');
-    process.exit(1);
+    exitWithError('No active site. Use `miles create-site` first.');
   }
 
   // Extract the URL: first arg that starts with / or http
   const url = args.find((a) => a.startsWith('/') || a.startsWith('http'));
   if (!url) {
-    console.error('Usage: miles screenshot <preview-url>');
-    console.error(
-      'Example: miles screenshot /preview/abc123/previews/hero-xyz/index.html',
+    exitWithError(
+      'Usage: miles screenshot <preview-url>',
+      1,
+      {
+        example:
+          'miles screenshot /preview/abc123/previews/hero-xyz/index.html',
+      },
     );
-    process.exit(1);
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -1343,23 +1456,35 @@ async function cmdScreenshot(args) {
     if (body?.error) msg = body.error;
     if (body?.message) msg = body.message;
     if (cliOptions.json) {
-      console.error(
-        JSON.stringify(
-          {
-            ok: false,
-            error: msg,
-            status: response.status,
-            targetUrl: url,
-            detail: body,
-            contentType: errorBody.contentType,
-          },
-          null,
-          2,
-        ),
-      );
+      emitJson({
+        ok: false,
+        error: msg,
+        status: response.status,
+        targetUrl: url,
+        detail: body,
+        contentType: errorBody.contentType,
+      });
     } else {
       console.error(msg);
       if (body?.raw) console.error(`Body: ${body.raw}`);
+    }
+    process.exit(1);
+  }
+
+  const screenshotContentType = response.headers.get('content-type') || '';
+  if (!screenshotContentType.startsWith('image/')) {
+    if (cliOptions.json) {
+      emitJson({
+        ok: false,
+        error: 'Screenshot service returned non-image content.',
+        targetUrl: url,
+        contentType: screenshotContentType || null,
+      });
+    } else {
+      console.error('Screenshot service returned non-image content.');
+      if (screenshotContentType) {
+        console.error(`Content-Type: ${screenshotContentType}`);
+      }
     }
     process.exit(1);
   }
@@ -1377,7 +1502,7 @@ async function cmdScreenshot(args) {
       path: filepath,
       targetUrl: url,
       bytes: imageBuffer.byteLength,
-      contentType: response.headers.get('content-type') || null,
+      contentType: screenshotContentType,
     });
   } else {
     console.log(filepath);
@@ -1387,8 +1512,7 @@ async function cmdScreenshot(args) {
 async function cmdSites() {
   const creds = loadCredentials();
   if (!creds.apiKey) {
-    console.error('Not logged in.');
-    process.exit(1);
+    exitWithError('Not logged in.');
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -1429,16 +1553,14 @@ async function cmdSites() {
 async function cmdUse(args) {
   const siteId = args[0];
   if (!siteId) {
-    console.error('Usage: miles use <siteId>');
-    process.exit(1);
+    exitWithError('Usage: miles use <siteId>');
   }
 
   const creds = loadCredentials();
   if (!creds.sites?.[siteId]) {
-    console.error(
+    exitWithError(
       `Site ${siteId} not found in local credentials. Use \`miles sites\` to see available sites.`,
     );
-    process.exit(1);
   }
 
   creds.activeSite = siteId;
@@ -1457,8 +1579,7 @@ async function cmdPreview() {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site) {
-    console.error('No active site.');
-    process.exit(1);
+    exitWithError('No active site.');
   }
 
   const url = `${site.dashboardUrl}?agent=true`;
@@ -1475,8 +1596,7 @@ async function cmdBalance() {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    console.error('No active site.');
-    process.exit(1);
+    exitWithError('No active site.');
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -1513,8 +1633,8 @@ async function cmdBalance() {
     }
   } else {
     if (cliOptions.json) {
-      emitJson({ error: 'Could not retrieve balance.' });
-      return;
+      emitJson({ ok: false, error: 'Could not retrieve balance.' });
+      process.exit(1);
     }
     console.log('Could not retrieve balance.');
   }
@@ -1524,8 +1644,7 @@ async function cmdMessages() {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    console.error('No active conversation.');
-    process.exit(1);
+    exitWithError('No active conversation.');
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -1557,8 +1676,7 @@ async function cmdBuildTheme() {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    console.error('No active conversation. Use `miles create-site` first.');
-    process.exit(1);
+    exitWithError('No active conversation. Use `miles create-site` first.');
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -1628,8 +1746,7 @@ async function cmdExportTheme() {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    console.error('No active conversation.');
-    process.exit(1);
+    exitWithError('No active conversation.');
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -1654,8 +1771,7 @@ async function cmdExportSite() {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    console.error('No active conversation.');
-    process.exit(1);
+    exitWithError('No active conversation.');
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -1682,14 +1798,16 @@ async function cmdHook() {
   let input = '';
   try {
     input = readFileSync('/dev/stdin', 'utf-8');
-  } catch {
+  } catch (err) {
+    console.error(`Miles hook warning: could not read hook payload: ${err.message}`);
     process.exit(0);
   }
 
   let hookData;
   try {
     hookData = JSON.parse(input);
-  } catch {
+  } catch (err) {
+    console.error(`Miles hook warning: could not parse hook payload: ${err.message}`);
     process.exit(0);
   }
 
@@ -1715,19 +1833,31 @@ async function cmdHook() {
         process.stdout.write(output);
       }
     }
-  } catch {
-    // Ignore errors
+  } catch (err) {
+    console.error(`Miles hook warning: could not relay last response: ${err.message}`);
   }
   process.exit(0);
 }
 
 function isMilesToolCommand(commandText) {
   if (typeof commandText !== 'string') return false;
+  return commandText
+    .split(/&&|\|\||;|\n/)
+    .some((segment) => isMilesCommandSegment(segment));
+}
+
+function isMilesCommandSegment(segment) {
+  const command = segment
+    .trim()
+    .replace(
+      /^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+)*/,
+      '',
+    );
   return (
-    /\bMILES_CLI\b/i.test(commandText) ||
-    /\bmiles-cli\.mjs\b/i.test(commandText) ||
-    /(?:^|[^\w-])miles(?:\s|$)/i.test(commandText) ||
-    /\.miles\/bin\//i.test(commandText)
+    /^["']?\$MILES_CLI["']?(?:\s|$)/i.test(command) ||
+    /^["']?[^"'\s;]*miles-cli\.mjs["']?(?:\s|$)/i.test(command) ||
+    /^["']?(?:[^"'\s;]*\/)?miles["']?(?:\s|$)/i.test(command) ||
+    /^["']?[^"'\s;]*\.miles\/bin\/[^"'\s;]+["']?(?:\s|$)/i.test(command)
   );
 }
 
@@ -1769,7 +1899,7 @@ if (!command || command === 'help' || command === '--help') {
 
 Authentication:
   miles doctor                      Check local CLI setup
-  miles login [server-url]          Device auth flow (opens browser)
+  miles login                       Device auth flow (opens browser)
   miles logout                      Clear stored credentials
   miles whoami                      Show current auth + active site
 
@@ -1800,6 +1930,17 @@ Options:
   process.exit(0);
 }
 
+if (cliOptions.unsupportedJson) {
+  exitWithError(
+    'The --json option is only supported for inspection commands.',
+    2,
+    {
+      command: command || null,
+      supportedCommands: Array.from(JSON_COMMANDS).sort(),
+    },
+  );
+}
+
 const handler = commands[command];
 if (!handler) {
   console.error(
@@ -1811,29 +1952,17 @@ if (!handler) {
 handler(args).catch((err) => {
   if (cliOptions.json) {
     if (err instanceof ApiError) {
-      console.error(
-        JSON.stringify(
-          {
-            ok: false,
-            error: err.message,
-            status: err.status,
-            detail: err.data || null,
-          },
-          null,
-          2,
-        ),
-      );
+      emitJson({
+        ok: false,
+        error: err.message,
+        status: err.status,
+        detail: err.data || null,
+      });
     } else {
-      console.error(
-        JSON.stringify(
-          {
-            ok: false,
-            error: err.message,
-          },
-          null,
-          2,
-        ),
-      );
+      emitJson({
+        ok: false,
+        error: err.message,
+      });
     }
     process.exit(1);
   }

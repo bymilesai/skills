@@ -1018,51 +1018,70 @@ function startConnectionWatchdog(
   serverUrl,
   dashboardUrl,
 ) {
-  if (!dashboardUrl) return () => {};
+  let rejectFailure;
+  const failurePromise = new Promise((_, reject) => {
+    rejectFailure = reject;
+  });
+
+  if (!dashboardUrl) {
+    return {
+      stop() {},
+      failurePromise,
+    };
+  }
 
   let running = true;
   // Only activate once we've seen the connection up at least once.
   // This prevents reopening the browser during early phases (discovery,
   // brief, hero generation) when the browser was never opened.
   let connectionSeenOnce = false;
-  (async () => {
+
+  const fail = (err) => {
+    if (!running) return;
+    running = false;
+    rejectFailure(err);
+  };
+
+  const watch = async () => {
     while (running) {
       await new Promise((r) => setTimeout(r, 5000));
       if (!running) break;
-      try {
-        const status = await apiRequest(
-          'GET',
-          `/api/v2/headless/conversations/${conversationId}/ws-status`,
-          { auth: token, serverUrl },
-        );
-        if (status.connected) {
-          connectionSeenOnce = true;
-        } else if (connectionSeenOnce) {
-          console.log('  Connection lost. Reopening dashboard...');
-          openUrl(dashboardUrl);
-          // Wait for reconnection
-          const reconnectStart = Date.now();
-          while (running && Date.now() - reconnectStart < 30000) {
-            await new Promise((r) => setTimeout(r, 2000));
-            try {
-              const recheck = await apiRequest(
-                'GET',
-                `/api/v2/headless/conversations/${conversationId}/ws-status`,
-                { auth: token, serverUrl },
-              );
-              if (recheck.connected) {
-                console.log('  Playground reconnected.');
-                break;
-              }
-            } catch {}
+
+      const status = await apiRequest(
+        'GET',
+        `/api/v2/headless/conversations/${conversationId}/ws-status`,
+        { auth: token, serverUrl },
+      );
+      if (status.connected) {
+        connectionSeenOnce = true;
+      } else if (connectionSeenOnce) {
+        console.log('  Connection lost. Reopening dashboard...');
+        openUrl(dashboardUrl);
+        // Wait for reconnection
+        const reconnectStart = Date.now();
+        while (running && Date.now() - reconnectStart < 30000) {
+          await new Promise((r) => setTimeout(r, 2000));
+          const recheck = await apiRequest(
+            'GET',
+            `/api/v2/headless/conversations/${conversationId}/ws-status`,
+            { auth: token, serverUrl },
+          );
+          if (recheck.connected) {
+            console.log('  Playground reconnected.');
+            break;
           }
         }
-      } catch {}
+      }
     }
-  })();
+  };
 
-  return () => {
-    running = false;
+  watch().catch(fail);
+
+  return {
+    stop() {
+      running = false;
+    },
+    failurePromise,
   };
 }
 
@@ -1078,7 +1097,7 @@ async function doWait(creds, conversationId, serverUrl, maxWaitMs) {
   const dashboardUrl = site?.dashboardUrl
     ? `${site.dashboardUrl}?agent=true`
     : null;
-  const stopWatchdog = startConnectionWatchdog(
+  const watchdog = startConnectionWatchdog(
     conversationId,
     token,
     serverUrl,
@@ -1087,11 +1106,11 @@ async function doWait(creds, conversationId, serverUrl, maxWaitMs) {
 
   try {
     // Try WebSocket first for real-time progress
-    const wsHandled = await doWaitWebSocket(
-      creds,
-      conversationId,
-      serverUrl,
-      maxWaitMs,
+    const wsHandled = await Promise.race(
+      [
+        doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs),
+        watchdog.failurePromise,
+      ],
     );
     if (wsHandled) return;
 
@@ -1102,10 +1121,15 @@ async function doWait(creds, conversationId, serverUrl, maxWaitMs) {
     let lastProgressMsg = '';
 
     while (Date.now() - startTime < maxWait) {
-      const data = await apiRequest(
-        'GET',
-        `/api/v2/headless/conversations/${conversationId}/wait?timeout=${POLL_TIMEOUT_MS}`,
-        { auth: token, serverUrl },
+      const data = await Promise.race(
+        [
+          apiRequest(
+            'GET',
+            `/api/v2/headless/conversations/${conversationId}/wait?timeout=${POLL_TIMEOUT_MS}`,
+            { auth: token, serverUrl },
+          ),
+          watchdog.failurePromise,
+        ],
       );
 
       if (data.status === 'running') {
@@ -1163,7 +1187,7 @@ async function doWait(creds, conversationId, serverUrl, maxWaitMs) {
     console.log(statusMsg);
     console.log('Use `miles wait` to continue polling for the response.');
   } finally {
-    stopWatchdog();
+    watchdog.stop();
   }
 }
 
@@ -1387,17 +1411,15 @@ async function cmdSelectDesignDirection(args) {
   const WS_CONNECT_TIMEOUT = 30000;
   let dashboardConnected = false;
   while (Date.now() - wsConnectStart < WS_CONNECT_TIMEOUT) {
-    try {
-      const status = await apiRequest(
-        'GET',
-        `/api/v2/headless/conversations/${site.conversationId}/ws-status`,
-        { auth: site.siteToken, serverUrl },
-      );
-      if (status.connected) {
-        dashboardConnected = true;
-        break;
-      }
-    } catch {}
+    const status = await apiRequest(
+      'GET',
+      `/api/v2/headless/conversations/${site.conversationId}/ws-status`,
+      { auth: site.siteToken, serverUrl },
+    );
+    if (status.connected) {
+      dashboardConnected = true;
+      break;
+    }
     await new Promise((r) => setTimeout(r, 1000));
   }
   if (!dashboardConnected) {
@@ -1684,14 +1706,12 @@ async function cmdBuildTheme() {
 
   // Check if Playground is already connected (opened during select-design-direction)
   let connected = false;
-  try {
-    const status = await apiRequest(
-      'GET',
-      `/api/v2/headless/conversations/${site.conversationId}/ws-status`,
-      { auth: site.siteToken, serverUrl },
-    );
-    connected = status.connected;
-  } catch {}
+  const status = await apiRequest(
+    'GET',
+    `/api/v2/headless/conversations/${site.conversationId}/ws-status`,
+    { auth: site.siteToken, serverUrl },
+  );
+  connected = status.connected;
 
   if (!connected) {
     // Fallback: open browser and wait for connection
@@ -1702,17 +1722,15 @@ async function cmdBuildTheme() {
     const wsStart = Date.now();
     while (Date.now() - wsStart < 60000) {
       await new Promise((r) => setTimeout(r, 2000));
-      try {
-        const status = await apiRequest(
-          'GET',
-          `/api/v2/headless/conversations/${site.conversationId}/ws-status`,
-          { auth: site.siteToken, serverUrl },
-        );
-        if (status.connected) {
-          connected = true;
-          break;
-        }
-      } catch {}
+      const currentStatus = await apiRequest(
+        'GET',
+        `/api/v2/headless/conversations/${site.conversationId}/ws-status`,
+        { auth: site.siteToken, serverUrl },
+      );
+      if (currentStatus.connected) {
+        connected = true;
+        break;
+      }
       const elapsed = Math.round((Date.now() - wsStart) / 1000);
       if (elapsed > 0 && elapsed % 10 === 0) {
         console.log(`Still waiting for connection... (${elapsed}s)`);

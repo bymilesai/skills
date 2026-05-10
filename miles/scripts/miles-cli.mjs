@@ -20,6 +20,12 @@ import { dirname, join, resolve } from 'path';
 import { execFileSync } from 'child_process';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
+import {
+  buildDevicePollingRateLimitMessage,
+  buildDevicePollingTimeoutMessage,
+  formatDuration,
+  getDeviceAuthPollingPlan,
+} from './login-polling.mjs';
 
 // ============================================================================
 // Config
@@ -294,7 +300,7 @@ async function cmdLogin() {
   const data = await apiRequest('POST', '/api/v2/auth/device/device-code', {
     serverUrl,
   });
-  const { deviceCode, userCode, verificationUrl, interval } = data;
+  const { deviceCode, userCode, verificationUrl, interval, expiresIn } = data;
   if (!deviceCode || !userCode || !verificationUrl) {
     throw new ApiError('Invalid login response from Miles.', 502, {
       missing: {
@@ -312,12 +318,17 @@ async function cmdLogin() {
 
   console.log('Waiting for authorization...');
 
-  // Poll for token
-  const pollInterval = (interval || 5) * 1000;
-  const maxAttempts = 120; // 10 minutes max
+  const { pollIntervalMs, maxAttempts, maxWaitMs } =
+    getDeviceAuthPollingPlan({
+      intervalSeconds: interval,
+      expiresInSeconds: expiresIn,
+    });
+  console.log(
+    `Polling every ${formatDuration(pollIntervalMs)} for up to ${formatDuration(maxWaitMs)}.`,
+  );
 
   for (let i = 0; i < maxAttempts; i++) {
-    await new Promise((r) => setTimeout(r, pollInterval));
+    await new Promise((r) => setTimeout(r, pollIntervalMs));
     try {
       const tokenData = await apiRequest(
         'POST',
@@ -342,11 +353,17 @@ async function cmdLogin() {
         console.error('\nAuthorization expired. Please try again.');
         process.exit(1);
       }
+      if (err instanceof ApiError && err.status === 429) {
+        console.error(
+          `\n${buildDevicePollingRateLimitMessage(err.data?.retryAfter)}`,
+        );
+        process.exit(1);
+      }
       throw err;
     }
   }
 
-  console.error('\nAuthorization timed out. Please try again.');
+  console.error(`\n${buildDevicePollingTimeoutMessage(maxWaitMs)}`);
   process.exit(1);
 }
 

@@ -11,6 +11,12 @@ import { tmpdir } from 'os';
 import { dirname, join, resolve } from 'path';
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
+import {
+  buildDevicePollingRateLimitMessage,
+  buildDevicePollingTimeoutMessage,
+  formatDuration,
+  getDeviceAuthPollingPlan,
+} from './login-polling.mjs';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const skillDir = resolve(scriptDir, '..');
@@ -86,6 +92,33 @@ function runHook(command, milesHome) {
 }
 
 try {
+  const defaultPollingPlan = getDeviceAuthPollingPlan({
+    intervalSeconds: 5,
+    expiresInSeconds: 600,
+  });
+  assert(
+    defaultPollingPlan.pollIntervalMs === 10000,
+    'login polling should clamp the server interval to the safe minimum',
+  );
+  assert(
+    defaultPollingPlan.maxAttempts === 55,
+    'login polling should stop before the server polling rate limit',
+  );
+  assert(
+    formatDuration(defaultPollingPlan.maxWaitMs) === '9m 10s',
+    'login polling should expose a readable wait duration',
+  );
+  assertIncludes(
+    buildDevicePollingTimeoutMessage(defaultPollingPlan.maxWaitMs),
+    'Run `miles login` again',
+    'login timeout message should tell users how to recover',
+  );
+  assertIncludes(
+    buildDevicePollingRateLimitMessage(120),
+    'Wait about 2m',
+    'login rate limit message should include retry guidance',
+  );
+
   const doctorHome = makeTempDir();
   const { result: doctorResult, json: doctor } = runJson(['doctor', '--json'], {
     milesHome: doctorHome,

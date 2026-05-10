@@ -100,9 +100,15 @@ A detailed initial prompt (e.g. "Build me a website for my yoga studio in Portla
 
 ### How to relay
 
-The Miles response includes structured tags like `[question: ...]` with question text and numbered options. When your coding agent has a native user-question or user-input tool, use it for every Miles question, brief approval, and design selection so the user can click an option or type a custom answer. Examples include `askUserQuestion` in Claude Code, Codex's user-question/input tool, Cursor's equivalent interactive prompt, or any host-provided choice/freeform question UI.
+The Miles response includes structured tags like `[question: ...]` with question text and numbered options. Before presenting a Miles question in plain chat, check whether your active tool list includes a native user-question or user-input tool. If it does, use that tool for every Miles question, brief approval, and design selection so the user can click an option or type a custom answer.
 
-Copy the Miles question text and answer options directly from the response. Preserve all options when the tool supports them. If the host tool supports fewer choice buttons than Miles returned, still use the tool: put the complete numbered option list in the prompt and allow a freeform answer. Only fall back to plain text in chat when the host has no user-question tool available.
+Host examples:
+
+- Claude Code: use `askUserQuestion` when available.
+- Codex: use `request_user_input` when it is present in the active tool list. In some Codex modes this tool is unavailable; when it is unavailable, briefly say the structured question UI is unavailable in the current mode and present the full Miles question in chat.
+- Cursor or other agents: use the host's equivalent choice/freeform question UI when available.
+
+Copy the Miles question text and answer options directly from the response. Preserve all options when the tool supports them. If the host tool supports fewer choice buttons than Miles returned, still use the tool when practical: put the complete numbered option list in the prompt and allow a freeform answer. Do not silently drop important options. Only fall back to plain text in chat after checking that no structured user-question tool is available.
 
 Then send the user's answer:
 

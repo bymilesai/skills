@@ -23,8 +23,9 @@ import { fileURLToPath } from 'url';
 import {
   buildDevicePollingRateLimitMessage,
   buildDevicePollingTimeoutMessage,
-  formatDuration,
   getDeviceAuthPollingPlan,
+  getSlowedDeviceAuthPollIntervalMs,
+  parseRetryAfterSeconds,
 } from './login-polling.mjs';
 
 // ============================================================================
@@ -243,7 +244,10 @@ async function apiRequest(method, path, { body, auth, serverUrl } = {}) {
 
   if (!res.ok) {
     const errMsg = data.error || data.message || `HTTP ${res.status}`;
-    throw new ApiError(errMsg, res.status, data);
+    const retryAfterSeconds =
+      parseRetryAfterSeconds(res.headers.get('retry-after')) ??
+      parseRetryAfterSeconds(data.retryAfter ?? data.retry_after);
+    throw new ApiError(errMsg, res.status, data, { retryAfterSeconds });
   }
 
   if (text && !contentType.includes('application/json')) {
@@ -257,10 +261,11 @@ async function apiRequest(method, path, { body, auth, serverUrl } = {}) {
 }
 
 class ApiError extends Error {
-  constructor(message, status, data) {
+  constructor(message, status, data, { retryAfterSeconds } = {}) {
     super(message);
     this.status = status;
     this.data = data;
+    this.retryAfterSeconds = retryAfterSeconds ?? null;
   }
 }
 
@@ -300,7 +305,8 @@ async function cmdLogin() {
   const data = await apiRequest('POST', '/api/v2/auth/device/device-code', {
     serverUrl,
   });
-  const { deviceCode, userCode, verificationUrl, interval, expiresIn } = data;
+  const { deviceCode, userCode, verificationUrl, interval } = data;
+  const expiresIn = data.expiresIn ?? data.expires_in;
   if (!deviceCode || !userCode || !verificationUrl) {
     throw new ApiError('Invalid login response from Miles.', 502, {
       missing: {
@@ -323,12 +329,17 @@ async function cmdLogin() {
       intervalSeconds: interval,
       expiresInSeconds: expiresIn,
     });
-  console.log(
-    `Polling every ${formatDuration(pollIntervalMs)} for up to ${formatDuration(maxWaitMs)}.`,
-  );
 
+  let nextPollIntervalMs = pollIntervalMs;
+  const pollDeadlineMs = Date.now() + maxWaitMs;
   for (let i = 0; i < maxAttempts; i++) {
-    await new Promise((r) => setTimeout(r, pollIntervalMs));
+    const remainingMs = pollDeadlineMs - Date.now();
+    if (remainingMs <= 0) break;
+
+    await new Promise((r) =>
+      setTimeout(r, Math.min(nextPollIntervalMs, remainingMs)),
+    );
+
     try {
       const tokenData = await apiRequest(
         'POST',
@@ -348,14 +359,30 @@ async function cmdLogin() {
         return;
       }
     } catch (err) {
-      if (err.data?.error === 'authorization_pending') continue;
-      if (err.data?.error === 'expired_token') {
+      if (
+        err instanceof ApiError &&
+        err.data?.error === 'authorization_pending'
+      ) {
+        continue;
+      }
+      if (err instanceof ApiError && err.data?.error === 'slow_down') {
+        nextPollIntervalMs = getSlowedDeviceAuthPollIntervalMs(
+          nextPollIntervalMs,
+          err.retryAfterSeconds,
+        );
+        continue;
+      }
+      if (err instanceof ApiError && err.data?.error === 'access_denied') {
+        console.error('\nAuthorization was denied. Please try again.');
+        process.exit(1);
+      }
+      if (err instanceof ApiError && err.data?.error === 'expired_token') {
         console.error('\nAuthorization expired. Please try again.');
         process.exit(1);
       }
       if (err instanceof ApiError && err.status === 429) {
         console.error(
-          `\n${buildDevicePollingRateLimitMessage(err.data?.retryAfter)}`,
+          `\n${buildDevicePollingRateLimitMessage(err.retryAfterSeconds)}`,
         );
         process.exit(1);
       }

@@ -100,7 +100,11 @@ A detailed initial prompt (e.g. "Build me a website for my yoga studio in Portla
 
 ### How to relay
 
-The Miles response includes structured tags like `[question: ...]` with question text and numbered options. Use your agent's user-question tool to present these to the user, copying the question text and options directly from the response. Then send the user's answer:
+The Miles response includes structured tags like `[question: ...]` with question text and numbered options. When your coding agent has a native user-question or user-input tool, use it for every Miles question, brief approval, and design selection so the user can click an option or type a custom answer. Examples include `askUserQuestion` in Claude Code, Codex's user-question/input tool, Cursor's equivalent interactive prompt, or any host-provided choice/freeform question UI.
+
+Copy the Miles question text and answer options directly from the response. Preserve all options when the tool supports them. If the host tool supports fewer choice buttons than Miles returned, still use the tool: put the complete numbered option list in the prompt and allow a freeform answer. Only fall back to plain text in chat when the host has no user-question tool available.
+
+Then send the user's answer:
 
 ```bash
 "$MILES_CLI" reply "<user's exact answer>"
@@ -115,7 +119,7 @@ User prompt: "Build a website for my yoga studio"
 
 1. Run: `"$MILES_CLI" create-site "Build a website for my yoga studio"`
 2. Miles responds with: `[question: What's the name of your studio?]`
-3. Use AskUserQuestion: "What's the name of your studio?"
+3. Use the host's native user-question tool: "What's the name of your studio?"
 4. User answers: "Breathe Portland Yoga"
 5. Run: `"$MILES_CLI" reply "Breathe Portland Yoga"`
 6. Miles responds with next question → repeat relay
@@ -149,7 +153,7 @@ If none fit, ask Miles for new directions with feedback:
 "$MILES_CLI" wait
 ```
 
-Use `AskUserQuestion` to ask the user which design they prefer. Then select it — this command triggers the full site build and waits for completion:
+Use the host's native user-question tool to ask the user which design they prefer. Then select it — this command triggers the full site build and waits for completion:
 
 ```bash
 "$MILES_CLI" select-design-direction <number>
@@ -182,7 +186,7 @@ When you run `create-site`, `reply`, or `wait`, the CLI prints Miles' response a
 
 - Miles' response appears in stdout; on hook-capable hosts it may also appear as context after the tool result
 - `create-site`, `reply`, and `wait` already deliver Miles' full response, so calling `miles messages` or `miles status` afterward is redundant
-- Go straight to the next action after receiving Miles' response (relay the question via AskUserQuestion, or tell the user what happened)
+- Go straight to the next action after receiving Miles' response (relay the question via the host's native user-question tool, or tell the user what happened)
 
 ## Credits
 

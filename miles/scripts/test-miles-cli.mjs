@@ -11,6 +11,15 @@ import { tmpdir } from 'os';
 import { dirname, join, resolve } from 'path';
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
+import {
+  buildDevicePollingRateLimitMessage,
+  buildDevicePollingTimeoutMessage,
+  formatDuration,
+  formatRetryAfter,
+  getDeviceAuthPollingPlan,
+  getSlowedDeviceAuthPollIntervalMs,
+  parseRetryAfterSeconds,
+} from './login-polling.mjs';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const skillDir = resolve(scriptDir, '..');
@@ -86,6 +95,89 @@ function runHook(command, milesHome) {
 }
 
 try {
+  const fallbackPollingPlan = getDeviceAuthPollingPlan();
+  assert(
+    fallbackPollingPlan.pollIntervalMs === 10000,
+    'login polling should clamp the default interval to the safe minimum',
+  );
+  assert(
+    fallbackPollingPlan.maxAttempts === 55,
+    'login polling should cap default attempts below the polling rate limit',
+  );
+
+  const missingExpiryPollingPlan = getDeviceAuthPollingPlan({
+    intervalSeconds: 5,
+  });
+  assert(
+    missingExpiryPollingPlan.maxAttempts === 55,
+    'login polling should use the default expiry when Miles omits expiresIn',
+  );
+
+  const defaultPollingPlan = getDeviceAuthPollingPlan({
+    intervalSeconds: 5,
+    expiresInSeconds: 600,
+  });
+  assert(
+    defaultPollingPlan.pollIntervalMs === 10000,
+    'login polling should clamp the server interval to the safe minimum',
+  );
+  assert(
+    defaultPollingPlan.maxAttempts === 55,
+    'login polling should stop before the server polling rate limit',
+  );
+  assert(
+    formatDuration(defaultPollingPlan.maxWaitMs) === '9m 10s',
+    'login polling should expose a readable wait duration',
+  );
+  const cappedPollingPlan = getDeviceAuthPollingPlan({
+    intervalSeconds: 10,
+    expiresInSeconds: 3600,
+  });
+  assert(
+    cappedPollingPlan.maxAttempts === 55,
+    'login polling should cap attempts even when the device code has a long expiry',
+  );
+  assertIncludes(
+    buildDevicePollingTimeoutMessage(defaultPollingPlan.maxWaitMs),
+    'Run `miles login` again',
+    'login timeout message should tell users how to recover',
+  );
+  assert(
+    formatRetryAfter(undefined) === '',
+    'retry-after formatting should degrade cleanly when Miles omits retry timing',
+  );
+  assert(
+    parseRetryAfterSeconds('120') === 120,
+    'retry-after parsing should accept numeric header values',
+  );
+  assert(
+    parseRetryAfterSeconds(
+      'Sun, 10 May 2026 16:02:00 GMT',
+      Date.parse('Sun, 10 May 2026 16:00:00 GMT'),
+    ) === 120,
+    'retry-after parsing should accept HTTP-date header values',
+  );
+  assert(
+    getSlowedDeviceAuthPollIntervalMs(10000) === 15000,
+    'slow_down should increase the next device poll by the RFC interval',
+  );
+  assert(
+    getSlowedDeviceAuthPollIntervalMs(10000, 30) === 30000,
+    'slow_down should honor retry-after timing when it is longer than the default increase',
+  );
+  const rateLimitWithRetry = buildDevicePollingRateLimitMessage(120);
+  assert(
+    rateLimitWithRetry ===
+      'Miles login polling was rate limited before authorization completed. Wait about 2m before trying again. Run `miles login` again for a fresh code.',
+    'login rate limit message should include retry guidance without extra spaces',
+  );
+  const rateLimitWithoutRetry = buildDevicePollingRateLimitMessage();
+  assert(
+    rateLimitWithoutRetry ===
+      'Miles login polling was rate limited before authorization completed. Run `miles login` again for a fresh code.',
+    'login rate limit message should degrade cleanly without retry timing',
+  );
+
   const doctorHome = makeTempDir();
   const { result: doctorResult, json: doctor } = runJson(['doctor', '--json'], {
     milesHome: doctorHome,

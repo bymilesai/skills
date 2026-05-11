@@ -138,6 +138,8 @@ Use exactly the `#` and `Option` columns. Add a third `Details` column only when
 
 Approval card:
 
+For `phase: brief_review`, do not use this compact approval card by itself. Use the Brief review template below so the full brief and approval request are visible together in the final response.
+
 **Miles needs approval:** <brief approval or action text>
 
 Choose one option.
@@ -179,7 +181,31 @@ User prompt: "Build a website for my yoga studio"
 
 ### Brief review
 
-When Miles presents a design brief for approval (phase: `brief_review`), show the brief content to the user and ask them to approve or request changes. The brief is the blueprint for the entire site — the user needs to see it.
+When Miles presents a design brief for approval (phase: `brief_review`), the next user-visible response must include the full brief content and the approval request together. The brief is the blueprint for the entire site. Do not summarize it, omit it, or replace it with only an approval prompt.
+
+If Miles includes `[brief]...[/brief]`, copy the full content inside those tags. Preserve headings, bullets, pricing details, contact details, page structure, and requirements. If Miles provides the brief without tags, copy the full brief text Miles returned.
+
+The brief review must be the final assistant response for that turn. Stop after the approval prompt and wait for the user to reply.
+
+Use this structure:
+
+> [!IMPORTANT]
+> **Miles Design Brief**
+>
+> <full brief content from Miles>
+
+**Miles needs approval:** Does this brief look right?
+
+Choose one option.
+
+| # | Option |
+|---:|---|
+| 1 | Approve |
+| 2 | Request changes |
+
+Reply with one number, or describe the changes.
+
+Self-check before sending: if the response does not include the actual brief content from Miles, revise it before sending.
 
 ## Step 4: Choose a Design Direction
 

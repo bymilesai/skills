@@ -105,45 +105,39 @@ The Miles response includes structured tags like `[question: ...]` with question
 Host examples:
 
 - Claude Code: use `askUserQuestion` when available.
-- Codex: use `request_user_input` when it is present and callable in the active mode. In some Codex modes this tool is unavailable even when documented elsewhere. When it is unavailable, use the Markdown card fallback below.
+- Codex: use `request_user_input` when it is present and callable in the active mode. In some Codex modes this tool is unavailable even when documented elsewhere. When it is unavailable, present the Markdown card fallback without mentioning tool availability.
 - Cursor or other agents: use the host's equivalent choice/freeform question UI when available.
 
-Copy the Miles question text and answer options directly from the response. Preserve all options when the tool supports them. If the host tool supports fewer choice buttons than Miles returned, still use the tool when practical: put the complete numbered option list in the prompt and allow a freeform answer. Do not silently drop important options. Only fall back to plain text in chat after checking that no structured user-question tool is available.
+Copy the Miles question text and answer options directly from the response. Preserve all options when the tool supports them. If the host tool supports fewer choice buttons than Miles returned, still use the tool when practical: put the complete numbered option list in the prompt and allow a freeform answer. Do not silently drop important options. Do not invent option explanations or meanings that Miles did not provide. Only fall back to plain text in chat after checking that no structured user-question tool is available.
 
 ### Markdown card fallback
 
-When native structured questions are unavailable, present Miles' question as a compact Markdown card. Do not write a long explanation about tool availability. Do not answer the question yourself.
+When native structured questions are unavailable, present Miles' question as a compact Markdown card. The message to the user must contain only the card content: heading, question, table, and reply hint. Do not mention `request_user_input`, tool names, fallback behavior, or phrases like "use this format." Do not answer the question yourself.
 
-Use this format:
+Choice question card:
 
-```markdown
-**Miles needs a choice**
+**Miles asks:** <question text>
 
-<question text>
-
-| Reply | Option |
+| # | Option |
 |---:|---|
 | 1 | <option one> |
 | 2 | <option two> |
 | 3 | <option three> |
 
 Reply with a number, or type a custom answer.
-```
 
-For yes/no approval, use:
+Use exactly the `#` and `Option` columns. Add a third `Details` column only when Miles returned separate option descriptions. Never invent a `Meaning` or `Details` column from your own interpretation.
 
-```markdown
-**Miles needs approval**
+Approval card:
 
-<brief approval or action text>
+**Miles needs approval:** <brief approval or action text>
 
-| Reply | Option |
+| # | Option |
 |---:|---|
 | 1 | Approve |
 | 2 | Request changes |
 
 Reply with `1`, `2`, or describe the changes.
-```
 
 For design direction selection, use a table with the design numbers and concise labels. If local screenshots are available, include them as Markdown images in the table using absolute file paths. Keep the prompt short and ask the user to reply with a design number or requested changes.
 
@@ -153,7 +147,7 @@ Then send the user's answer:
 "$MILES_CLI" reply "<user's exact answer>"
 ```
 
-Pass the user's words through unchanged. If the user says "Modern and clean", send "Modern and clean" — Miles knows how to work with brief answers. Go straight to the next action after each reply; skip commentary like "Great choice!".
+If the user replies with a number, send the exact Miles option text for that number. If the user writes a custom answer, pass the user's words through unchanged. If the user says "Modern and clean", send "Modern and clean" — Miles knows how to work with brief answers. Go straight to the next action after each reply; skip commentary like "Great choice!".
 
 </relay_guidance>
 

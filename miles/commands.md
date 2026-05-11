@@ -7,8 +7,9 @@ Checks the local CLI runtime, skill path, `MILES_HOME`, credentials file, hook r
 
 Use this first when validating an install or when an agent cannot find the Miles CLI.
 
-### `miles login [--open]`
-Starts device auth and prints the login URL and code. Gets an API key stored in `$MILES_HOME/credentials.json`. Use `--open` only when you explicitly want the CLI to launch the OS browser.
+### `miles login`
+Starts device auth and opens the OS/default browser. Gets an API key stored in `$MILES_HOME/credentials.json`.
+Login intentionally uses the external browser because in-app browsers may not support hardware security keys or other identity-provider requirements.
 Default server: `https://api.bymiles.ai`
 
 By default, `MILES_HOME` is `~/.miles`. Set `MILES_HOME=/path/to/isolated/state` for clean-machine smoke tests or separate agent environments.
@@ -38,7 +39,7 @@ Supports `--json`.
 
 ### `miles preview [--open]`
 Gets the dashboard URL for the active site. Appends `?agent=true` to hide the conversation panel.
-Supports `--json`. JSON output includes `url`, `connected`, and `activeSite` so agents can open the URL with a host browser tool and verify the dashboard WebSocket connection. Use `--open` only when you explicitly want the CLI to launch the OS browser.
+Supports `--json`. JSON output includes `url`, `dashboardUrl`, `authenticated`, `connected`, and `activeSite` so agents can open the URL with a host browser tool and verify the dashboard WebSocket connection. When `authenticated` is true, `url` logs that browser into a normal dashboard session before redirecting to `dashboardUrl`. Use `--open` only when you explicitly want the CLI to launch the OS browser.
 When design direction generation starts, agents should run `miles preview --json`, open the returned `url`, and rerun `miles preview --json` until `connected` is true.
 
 ### `miles balance`

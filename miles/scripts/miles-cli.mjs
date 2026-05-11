@@ -167,6 +167,43 @@ function getDashboardUrl(site) {
   return `${site.dashboardUrl}?agent=true`;
 }
 
+function getDashboardRedirectPath(dashboardUrl) {
+  const parsed = new URL(dashboardUrl);
+  return `${parsed.pathname}${parsed.search}`;
+}
+
+async function getAuthenticatedDashboardUrl(apiKey, serverUrl, dashboardUrl) {
+  if (!apiKey) return null;
+  try {
+    const data = await apiRequest(
+      'POST',
+      '/api/v2/headless/auth/session-link',
+      {
+        auth: apiKey,
+        body: { redirect: getDashboardRedirectPath(dashboardUrl) },
+        serverUrl,
+      },
+    );
+    return typeof data.url === 'string' && data.url ? data.url : null;
+  } catch {
+    return null;
+  }
+}
+
+async function getDashboardOpenUrl(creds, site, serverUrl) {
+  const dashboardUrl = getDashboardUrl(site);
+  const authenticatedUrl = await getAuthenticatedDashboardUrl(
+    creds.apiKey,
+    serverUrl,
+    dashboardUrl,
+  );
+  return {
+    dashboardUrl,
+    url: authenticatedUrl || dashboardUrl,
+    authenticated: Boolean(authenticatedUrl),
+  };
+}
+
 async function getDashboardConnectionStatus(site, serverUrl) {
   const status = await apiRequest(
     'GET',
@@ -223,7 +260,7 @@ async function requireDashboardConnectionForEdit(site, serverUrl) {
 
 function exitWithDashboardConnectionRequired(site, timeoutMs) {
   exitWithError(
-    `Dashboard did not connect within ${timeoutMs / 1000}s. Open ${getDashboardUrl(site)} in your agent browser or regular browser, then retry.`,
+    `Dashboard did not connect within ${timeoutMs / 1000}s. Run \`miles preview --json\`, open the returned url in your agent browser or regular browser, then retry.`,
   );
 }
 
@@ -452,7 +489,7 @@ function openUrl(url) {
 
 async function cmdLogin(args = []) {
   loadCredentials();
-  const shouldOpen = hasCommandFlag(args, '--open');
+  const shouldOpen = !hasCommandFlag(args, '--no-open');
   const serverUrl = DEFAULT_SERVER_URL;
   console.log(
     shouldOpen ? 'Opening browser for Miles login...' : 'Starting Miles login...',
@@ -481,7 +518,7 @@ async function cmdLogin(args = []) {
     openUrl(verificationUrl);
   } else {
     console.log(
-      'Open this URL in your agent window or browser and confirm the code matches.',
+      'Open this URL in a browser and confirm the code matches.',
     );
   }
 
@@ -1802,21 +1839,30 @@ async function cmdPreview(args = []) {
     exitWithError('No active site.');
   }
 
-  const shouldOpen = hasCommandFlag(args, '--open');
   const serverUrl = DEFAULT_SERVER_URL;
-  const url = getDashboardUrl(site);
+  const shouldOpen = hasCommandFlag(args, '--open');
+  const dashboard = await getDashboardOpenUrl(creds, site, serverUrl);
   const connected = site.conversationId
     ? await getDashboardConnectionStatus(site, serverUrl)
     : null;
   if (cliOptions.json) {
-    emitJson({ url, connected, activeSite: getActiveSiteSummary(creds) });
+    emitJson({
+      url: dashboard.url,
+      dashboardUrl: dashboard.dashboardUrl,
+      authenticated: dashboard.authenticated,
+      connected,
+      activeSite: getActiveSiteSummary(creds),
+    });
     return;
   }
-  console.log(url);
+  console.log(dashboard.url);
+  if (dashboard.authenticated) {
+    console.log('Authentication: browser login handoff');
+  }
   if (connected !== null) {
     console.log(`WebSocket: ${connected ? 'connected' : 'not connected'}`);
   }
-  if (shouldOpen) openUrl(url);
+  if (shouldOpen) openUrl(dashboard.url);
 }
 
 async function cmdBalance() {
@@ -2116,7 +2162,7 @@ if (!command || command === 'help' || command === '--help') {
 
 Authentication:
   miles doctor                      Check local CLI setup
-  miles login [--open]              Device auth flow
+  miles login                       Device auth flow (opens browser)
   miles logout                      Clear stored credentials
   miles whoami                      Show current auth + active site
 

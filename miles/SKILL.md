@@ -26,7 +26,7 @@ This is the complete set of commands. Do not invent others.
 |---------|---------|
 | `miles doctor` | Check local CLI setup and paths |
 | `miles whoami` | Check authentication status |
-| `miles login [--open]` | Authenticate (production) |
+| `miles login` | Authenticate (production, opens external browser) |
 | `miles create-site "<description>" [--brief file]` | Create site, start conversation, wait for response |
 | `miles reply "<message>"` | Send a message to Miles, wait for response |
 | `miles reply --file <path>` | Send reply text from a file; best for prices, quotes, Markdown, or long answers |
@@ -70,7 +70,7 @@ To get the URL without launching the OS browser:
 "$MILES_CLI" preview --json
 ```
 
-Open the returned `url` with the host's browser/navigation tool. Use the exact URL from JSON; it should include `?agent=true`. The JSON response also reports whether the dashboard WebSocket is `connected`; after opening the URL, rerun `preview --json` until `connected` is true before starting browser-backed work. If no internal browser tool is available, use the explicit external-browser fallback:
+Open the returned `url` with the host's browser/navigation tool. Use the exact URL from JSON. When `authenticated` is true, that URL logs the browser into a normal dashboard session and then redirects to the active dashboard; do not replace it with `dashboardUrl`. The JSON response also reports whether the dashboard WebSocket is `connected`; after opening the URL, rerun `preview --json` until `connected` is true before starting browser-backed work. If no internal browser tool is available, use the explicit external-browser fallback:
 
 ```bash
 "$MILES_CLI" preview --open
@@ -87,7 +87,7 @@ Do not decide Browser is unavailable just because there is no direct browser too
 1. Run `"$MILES_CLI" preview --json` to get the active dashboard URL.
 2. Use the Browser skill / Node REPL path to select the `iab` browser.
 3. Name the browser session for the site.
-4. Open the returned `url` in a tab.
+4. Open the returned `url` in a tab. If `authenticated` is true, this logs the in-app browser into Miles before redirecting to the dashboard.
 5. Set the browser `visibility` capability to `true` so the user can see progress.
 6. Rerun `"$MILES_CLI" preview --json` until `connected` is true.
 7. Continue the Miles wait, design-generation, design-selection, edit, or theme-conversion flow.
@@ -106,7 +106,7 @@ If not logged in:
 "$MILES_CLI" login
 ```
 
-This prints a browser URL and code for approval. Open the URL in the host browser surface when available. If no host browser surface is available, run `"$MILES_CLI" login --open` to launch the OS browser.
+This opens the OS/default browser for device authorization. Keep login in the external browser because in-app browsers may not support hardware security keys or other required identity-provider flows. After the CLI is logged in, `"$MILES_CLI" preview --json` can log the host's browser surface into the dashboard for viewing and WebSocket work.
 
 ## Step 2: Create a Site
 

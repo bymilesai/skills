@@ -183,8 +183,8 @@ try {
   assert(helpResult.status === 0, 'help should exit cleanly');
   assertIncludes(
     helpResult.stdout,
-    'miles login [--open]',
-    'help should document host-controlled login opening',
+    'miles login                       Device auth flow (opens browser)',
+    'help should document external-browser login',
   );
   assertIncludes(
     helpResult.stdout,

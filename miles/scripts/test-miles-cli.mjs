@@ -50,6 +50,7 @@ function run(args, options = {}) {
     encoding: 'utf8',
     input: options.input,
     env: envFor(milesHome, options.env),
+    timeout: options.timeout || 15000,
   });
 }
 

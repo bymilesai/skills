@@ -194,6 +194,85 @@ function truncateText(text, maxChars = ERROR_BODY_MAX_CHARS) {
   };
 }
 
+function stripOneTrailingNewline(text) {
+  return text.replace(/\r?\n$/, '');
+}
+
+function readReplyMessage(args) {
+  const stdinIndex = args.indexOf('--stdin');
+  const fileIndex = args.indexOf('--file');
+
+  if (stdinIndex !== -1 && fileIndex !== -1) {
+    exitWithError('Use either `miles reply --stdin` or `miles reply --file <path>`, not both.');
+  }
+
+  if (stdinIndex !== -1) {
+    const remaining = args.filter((_, index) => index !== stdinIndex);
+    if (remaining.length > 0) {
+      exitWithError('Usage: miles reply --stdin');
+    }
+    return stripOneTrailingNewline(readFileSync(0, 'utf8'));
+  }
+
+  if (fileIndex !== -1) {
+    const filePath = args[fileIndex + 1];
+    if (!filePath) {
+      exitWithError('Usage: miles reply --file <path>');
+    }
+    const remaining = args.filter(
+      (_, index) => index !== fileIndex && index !== fileIndex + 1,
+    );
+    if (remaining.length > 0) {
+      exitWithError('Usage: miles reply --file <path>');
+    }
+    return stripOneTrailingNewline(readFileSync(filePath, 'utf8'));
+  }
+
+  return args.join(' ');
+}
+
+function collectScreenshotErrorLines(status, targetUrl, errorBody) {
+  const body = errorBody?.body;
+  const detail = body?.detail;
+  const lines = [`Screenshot failed (HTTP ${status})`];
+  const messages = [];
+
+  if (body?.error) messages.push(body.error);
+  if (body?.message) messages.push(body.message);
+
+  for (const message of messages) {
+    if (!message || lines.some((line) => line.endsWith(message))) continue;
+    lines.push(`Message: ${message}`);
+  }
+
+  if (typeof detail === 'string' && detail) {
+    lines.push(`Server detail: ${detail}`);
+  } else if (detail && typeof detail === 'object') {
+    if (detail.error && !messages.includes(detail.error)) {
+      lines.push(`Server error: ${detail.error}`);
+    }
+    if (detail.detail) {
+      lines.push(`Server detail: ${detail.detail}`);
+    }
+  }
+
+  const nestedTarget =
+    body?.targetUrl ||
+    (detail && typeof detail === 'object' ? detail.targetUrl : null) ||
+    targetUrl;
+  if (nestedTarget) {
+    lines.push(`Target: ${nestedTarget}`);
+  }
+  if (errorBody?.contentType) {
+    lines.push(`Content-Type: ${errorBody.contentType}`);
+  }
+  if (body?.raw) {
+    lines.push(`Body: ${body.raw}`);
+  }
+
+  return lines;
+}
+
 async function readResponseErrorBody(response) {
   const contentType = response.headers.get('content-type') || '';
   const text = await response.text();
@@ -649,9 +728,9 @@ async function cmdReply(args) {
     );
   }
 
-  const message = args.join(' ');
+  const message = readReplyMessage(args);
   if (!message) {
-    exitWithError('Usage: miles reply "<message>"');
+    exitWithError('Usage: miles reply "<message>" | miles reply --stdin | miles reply --file <path>');
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -1531,8 +1610,9 @@ async function cmdScreenshot(args) {
         contentType: errorBody.contentType,
       });
     } else {
-      console.error(msg);
-      if (body?.raw) console.error(`Body: ${body.raw}`);
+      for (const line of collectScreenshotErrorLines(response.status, url, errorBody)) {
+        console.error(line);
+      }
     }
     process.exit(1);
   }
@@ -1975,6 +2055,8 @@ Site Management:
 
 Conversation:
   miles reply "<message>"           Send message to Miles, wait for response
+  miles reply --stdin               Read reply text from stdin
+  miles reply --file <path>         Read reply text from a file
   miles wait                        Long-poll for Miles' response
   miles status                      Quick status check (non-blocking)
   miles design-directions           Get design direction preview URLs

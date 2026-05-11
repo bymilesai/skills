@@ -50,6 +50,15 @@ Supports `--json`.
 Sends a message to Miles and auto-waits for the response.
 Use this to answer Miles' questions during discovery, approve the brief, or give feedback.
 
+For text that contains shell-sensitive characters such as `$`, backticks, quotes, or multiline Markdown, prefer:
+
+```bash
+miles reply --file /tmp/reply.md
+printf '%s' 'Quick Safety Check starting at $35' | miles reply --stdin
+```
+
+Both forms auto-wait for the response.
+
 ### `miles wait`
 Long-polls for Miles' response. Rarely needed — `create-site`, `reply`, and `select-design-direction` all stream activity and wait automatically (up to 10 minutes). Use `miles wait` only as a recovery if a command was interrupted.
 
@@ -60,7 +69,7 @@ Supports `--json`.
 ## Design Directions
 
 ### `miles design-directions`
-Returns design direction preview image URLs. These are publicly accessible and can be embedded anywhere.
+Returns design direction preview URLs and screenshot commands.
 If no directions exist yet, shows the current phase and what's needed.
 Supports `--json`.
 
@@ -70,7 +79,7 @@ Auto-waits for the build to start.
 
 ### `miles screenshot <preview-url>`
 Captures a preview URL to a JPEG under `$MILES_HOME/screenshots` and prints the file path.
-Supports `--json`, including target URL, path, byte count, and content type.
+Supports `--json`, including target URL, path, byte count, content type, and structured error details when capture fails.
 
 ## Export
 

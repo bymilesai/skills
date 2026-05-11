@@ -29,6 +29,8 @@ This is the complete set of commands. Do not invent others.
 | `miles login` | Authenticate (production) |
 | `miles create-site "<description>" [--brief file]` | Create site, start conversation, wait for response |
 | `miles reply "<message>"` | Send a message to Miles, wait for response |
+| `miles reply --file <path>` | Send reply text from a file; best for prices, quotes, Markdown, or long answers |
+| `miles reply --stdin` | Send reply text from stdin |
 | `miles wait` | Recovery only — if a prior command was interrupted |
 | `miles status` | Quick non-blocking status check |
 | `miles design-directions` | Re-list design direction preview URLs |
@@ -159,6 +161,12 @@ Then send the user's answer:
 "$MILES_CLI" reply "<user's exact answer>"
 ```
 
+If the answer contains `$`, quotes, backticks, multiline text, Markdown, or long pricing lists, do not put it in an inline double-quoted shell argument. Prefer writing the exact answer to a temporary file and sending:
+
+```bash
+"$MILES_CLI" reply --file /tmp/miles-reply.md
+```
+
 If the user replies with a number, send the exact Miles option text for that number. If the user writes a custom answer, pass the user's words through unchanged. If the user says "Modern and clean", send "Modern and clean" — Miles knows how to work with brief answers. Go straight to the next action after each reply; skip commentary like "Great choice!".
 
 </relay_guidance>
@@ -214,11 +222,23 @@ Self-check before sending: if the response does not include the actual brief con
 
 When Miles finishes generating design directions (phase: `design_directions_ready`), the context includes preview URLs for each design.
 
-Visually inspect each design before presenting to the user. If a browser is available, open the preview URLs. Otherwise, use `miles screenshot` to capture them — it saves a JPEG and prints the path, then use `Read` to view the image:
+Before design-direction generation begins, tell the user it can take several minutes. During generation, send progress updates only for meaningful milestones: generation started, first design complete, halfway complete, all directions complete, or no visible progress for more than 90 seconds. Avoid repeated "still waiting" updates unless there is new information or a long silence.
+
+Visually inspect each design before presenting it to the user. Only say you visually inspected a design if a browser preview or screenshot actually loaded. If a preview URL uses `localhost`, do not assume it is reachable from the current environment; try it only when a browser or local request tool is available, then use `miles screenshot` as the fallback.
+
+Use `miles screenshot` to capture preview URLs when browser inspection is unavailable or local preview URLs cannot be reached. It saves a JPEG and prints the path, then use the host image-reading capability to view the image:
 
 ```bash
 "$MILES_CLI" screenshot /preview/abc123/previews/hero-xyz/index.html
 ```
+
+If `miles screenshot` fails, rerun it once with `--json` and inspect the `detail`, `targetUrl`, and `contentType` fields:
+
+```bash
+"$MILES_CLI" screenshot --json /preview/abc123/previews/hero-xyz/index.html
+```
+
+If screenshots are unavailable and preview URLs are not reachable, do not claim visual inspection happened. Tell the user that visual preview capture failed, include the design names, any descriptions Miles returned, and preview URLs, then ask whether to choose from descriptions, retry screenshots, or request new directions.
 
 When evaluating designs, consider: visual hierarchy, tone match with the business, layout quality, image quality, overall polish.
 

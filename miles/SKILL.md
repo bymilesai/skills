@@ -189,10 +189,13 @@ The brief review must be the final assistant response for that turn. Stop after 
 
 Use this structure:
 
-> [!IMPORTANT]
-> **Miles Design Brief**
->
-> <full brief content from Miles>
+---
+
+## Design Brief
+
+<full brief content from Miles, preserving Markdown headings and lists when present>
+
+---
 
 **Miles needs approval:** Does this brief look right?
 

@@ -110,6 +110,8 @@ Host examples:
 
 Copy the Miles question text and answer options directly from the response. Preserve all options when the tool supports them. If the host tool cannot represent all Miles options cleanly, use the Markdown card fallback. Do not silently drop important options. Do not invent option explanations or meanings that Miles did not provide.
 
+Assume Miles questions are single-choice unless Miles explicitly says multiple selections are allowed. Make the answer mode clear in the prompt.
+
 ### Markdown card fallback
 
 When native structured questions are unavailable, present Miles' question as a compact Markdown card. The message to the user must contain only the card content: heading, question, table, and reply hint. Do not mention `request_user_input`, tool names, fallback behavior, or phrases like "use this format." Do not answer the question yourself.
@@ -120,13 +122,17 @@ Choice question card:
 
 **Miles asks:** <question text>
 
+Choose one option.
+
 | # | Option |
 |---:|---|
 | 1 | <option one> |
 | 2 | <option two> |
 | 3 | <option three> |
 
-Reply with a number, or type a custom answer.
+Reply with one number, or type a custom answer.
+
+If Miles explicitly allows multiple selections, replace "Choose one option" with "Choose one or more options" and replace the reply hint with: "Reply with one or more numbers separated by commas, or type a custom answer."
 
 Use exactly the `#` and `Option` columns. Add a third `Details` column only when Miles returned separate option descriptions. Never invent a `Meaning` or `Details` column from your own interpretation.
 
@@ -134,14 +140,16 @@ Approval card:
 
 **Miles needs approval:** <brief approval or action text>
 
+Choose one option.
+
 | # | Option |
 |---:|---|
 | 1 | Approve |
 | 2 | Request changes |
 
-Reply with `1`, `2`, or describe the changes.
+Reply with one number, or describe the changes.
 
-For design direction selection, use a table with the design numbers and concise labels. If local screenshots are available, include them as Markdown images in the table using absolute file paths. Keep the prompt short and ask the user to reply with a design number or requested changes.
+For design direction selection, use a table with the design numbers and concise labels. If local screenshots are available, include them as Markdown images in the table using absolute file paths. Make clear that the user should choose one design direction. Keep the prompt short and ask the user to reply with one design number or requested changes.
 
 Then send the user's answer:
 

@@ -114,6 +114,8 @@ Copy the Miles question text and answer options directly from the response. Pres
 
 When native structured questions are unavailable, present Miles' question as a compact Markdown card. The message to the user must contain only the card content: heading, question, table, and reply hint. Do not mention `request_user_input`, tool names, fallback behavior, or phrases like "use this format." Do not answer the question yourself.
 
+Important visibility rule: if you need the user's answer, the Markdown card must be the final assistant response for that turn. Do not put the card only in a progress update, tool-request note, hidden reasoning, or intermediate message. Do not send an empty or generic final response after showing the card. Stop after the card and wait for the user to reply.
+
 Choice question card:
 
 **Miles asks:** <question text>
@@ -223,7 +225,7 @@ When you run `create-site`, `reply`, or `wait`, the CLI prints Miles' response a
 
 - Miles' response appears in stdout; on hook-capable hosts it may also appear as context after the tool result
 - `create-site`, `reply`, and `wait` already deliver Miles' full response, so calling `miles messages` or `miles status` afterward is redundant
-- Go straight to the next action after receiving Miles' response (relay the question with the native-or-Markdown-card rule, or tell the user what happened)
+- Go straight to the next action after receiving Miles' response. If Miles needs user input, the question must be visible in the final assistant response using the native-or-Markdown-card rule. If no user input is needed, tell the user what happened.
 
 ## Credits
 

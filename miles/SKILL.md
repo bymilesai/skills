@@ -105,10 +105,47 @@ The Miles response includes structured tags like `[question: ...]` with question
 Host examples:
 
 - Claude Code: use `askUserQuestion` when available.
-- Codex: use `request_user_input` when it is present in the active tool list. In some Codex modes this tool is unavailable; when it is unavailable, briefly say the structured question UI is unavailable in the current mode and present the full Miles question in chat.
+- Codex: use `request_user_input` when it is present and callable in the active mode. In some Codex modes this tool is unavailable even when documented elsewhere. When it is unavailable, use the Markdown card fallback below.
 - Cursor or other agents: use the host's equivalent choice/freeform question UI when available.
 
 Copy the Miles question text and answer options directly from the response. Preserve all options when the tool supports them. If the host tool supports fewer choice buttons than Miles returned, still use the tool when practical: put the complete numbered option list in the prompt and allow a freeform answer. Do not silently drop important options. Only fall back to plain text in chat after checking that no structured user-question tool is available.
+
+### Markdown card fallback
+
+When native structured questions are unavailable, present Miles' question as a compact Markdown card. Do not write a long explanation about tool availability. Do not answer the question yourself.
+
+Use this format:
+
+```markdown
+**Miles needs a choice**
+
+<question text>
+
+| Reply | Option |
+|---:|---|
+| 1 | <option one> |
+| 2 | <option two> |
+| 3 | <option three> |
+
+Reply with a number, or type a custom answer.
+```
+
+For yes/no approval, use:
+
+```markdown
+**Miles needs approval**
+
+<brief approval or action text>
+
+| Reply | Option |
+|---:|---|
+| 1 | Approve |
+| 2 | Request changes |
+
+Reply with `1`, `2`, or describe the changes.
+```
+
+For design direction selection, use a table with the design numbers and concise labels. If local screenshots are available, include them as Markdown images in the table using absolute file paths. Keep the prompt short and ask the user to reply with a design number or requested changes.
 
 Then send the user's answer:
 

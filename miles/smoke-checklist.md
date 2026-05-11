@@ -48,21 +48,29 @@ export MILES_CLI=/path/to/installed/miles/scripts/miles
 
 4. When Miles presents a brief, show it to the user and require explicit approval or requested changes.
 
-5. When design directions are ready, inspect them before selection.
+5. After brief approval starts design-direction generation, open the active dashboard progress URL in the agent browser.
+
+   ```bash
+   "$MILES_CLI" preview --json
+   ```
+
+   Open the returned `url` with the host's browser/navigation tool. If no internal browser is available, run `"$MILES_CLI" preview`.
+
+6. When design directions are ready, inspect them before selection.
 
    ```bash
    "$MILES_CLI" design-directions --json
    "$MILES_CLI" screenshot "<preview-url-or-path>" --json
    ```
 
-6. Select the approved design direction.
+7. Select the approved design direction.
 
    ```bash
    "$MILES_CLI" select-design-direction 1
    "$MILES_CLI" status --json
    ```
 
-7. Verify the built site and request one multi-page or content update.
+8. Verify the built site and request one multi-page or content update.
 
    ```bash
    "$MILES_CLI" screenshot "<site-preview-url-or-path>" --json
@@ -71,7 +79,7 @@ export MILES_CLI=/path/to/installed/miles/scripts/miles
    "$MILES_CLI" status --json
    ```
 
-8. Export the result when needed.
+9. Export the result when needed.
 
    ```bash
    "$MILES_CLI" export-site --json

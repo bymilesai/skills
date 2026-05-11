@@ -62,19 +62,21 @@ Set the Bash timeout to 10 minutes (600000ms) for all miles commands — site bu
 
 During long visual phases, keep the active Miles dashboard visible so the user can see progress. Prefer the host agent's internal browser when one is available; otherwise use the CLI's external browser fallback.
 
-To open internally, get the URL without launching the OS browser:
+Mandatory checkpoint: when Miles enters `phase: generating_design_directions`, do not just tell the user you are waiting. Immediately get the active progress URL and open that exact URL in a browser view.
+
+To get the URL without launching the OS browser:
 
 ```bash
 "$MILES_CLI" preview --json
 ```
 
-Open the returned `url` with the host's browser/navigation tool. If no internal browser tool is available, run:
+Open the returned `url` with the host's browser/navigation tool. Use the exact URL from JSON; it should include `?agent=true`. If no internal browser tool is available, run:
 
 ```bash
 "$MILES_CLI" preview
 ```
 
-Do this once after the brief is approved and design direction generation starts, and again before long build or conversion work if the dashboard is not already visible. Do not keep reopening the browser unless the user asks or the connection is lost.
+If both browser paths fail, tell the user the dashboard could not be opened and include the URL from `preview --json`. Do this once after the brief is approved and design direction generation starts, and again before long build or conversion work if the dashboard is not already visible. Do not keep reopening the browser unless the user asks or the connection is lost.
 
 ## Step 1: Authenticate
 
@@ -240,7 +242,7 @@ Self-check before sending: if the response does not include the actual brief con
 
 When Miles finishes generating design directions (phase: `design_directions_ready`), the context includes preview URLs for each design.
 
-Before design-direction generation begins, tell the user it can take several minutes, then open the active dashboard using the internal-browser-first rule above so the user can watch progress. During generation, send progress updates only for meaningful milestones: generation started, first design complete, halfway complete, all directions complete, or no visible progress for more than 90 seconds. Avoid repeated "still waiting" updates unless there is new information or a long silence.
+Before design-direction generation begins, tell the user it can take several minutes. As soon as the approval/reply command moves Miles into `phase: generating_design_directions`, run `"$MILES_CLI" preview --json` and open the returned `url` with the host's internal browser/navigation tool. This is required even if Miles has not returned design preview URLs yet; the dashboard URL shows generation progress while the user waits. If the internal browser is unavailable, run `"$MILES_CLI" preview` as the external-browser fallback. During generation, send progress updates only for meaningful milestones: generation started, first design complete, halfway complete, all directions complete, or no visible progress for more than 90 seconds. Avoid repeated "still waiting" updates unless there is new information or a long silence.
 
 Visually inspect each design before presenting it to the user. Only say you visually inspected a design if a browser preview or screenshot actually loaded. If a preview URL uses `localhost`, do not assume it is reachable from the current environment; try it only when a browser or local request tool is available, then use `miles screenshot` as the fallback.
 

@@ -24,6 +24,9 @@ miles reply "Serenity Flow Yoga in Portland, Oregon"
 miles reply "We offer hot yoga, vinyasa, and meditation classes. Modern minimalist style."
 # Miles creates a brief and asks for approval
 miles reply "Looks great, approved!"
+# Miles starts generating design directions.
+# Open the active dashboard progress URL in the agent browser:
+miles preview --json
 # Miles generates design directions (streams progress, returns when done)
 miles design-directions
 # → Show preview URLs to user, let them pick

@@ -100,15 +100,15 @@ A detailed initial prompt (e.g. "Build me a website for my yoga studio in Portla
 
 ### How to relay
 
-The Miles response includes structured tags like `[question: ...]` with question text and numbered options. Before presenting a Miles question in plain chat, check whether your active tool list includes a native user-question or user-input tool. If it does, use that tool for every Miles question, brief approval, and design selection so the user can click an option or type a custom answer.
+The Miles response includes structured tags like `[question: ...]` with question text and numbered options. Before presenting a Miles question in plain chat, check whether a native user-question or user-input tool is available, callable in the active mode, and can represent all Miles options without dropping or distorting them. If it can, use that tool for Miles questions, brief approval, and design selection so the user can click an option or type a custom answer. Otherwise, use the Markdown card fallback.
 
 Host examples:
 
 - Claude Code: use `askUserQuestion` when available.
-- Codex: use `request_user_input` when it is present and callable in the active mode. In some Codex modes this tool is unavailable even when documented elsewhere. When it is unavailable, present the Markdown card fallback without mentioning tool availability.
+- Codex: use `request_user_input` when it is present, callable in the active mode, and the Miles question has 2-3 options. In some Codex modes this tool is unavailable even when documented elsewhere. If Miles returns more than 3 options, or if the tool is unavailable, present the Markdown card fallback without mentioning tool availability.
 - Cursor or other agents: use the host's equivalent choice/freeform question UI when available.
 
-Copy the Miles question text and answer options directly from the response. Preserve all options when the tool supports them. If the host tool supports fewer choice buttons than Miles returned, still use the tool when practical: put the complete numbered option list in the prompt and allow a freeform answer. Do not silently drop important options. Do not invent option explanations or meanings that Miles did not provide. Only fall back to plain text in chat after checking that no structured user-question tool is available.
+Copy the Miles question text and answer options directly from the response. Preserve all options when the tool supports them. If the host tool cannot represent all Miles options cleanly, use the Markdown card fallback. Do not silently drop important options. Do not invent option explanations or meanings that Miles did not provide.
 
 ### Markdown card fallback
 
@@ -156,7 +156,7 @@ User prompt: "Build a website for my yoga studio"
 
 1. Run: `"$MILES_CLI" create-site "Build a website for my yoga studio"`
 2. Miles responds with: `[question: What's the name of your studio?]`
-3. Use the host's native user-question tool: "What's the name of your studio?"
+3. Use the native structured question tool if it can represent the question cleanly; otherwise show a Markdown card: "What's the name of your studio?"
 4. User answers: "Breathe Portland Yoga"
 5. Run: `"$MILES_CLI" reply "Breathe Portland Yoga"`
 6. Miles responds with next question → repeat relay
@@ -190,7 +190,7 @@ If none fit, ask Miles for new directions with feedback:
 "$MILES_CLI" wait
 ```
 
-Use the host's native user-question tool to ask the user which design they prefer. Then select it — this command triggers the full site build and waits for completion:
+Ask the user which design they prefer using the same native-or-Markdown-card rule from Step 3. Then select it — this command triggers the full site build and waits for completion:
 
 ```bash
 "$MILES_CLI" select-design-direction <number>
@@ -223,7 +223,7 @@ When you run `create-site`, `reply`, or `wait`, the CLI prints Miles' response a
 
 - Miles' response appears in stdout; on hook-capable hosts it may also appear as context after the tool result
 - `create-site`, `reply`, and `wait` already deliver Miles' full response, so calling `miles messages` or `miles status` afterward is redundant
-- Go straight to the next action after receiving Miles' response (relay the question via the host's native user-question tool, or tell the user what happened)
+- Go straight to the next action after receiving Miles' response (relay the question with the native-or-Markdown-card rule, or tell the user what happened)
 
 ## Credits
 

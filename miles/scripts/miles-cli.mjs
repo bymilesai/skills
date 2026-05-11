@@ -57,6 +57,8 @@ const DEFAULT_SERVER_URL = 'https://api.bymiles.ai';
 const MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
 const POLL_TIMEOUT_MS = 10000; // 10 second poll for faster progress updates
 const ERROR_BODY_MAX_CHARS = 2048;
+const DASHBOARD_CONNECT_TIMEOUT_MS = 30000;
+const PLAYGROUND_CONNECT_TIMEOUT_MS = 60000;
 const JSON_COMMANDS = new Set([
   'doctor',
   'logout',
@@ -150,6 +152,79 @@ function parseGlobalArgs(argv) {
     args: json ? rawArgs.filter((arg) => arg !== '--json') : rawArgs,
     options: { json, unsupportedJson: false },
   };
+}
+
+function hasCommandFlag(args, flag) {
+  return args.includes(flag);
+}
+
+function findPositiveIntegerArg(args) {
+  const value = args.find((arg) => /^\d+$/.test(arg));
+  return value ? parseInt(value, 10) : null;
+}
+
+function getDashboardUrl(site) {
+  return `${site.dashboardUrl}?agent=true`;
+}
+
+async function getDashboardConnectionStatus(site, serverUrl) {
+  const status = await apiRequest(
+    'GET',
+    `/api/v2/headless/conversations/${site.conversationId}/ws-status`,
+    { auth: site.siteToken, serverUrl },
+  );
+  return Boolean(status.connected);
+}
+
+async function waitForDashboardConnection(
+  site,
+  serverUrl,
+  timeoutMs = DASHBOARD_CONNECT_TIMEOUT_MS,
+) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await getDashboardConnectionStatus(site, serverUrl)) {
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return false;
+}
+
+async function requireDashboardConnectionForEdit(site, serverUrl) {
+  const data = await apiRequest(
+    'GET',
+    `/api/v2/headless/conversations/${site.conversationId}/status`,
+    { auth: site.siteToken, serverUrl },
+  );
+  const browserBackedPhases = new Set([
+    'site_preview',
+    'site_generation',
+    'building',
+    'converting',
+    'complete',
+  ]);
+  const needsBrowser =
+    data.siteReady || browserBackedPhases.has(data.phase || '');
+  if (!needsBrowser) return;
+
+  const dashboardUrl = getDashboardUrl(site);
+  console.log(`Dashboard: ${dashboardUrl}`);
+  console.log('Waiting for dashboard connection before editing...');
+  const connected = await waitForDashboardConnection(
+    site,
+    serverUrl,
+    DASHBOARD_CONNECT_TIMEOUT_MS,
+  );
+  if (!connected) {
+    exitWithDashboardConnectionRequired(site, DASHBOARD_CONNECT_TIMEOUT_MS);
+  }
+}
+
+function exitWithDashboardConnectionRequired(site, timeoutMs) {
+  exitWithError(
+    `Dashboard did not connect within ${timeoutMs / 1000}s. Open ${getDashboardUrl(site)} in your agent browser or regular browser, then retry.`,
+  );
 }
 
 function getActiveSiteSummary(creds) {
@@ -375,10 +450,13 @@ function openUrl(url) {
 // Commands
 // ============================================================================
 
-async function cmdLogin() {
+async function cmdLogin(args = []) {
   loadCredentials();
+  const shouldOpen = hasCommandFlag(args, '--open');
   const serverUrl = DEFAULT_SERVER_URL;
-  console.log(`Opening browser for Miles login...`);
+  console.log(
+    shouldOpen ? 'Opening browser for Miles login...' : 'Starting Miles login...',
+  );
 
   // Request device code
   const data = await apiRequest('POST', '/api/v2/auth/device/device-code', {
@@ -397,9 +475,15 @@ async function cmdLogin() {
   }
 
   console.log(`\nYour code: ${userCode}`);
-  console.log(`Opening: ${verificationUrl}\n`);
+  console.log(`Login URL: ${verificationUrl}\n`);
 
-  openUrl(verificationUrl);
+  if (shouldOpen) {
+    openUrl(verificationUrl);
+  } else {
+    console.log(
+      'Open this URL in your agent window or browser and confirm the code matches.',
+    );
+  }
 
   console.log('Waiting for authorization...');
 
@@ -734,6 +818,7 @@ async function cmdReply(args) {
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
+  await requireDashboardConnectionForEdit(site, serverUrl);
 
   await apiRequest(
     'POST',
@@ -1129,9 +1214,8 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
 
 /**
  * Connection watchdog: monitors the Playground WebSocket connection and
- * reopens the browser if it drops. Runs as a background loop alongside
- * doWait. This keeps long-running browser-dependent work visible if
- * the Playground reconnects during the run.
+ * reports when the browser connection drops. Runs as a background loop alongside
+ * doWait for commands that explicitly opt into browser monitoring.
  *
  * Returns a stop function to call when the wait is complete.
  */
@@ -1155,8 +1239,8 @@ function startConnectionWatchdog(
 
   let running = true;
   // Only activate once we've seen the connection up at least once.
-  // This prevents reopening the browser during early phases (discovery,
-  // brief, hero generation) when the browser was never opened.
+  // This prevents lost-connection noise during early phases when the
+  // dashboard has not been opened yet.
   let connectionSeenOnce = false;
 
   const fail = (err) => {
@@ -1178,8 +1262,7 @@ function startConnectionWatchdog(
       if (status.connected) {
         connectionSeenOnce = true;
       } else if (connectionSeenOnce) {
-        console.log('  Connection lost. Reopening dashboard...');
-        openUrl(dashboardUrl);
+        console.log(`  Connection lost. Reopen dashboard: ${dashboardUrl}`);
         // Wait for reconnection
         const reconnectStart = Date.now();
         while (running && Date.now() - reconnectStart < 30000) {
@@ -1208,7 +1291,13 @@ function startConnectionWatchdog(
   };
 }
 
-async function doWait(creds, conversationId, serverUrl, maxWaitMs) {
+async function doWait(
+  creds,
+  conversationId,
+  serverUrl,
+  maxWaitMs,
+  options = {},
+) {
   const maxWait = maxWaitMs || MAX_WAIT_MS;
   const site = getActiveSite(creds);
   const token = site?.siteToken;
@@ -1216,10 +1305,11 @@ async function doWait(creds, conversationId, serverUrl, maxWaitMs) {
     exitWithError('No site token. Use `miles create-site` first.');
   }
 
-  // Start connection watchdog to auto-recover if the browser closes
-  const dashboardUrl = site?.dashboardUrl
-    ? `${site.dashboardUrl}?agent=true`
-    : null;
+  // Start connection watchdog to auto-recover if the CLI owns browser opening.
+  const dashboardUrl =
+    options.allowExternalBrowserOpen === true && site?.dashboardUrl
+      ? `${site.dashboardUrl}?agent=true`
+      : null;
   const watchdog = startConnectionWatchdog(
     conversationId,
     token,
@@ -1511,7 +1601,7 @@ async function cmdSelectDesignDirection(args) {
     exitWithError('No active conversation.');
   }
 
-  const directionNumber = parseInt(args[0]);
+  const directionNumber = findPositiveIntegerArg(args);
   if (!directionNumber || directionNumber < 1) {
     exitWithError('Usage: miles select-design-direction <number>');
   }
@@ -1520,35 +1610,19 @@ async function cmdSelectDesignDirection(args) {
 
   console.log(`Selecting design direction ${directionNumber}...`);
 
-  // Open the dashboard first — the browser must be connected before we
-  // trigger the build so the dashboard can display the live build progress.
-  const dashboardUrl = `${site.dashboardUrl}?agent=true`;
-  console.log(`Opening dashboard...`);
-  openUrl(dashboardUrl);
-
   // Wait for the dashboard WebSocket connection before starting the build.
   // This ensures the dashboard subscribes to the conversation stream and
   // can display live build progress instead of joining mid-stream.
+  const dashboardUrl = getDashboardUrl(site);
+  console.log(`Dashboard: ${dashboardUrl}`);
   console.log(`Waiting for dashboard to connect...`);
-  const wsConnectStart = Date.now();
-  const WS_CONNECT_TIMEOUT = 30000;
-  let dashboardConnected = false;
-  while (Date.now() - wsConnectStart < WS_CONNECT_TIMEOUT) {
-    const status = await apiRequest(
-      'GET',
-      `/api/v2/headless/conversations/${site.conversationId}/ws-status`,
-      { auth: site.siteToken, serverUrl },
-    );
-    if (status.connected) {
-      dashboardConnected = true;
-      break;
-    }
-    await new Promise((r) => setTimeout(r, 1000));
-  }
+  const dashboardConnected = await waitForDashboardConnection(
+    site,
+    serverUrl,
+    DASHBOARD_CONNECT_TIMEOUT_MS,
+  );
   if (!dashboardConnected) {
-    console.log(
-      `Dashboard did not connect within ${WS_CONNECT_TIMEOUT / 1000}s — proceeding anyway.`,
-    );
+    exitWithDashboardConnectionRequired(site, DASHBOARD_CONNECT_TIMEOUT_MS);
   }
 
   const data = await apiRequest(
@@ -1721,21 +1795,28 @@ async function cmdUse(args) {
   }
 }
 
-async function cmdPreview() {
+async function cmdPreview(args = []) {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site) {
     exitWithError('No active site.');
   }
 
-  const url = `${site.dashboardUrl}?agent=true`;
+  const shouldOpen = hasCommandFlag(args, '--open');
+  const serverUrl = DEFAULT_SERVER_URL;
+  const url = getDashboardUrl(site);
+  const connected = site.conversationId
+    ? await getDashboardConnectionStatus(site, serverUrl)
+    : null;
   if (cliOptions.json) {
-    emitJson({ url, activeSite: getActiveSiteSummary(creds) });
+    emitJson({ url, connected, activeSite: getActiveSiteSummary(creds) });
     return;
-  } else {
-    console.log(url);
   }
-  openUrl(url);
+  console.log(url);
+  if (connected !== null) {
+    console.log(`WebSocket: ${connected ? 'connected' : 'not connected'}`);
+  }
+  if (shouldOpen) openUrl(url);
 }
 
 async function cmdBalance() {
@@ -1826,7 +1907,7 @@ async function cmdBuildTheme() {
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
-  const dashboardUrl = `${site.dashboardUrl}?agent=true`;
+  const dashboardUrl = getDashboardUrl(site);
 
   // Check if Playground is already connected (opened during select-design-direction)
   let connected = false;
@@ -1838,13 +1919,11 @@ async function cmdBuildTheme() {
   connected = status.connected;
 
   if (!connected) {
-    // Fallback: open browser and wait for connection
-    console.log(`Opening dashboard: ${dashboardUrl}`);
-    openUrl(dashboardUrl);
+    console.log(`Dashboard: ${dashboardUrl}`);
 
     console.log('Waiting for WordPress Playground to connect...');
     const wsStart = Date.now();
-    while (Date.now() - wsStart < 60000) {
+    while (Date.now() - wsStart < PLAYGROUND_CONNECT_TIMEOUT_MS) {
       await new Promise((r) => setTimeout(r, 2000));
       const currentStatus = await apiRequest(
         'GET',
@@ -1862,10 +1941,7 @@ async function cmdBuildTheme() {
     }
 
     if (!connected) {
-      console.error(
-        'Timed out waiting for Playground connection. Make sure the dashboard is open in a browser.',
-      );
-      process.exit(1);
+      exitWithDashboardConnectionRequired(site, PLAYGROUND_CONNECT_TIMEOUT_MS);
     }
     console.log('Playground connected.');
   }
@@ -1878,8 +1954,7 @@ async function cmdBuildTheme() {
     { auth: site.siteToken, serverUrl },
   );
 
-  // Wait for completion — doWait includes a connection watchdog that
-  // auto-reopens the browser if the Playground connection drops.
+  // Wait for completion after the agent has established the dashboard session.
   await doWait(creds, site.conversationId, serverUrl);
   console.log('To edit this site, run: miles reply "describe your changes"');
 }
@@ -2041,7 +2116,7 @@ if (!command || command === 'help' || command === '--help') {
 
 Authentication:
   miles doctor                      Check local CLI setup
-  miles login                       Device auth flow (opens browser)
+  miles login [--open]              Device auth flow
   miles logout                      Clear stored credentials
   miles whoami                      Show current auth + active site
 
@@ -2050,7 +2125,7 @@ Site Management:
   miles create-site --brief <file>  Create with pre-built brief (skip discovery)
   miles sites                       List all sites
   miles use <siteId>                Switch active site
-  miles preview                     Get/open dashboard URL
+  miles preview [--open]            Get dashboard URL
   miles balance                     Show credit balance
 
 Conversation:
@@ -2061,7 +2136,7 @@ Conversation:
   miles status                      Quick status check (non-blocking)
   miles design-directions           Get design direction preview URLs
   miles select-design-direction <n> Choose a design direction
-  miles build-theme                 Build WordPress theme (opens browser, waits, converts)
+  miles build-theme                 Build WordPress theme (waits, converts)
   miles screenshot <preview-url>    Screenshot a preview URL (saves JPEG, prints path)
   miles messages                    Full conversation history
 

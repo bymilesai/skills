@@ -179,6 +179,29 @@ try {
     'login rate limit message should degrade cleanly without retry timing',
   );
 
+  const helpResult = run(['help']);
+  assert(helpResult.status === 0, 'help should exit cleanly');
+  assertIncludes(
+    helpResult.stdout,
+    'miles login [--open]',
+    'help should document host-controlled login opening',
+  );
+  assertIncludes(
+    helpResult.stdout,
+    'miles preview [--open]',
+    'help should document host-controlled preview opening',
+  );
+  assertIncludes(
+    helpResult.stdout,
+    'miles select-design-direction <n> Choose a design direction',
+    'help should document design selection without browser side effects',
+  );
+  assertIncludes(
+    helpResult.stdout,
+    'miles build-theme                 Build WordPress theme',
+    'help should document theme conversion without browser side effects',
+  );
+
   const doctorHome = makeTempDir();
   const { result: doctorResult, json: doctor } = runJson(['doctor', '--json'], {
     milesHome: doctorHome,

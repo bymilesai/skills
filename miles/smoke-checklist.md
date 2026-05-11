@@ -46,15 +46,18 @@ export MILES_CLI=/path/to/installed/miles/scripts/miles
    "$MILES_CLI" reply "user answer"
    ```
 
-4. When Miles presents a brief, show it to the user and require explicit approval or requested changes.
+4. When Miles presents a brief, show it to the user and require explicit approval or requested changes. Before sending an approval reply that starts design-direction generation, open the dashboard URL and wait for the WebSocket to connect.
 
-5. After brief approval starts design-direction generation, open the active dashboard progress URL in the agent browser.
+5. Open the active dashboard progress URL in the agent browser.
 
    ```bash
    "$MILES_CLI" preview --json
+   # Open the returned url with the host's browser/navigation tool.
+   # Rerun preview --json until connected is true.
+   "$MILES_CLI" reply "Looks good, approved"
    ```
 
-   Open the returned `url` with the host's browser/navigation tool. If no internal browser is available, run `"$MILES_CLI" preview`.
+   If no internal browser is available, run `"$MILES_CLI" preview --open`.
 
 6. When design directions are ready, inspect them before selection.
 
@@ -66,6 +69,9 @@ export MILES_CLI=/path/to/installed/miles/scripts/miles
 7. Select the approved design direction.
 
    ```bash
+   "$MILES_CLI" preview --json
+   # Open the returned url with the host's browser/navigation tool.
+   # Rerun preview --json until connected is true.
    "$MILES_CLI" select-design-direction 1
    "$MILES_CLI" status --json
    ```
@@ -73,6 +79,9 @@ export MILES_CLI=/path/to/installed/miles/scripts/miles
 8. Verify the built site and request one multi-page or content update.
 
    ```bash
+   "$MILES_CLI" preview --json
+   # Open the returned url with the host's browser/navigation tool.
+   # Rerun preview --json until connected is true.
    "$MILES_CLI" screenshot "<site-preview-url-or-path>" --json
    "$MILES_CLI" reply "Add an About page and keep the visual style consistent."
    "$MILES_CLI" wait
@@ -83,6 +92,9 @@ export MILES_CLI=/path/to/installed/miles/scripts/miles
 
    ```bash
    "$MILES_CLI" export-site --json
+   "$MILES_CLI" preview --json
+   # Open the returned url with the host's browser/navigation tool.
+   # Rerun preview --json until connected is true.
    "$MILES_CLI" build-theme
    "$MILES_CLI" export-theme --json
    ```

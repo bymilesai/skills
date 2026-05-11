@@ -7,8 +7,8 @@ Checks the local CLI runtime, skill path, `MILES_HOME`, credentials file, hook r
 
 Use this first when validating an install or when an agent cannot find the Miles CLI.
 
-### `miles login`
-Opens browser for device auth. Gets an API key stored in `$MILES_HOME/credentials.json`.
+### `miles login [--open]`
+Starts device auth and prints the login URL and code. Gets an API key stored in `$MILES_HOME/credentials.json`. Use `--open` only when you explicitly want the CLI to launch the OS browser.
 Default server: `https://api.bymiles.ai`
 
 By default, `MILES_HOME` is `~/.miles`. Set `MILES_HOME=/path/to/isolated/state` for clean-machine smoke tests or separate agent environments.
@@ -36,10 +36,10 @@ Supports `--json`.
 Switches the active site for subsequent commands.
 Supports `--json`.
 
-### `miles preview`
-Gets and opens the dashboard URL for the active site. Appends `?agent=true` to hide the conversation panel.
-Supports `--json`. In JSON mode, returns the URL without opening an external browser so agents can use an internal browser tool first.
-When design direction generation starts, agents should run `miles preview --json` and open the returned `url` in the host's internal browser/navigation tool so the user can watch progress.
+### `miles preview [--open]`
+Gets the dashboard URL for the active site. Appends `?agent=true` to hide the conversation panel.
+Supports `--json`. JSON output includes `url`, `connected`, and `activeSite` so agents can open the URL with a host browser tool and verify the dashboard WebSocket connection. Use `--open` only when you explicitly want the CLI to launch the OS browser.
+When design direction generation starts, agents should run `miles preview --json`, open the returned `url`, and rerun `miles preview --json` until `connected` is true.
 
 ### `miles balance`
 Shows remaining credits. Provides billing URL if credits are low.
@@ -50,6 +50,7 @@ Supports `--json`.
 ### `miles reply "<message>"`
 Sends a message to Miles and auto-waits for the response.
 Use this to answer Miles' questions during discovery, approve the brief, or give feedback.
+After a site is generated, browser-backed edits require the dashboard WebSocket connection. Open the dashboard with `miles preview --json` before sending edit requests; the CLI will stop with a clear error if an edit needs the dashboard and it is not connected.
 
 For text that contains shell-sensitive characters such as `$`, backticks, quotes, or multiline Markdown, prefer:
 
@@ -76,7 +77,11 @@ Supports `--json`.
 
 ### `miles select-design-direction <number>`
 Selects a design direction by number (1, 2, or 3). Triggers Miles to build the full site.
-Auto-waits for the build to start.
+Requires the dashboard WebSocket connection before starting the build. Run `miles preview --json`, open the returned URL with the host browser tool, and rerun `miles preview --json` until `connected` is true before selecting.
+
+### `miles build-theme`
+Converts the completed HTML site into a WordPress block theme.
+Requires the dashboard WebSocket connection before conversion. Run `miles preview --json`, open the returned URL with the host browser tool, and rerun `miles preview --json` until `connected` is true before building.
 
 ### `miles screenshot <preview-url>`
 Captures a preview URL to a JPEG under `$MILES_HOME/screenshots` and prints the file path.

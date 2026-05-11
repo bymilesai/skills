@@ -23,16 +23,20 @@ miles reply "Serenity Flow Yoga in Portland, Oregon"
 # Miles asks more questions about services, style...
 miles reply "We offer hot yoga, vinyasa, and meditation classes. Modern minimalist style."
 # Miles creates a brief and asks for approval
-miles reply "Looks great, approved!"
-# Miles starts generating design directions.
-# Open the active dashboard progress URL in the agent browser:
 miles preview --json
+# Open the active dashboard progress URL in the agent browser.
+# Rerun preview --json until connected is true, then approve:
+miles reply "Looks great, approved!"
+# Miles starts generating design directions with the dashboard visible.
 # Miles generates design directions (streams progress, returns when done)
 miles design-directions
 # → Show preview URLs to user, let them pick
+miles preview --json
+# Open the returned url in the agent browser.
+# Rerun preview --json until connected is true, then:
 miles select-design-direction 2
 # Miles builds the site (streams progress, returns when done)
-miles preview
+miles preview --json
 ```
 
 ## Verify a Design Direction
@@ -64,6 +68,9 @@ miles create-site --brief ./client-brief.md "Build site for Portland yoga studio
 miles design-directions
 # → Push direction URLs to Notion/Slack for client review
 # Client picks design 1
+miles preview --json
+# Open the returned url in the agent browser.
+# Rerun preview --json until connected is true, then:
 miles select-design-direction 1
 # Miles builds the site (streams progress, returns when done)
 miles export-theme
@@ -77,11 +84,17 @@ When you want Miles to make all decisions:
 miles create-site "Build a modern website for Acme Corp, a B2B SaaS company that sells project management software. Use blue and white colors, professional tone, include pricing page."
 # The more detail you provide, the fewer questions Miles asks
 # Answer any remaining questions Miles has
+miles preview --json
+# Open the returned url in the agent browser.
+# Rerun preview --json until connected is true, then approve:
 miles reply "Yes, that brief looks perfect"
 # Miles generates directions, then:
+miles preview --json
+# Keep the returned url open in the agent browser.
+# Rerun preview --json until connected is true, then:
 miles select-design-direction 1
 # Miles builds the site (streams progress, returns when done)
-miles preview
+miles preview --json
 ```
 
 ## Checking Progress

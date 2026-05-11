@@ -26,7 +26,7 @@ This is the complete set of commands. Do not invent others.
 |---------|---------|
 | `miles doctor` | Check local CLI setup and paths |
 | `miles whoami` | Check authentication status |
-| `miles login` | Authenticate (production) |
+| `miles login [--open]` | Authenticate (production) |
 | `miles create-site "<description>" [--brief file]` | Create site, start conversation, wait for response |
 | `miles reply "<message>"` | Send a message to Miles, wait for response |
 | `miles reply --file <path>` | Send reply text from a file; best for prices, quotes, Markdown, or long answers |
@@ -36,7 +36,7 @@ This is the complete set of commands. Do not invent others.
 | `miles design-directions` | Re-list design direction preview URLs |
 | `miles select-design-direction <N>` | Pick a design, triggers site build, waits for completion |
 | `miles screenshot <url>` | Screenshot a preview URL (saves JPEG, prints path) |
-| `miles preview` | Open active dashboard in browser |
+| `miles preview [--open]` | Get the active dashboard URL |
 | `miles sites` | List all sites |
 | `miles balance` | Check credits |
 | `miles messages` | Full conversation history |
@@ -60,7 +60,7 @@ Set the Bash timeout to 10 minutes (600000ms) for all miles commands — site bu
 
 ## Opening the Active Dashboard
 
-During long visual phases, keep the active Miles dashboard visible so the user can see progress. Prefer the host agent's internal browser when one is available; otherwise use the CLI's external browser fallback.
+During long visual phases, keep the active Miles dashboard visible so the user can see progress. Prefer the host agent's internal browser when one is available. In Codex, this means reading and using the Browser skill, which controls the in-app browser through `node_repl`; do not require a direct browser tool namespace. Only use the CLI's external browser fallback after that path has been attempted or is unavailable.
 
 Mandatory checkpoint: when Miles enters `phase: generating_design_directions`, do not just tell the user you are waiting. Immediately get the active progress URL and open that exact URL in a browser view.
 
@@ -70,13 +70,29 @@ To get the URL without launching the OS browser:
 "$MILES_CLI" preview --json
 ```
 
-Open the returned `url` with the host's browser/navigation tool. Use the exact URL from JSON; it should include `?agent=true`. If no internal browser tool is available, run:
+Open the returned `url` with the host's browser/navigation tool. Use the exact URL from JSON; it should include `?agent=true`. The JSON response also reports whether the dashboard WebSocket is `connected`; after opening the URL, rerun `preview --json` until `connected` is true before starting browser-backed work. If no internal browser tool is available, use the explicit external-browser fallback:
 
 ```bash
-"$MILES_CLI" preview
+"$MILES_CLI" preview --open
 ```
 
-If both browser paths fail, tell the user the dashboard could not be opened and include the URL from `preview --json`. Do this once after the brief is approved and design direction generation starts, and again before long build or conversion work if the dashboard is not already visible. Do not keep reopening the browser unless the user asks or the connection is lost.
+The CLI does not launch dashboard windows from action commands. If the dashboard cannot be opened or the WebSocket does not connect, tell the user and include the URL from `preview --json`. Do this before design-direction generation, design selection, theme conversion, and any edits after `[site_ready: true]`.
+
+### Codex In-App Browser Requirement
+
+When running in Codex and the Browser plugin is available, you must use the Browser skill to open the Miles dashboard in the Codex in-app browser.
+
+Do not decide Browser is unavailable just because there is no direct browser tool namespace. In Codex, Browser is controlled through the `node_repl` JavaScript tool after reading the Browser skill. Follow that skill's bootstrap, then:
+
+1. Run `"$MILES_CLI" preview --json` to get the active dashboard URL.
+2. Use the Browser skill / Node REPL path to select the `iab` browser.
+3. Name the browser session for the site.
+4. Open the returned `url` in a tab.
+5. Set the browser `visibility` capability to `true` so the user can see progress.
+6. Rerun `"$MILES_CLI" preview --json` until `connected` is true.
+7. Continue the Miles wait, design-generation, design-selection, edit, or theme-conversion flow.
+
+Only fall back to `"$MILES_CLI" preview --open` or printing the dashboard URL if the Browser plugin is not listed, the Browser skill file cannot be read, `node_repl` JavaScript execution is not available after tool discovery, or the Browser bootstrap fails.
 
 ## Step 1: Authenticate
 
@@ -90,7 +106,7 @@ If not logged in:
 "$MILES_CLI" login
 ```
 
-This opens a browser URL for approval. Tell the user to approve in their browser.
+This prints a browser URL and code for approval. Open the URL in the host browser surface when available. If no host browser surface is available, run `"$MILES_CLI" login --open` to launch the OS browser.
 
 ## Step 2: Create a Site
 
@@ -201,9 +217,9 @@ User prompt: "Build a website for my yoga studio"
 5. Run: `"$MILES_CLI" reply "Breathe Portland Yoga"`
 6. Miles responds with next question → repeat relay
 7. Miles presents brief (phase: brief_review) → show brief to user, ask approval
-8. User approves → `"$MILES_CLI" reply "Looks good, approved"`
-9. Miles generates design directions → present to user for selection
-10. User picks design 2 → `"$MILES_CLI" select-design-direction 2`
+8. User approves → open the dashboard with `"$MILES_CLI" preview --json`, wait for `connected: true`, then run `"$MILES_CLI" reply "Looks good, approved"`
+9. Miles generates design directions with the dashboard visible → present to user for selection
+10. User picks design 2 → ensure `"$MILES_CLI" preview --json` shows `connected: true`, then run `"$MILES_CLI" select-design-direction 2`
 11. Miles builds the site → `[site_ready: true]`
 </example>
 
@@ -242,7 +258,7 @@ Self-check before sending: if the response does not include the actual brief con
 
 When Miles finishes generating design directions (phase: `design_directions_ready`), the context includes preview URLs for each design.
 
-Before design-direction generation begins, tell the user it can take several minutes. As soon as the approval/reply command moves Miles into `phase: generating_design_directions`, run `"$MILES_CLI" preview --json` and open the returned `url` with the host's internal browser/navigation tool. This is required even if Miles has not returned design preview URLs yet; the dashboard URL shows generation progress while the user waits. If the internal browser is unavailable, run `"$MILES_CLI" preview` as the external-browser fallback. During generation, send progress updates only for meaningful milestones: generation started, first design complete, halfway complete, all directions complete, or no visible progress for more than 90 seconds. Avoid repeated "still waiting" updates unless there is new information or a long silence.
+Before design-direction generation begins, tell the user it can take several minutes. Before you send the approval reply that starts generation, run `"$MILES_CLI" preview --json`, open the returned `url` with the host's internal browser/navigation tool, and rerun `preview --json` until `connected` is true. Then send the approval reply, for example `"$MILES_CLI" reply "Looks good, approved"`. This is required even if Miles has not returned design preview URLs yet; the dashboard URL shows generation progress while the user waits. If the internal browser is unavailable, run `"$MILES_CLI" preview --open` as the explicit external-browser fallback. During generation, send progress updates only for meaningful milestones: generation started, first design complete, halfway complete, all directions complete, or no visible progress for more than 90 seconds. Avoid repeated "still waiting" updates unless there is new information or a long silence.
 
 Visually inspect each design before presenting it to the user. Only say you visually inspected a design if a browser preview or screenshot actually loaded. If a preview URL uses `localhost`, do not assume it is reachable from the current environment; try it only when a browser or local request tool is available, then use `miles screenshot` as the fallback.
 
@@ -272,6 +288,9 @@ If none fit, ask Miles for new directions with feedback:
 Ask the user which design they prefer using the same native-or-Markdown-card rule from Step 3. Then select it — this command triggers the full site build and waits for completion:
 
 ```bash
+"$MILES_CLI" preview --json
+# Open the returned url with the host's internal browser/navigation tool.
+# Rerun preview --json until connected is true.
 "$MILES_CLI" select-design-direction <number>
 ```
 
@@ -282,17 +301,21 @@ The select command already waits for the build, so there's no need to run `miles
 When `select-design-direction` finishes (indicated by `[site_ready: true]`), Miles has built a complete static HTML website. This is the first deliverable.
 
 ```bash
-"$MILES_CLI" preview              # Open live preview in browser
+"$MILES_CLI" preview --json       # Get live preview URL for the host browser
 "$MILES_CLI" screenshot <url>     # Screenshot a preview URL
 "$MILES_CLI" export-site          # Get static HTML download URL and file info
 ```
+
+Before requesting edits to a generated site, make sure the dashboard is open and `preview --json` reports `connected: true`. Miles needs the open dashboard WebSocket session for browser-backed edits after the site is generated.
 
 ## Step 6: WordPress Theme (Separate Step)
 
 Converting the HTML site into a WordPress block theme is a separate operation from the site build.
 
 ```bash
-"$MILES_CLI" build-theme          # Triggers theme conversion
+"$MILES_CLI" preview --json       # Open returned url in the host browser first
+# Rerun preview --json until connected is true.
+"$MILES_CLI" build-theme
 "$MILES_CLI" export-theme         # Get WordPress theme download URL
 ```
 

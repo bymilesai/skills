@@ -38,7 +38,7 @@ Supports `--json`.
 
 ### `miles preview`
 Gets and opens the dashboard URL for the active site. Appends `?agent=true` to hide the conversation panel.
-Supports `--json`.
+Supports `--json`. In JSON mode, returns the URL without opening an external browser so agents can use an internal browser tool first.
 
 ### `miles balance`
 Shows remaining credits. Provides billing URL if credits are low.

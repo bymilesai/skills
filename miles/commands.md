@@ -39,8 +39,8 @@ Supports `--json`.
 
 ### `miles preview [--open]`
 Gets the dashboard URL for the active site. Appends `?agent=true` to hide the conversation panel.
-Supports `--json`. JSON output includes `url`, `dashboardUrl`, `authenticated`, `connected`, and `activeSite` so agents can open the URL with a host browser tool and verify the dashboard WebSocket connection. When `authenticated` is true, `url` logs that browser into a normal dashboard session before redirecting to `dashboardUrl`. Use `--open` only when you explicitly want the CLI to launch the OS browser.
-When design direction generation starts, agents should run `miles preview --json`, open the returned `url`, and rerun `miles preview --json` until `connected` is true.
+Supports `--json`. JSON output includes `url`, `dashboardUrl`, `authenticated`, `connected`, and `activeSite` so agents can open the URL with a host browser tool and verify the dashboard WebSocket connection. When `authenticated` is true, `url` is the authenticated browser handoff that logs that browser into a normal dashboard session before redirecting to `dashboardUrl`. Do not replace it with `dashboardUrl`; a fresh browser may otherwise hit the login page. Use `--open` only when you explicitly want the CLI to launch the OS browser.
+When design direction generation starts, agents should run `miles preview --json`, open the returned authenticated `url`, and rerun `miles preview --json` until `connected` is true. If a host browser rejects the authenticated handoff because of browser security policy, do not work around that by opening `dashboardUrl`; use an approved external browser fallback or continue CLI-only.
 
 ### `miles balance`
 Shows remaining credits. Provides billing URL if credits are low.
@@ -78,11 +78,11 @@ Supports `--json`.
 
 ### `miles select-design-direction <number>`
 Selects a design direction by number (1, 2, or 3). Triggers Miles to build the full site.
-Requires the dashboard WebSocket connection before starting the build. Run `miles preview --json`, open the returned URL with the host browser tool, and rerun `miles preview --json` until `connected` is true before selecting.
+Requires the dashboard WebSocket connection before starting the build. Run `miles preview --json`, open the returned authenticated URL with the host browser tool, and rerun `miles preview --json` until `connected` is true before selecting.
 
 ### `miles build-theme`
 Converts the completed HTML site into a WordPress block theme.
-Requires the dashboard WebSocket connection before conversion. Run `miles preview --json`, open the returned URL with the host browser tool, and rerun `miles preview --json` until `connected` is true before building.
+Requires the dashboard WebSocket connection before conversion. Run `miles preview --json`, open the returned authenticated URL with the host browser tool, and rerun `miles preview --json` until `connected` is true before building.
 
 ### `miles screenshot <preview-url>`
 Captures a preview URL to a JPEG under `$MILES_HOME/screenshots` and prints the file path.

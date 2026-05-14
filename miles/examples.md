@@ -32,7 +32,7 @@ miles reply "Looks great, approved!"
 miles design-directions
 # → Show preview URLs to user, let them pick
 miles preview --json
-# Open the returned url in the agent browser.
+# Open the returned authenticated url in the agent browser.
 # Rerun preview --json until connected is true, then:
 miles select-design-direction 2
 # Miles builds the site (streams progress, returns when done)
@@ -69,7 +69,7 @@ miles design-directions
 # → Push direction URLs to Notion/Slack for client review
 # Client picks design 1
 miles preview --json
-# Open the returned url in the agent browser.
+# Open the returned authenticated url in the agent browser.
 # Rerun preview --json until connected is true, then:
 miles select-design-direction 1
 # Miles builds the site (streams progress, returns when done)
@@ -85,12 +85,12 @@ miles create-site "Build a modern website for Acme Corp, a B2B SaaS company that
 # The more detail you provide, the fewer questions Miles asks
 # Answer any remaining questions Miles has
 miles preview --json
-# Open the returned url in the agent browser.
+# Open the returned authenticated url in the agent browser.
 # Rerun preview --json until connected is true, then approve:
 miles reply "Yes, that brief looks perfect"
 # Miles generates directions, then:
 miles preview --json
-# Keep the returned url open in the agent browser.
+# Keep the returned authenticated url open in the agent browser.
 # Rerun preview --json until connected is true, then:
 miles select-design-direction 1
 # Miles builds the site (streams progress, returns when done)

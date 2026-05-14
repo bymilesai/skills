@@ -59,7 +59,6 @@ const POLL_TIMEOUT_MS = 10000; // 10 second poll for faster progress updates
 const ERROR_BODY_MAX_CHARS = 2048;
 const DASHBOARD_CONNECT_TIMEOUT_MS = 30000;
 const PLAYGROUND_CONNECT_TIMEOUT_MS = 60000;
-const HEADLESS_AUTH_EXCHANGE_PATH = '/api/v2/headless/auth/exchange';
 const JSON_COMMANDS = new Set([
   'doctor',
   'logout',
@@ -173,35 +172,6 @@ function getDashboardRedirectPath(dashboardUrl) {
   return `${parsed.pathname}${parsed.search}`;
 }
 
-function isLocalHostname(hostname) {
-  return (
-    hostname === 'localhost' ||
-    hostname === '127.0.0.1' ||
-    hostname === '[::1]' ||
-    hostname.endsWith('.localhost')
-  );
-}
-
-function normalizeAuthenticatedDashboardUrl(url, serverUrl) {
-  try {
-    const parsedUrl = new URL(url);
-    const parsedServerUrl = new URL(serverUrl);
-    if (
-      parsedUrl.pathname !== HEADLESS_AUTH_EXCHANGE_PATH ||
-      parsedUrl.origin === parsedServerUrl.origin ||
-      isLocalHostname(parsedServerUrl.hostname)
-    ) {
-      return url;
-    }
-
-    parsedUrl.protocol = parsedServerUrl.protocol;
-    parsedUrl.host = parsedServerUrl.host;
-    return parsedUrl.toString();
-  } catch {
-    return url;
-  }
-}
-
 async function getAuthenticatedDashboardUrl(apiKey, serverUrl, dashboardUrl) {
   if (!apiKey) return null;
   try {
@@ -214,9 +184,7 @@ async function getAuthenticatedDashboardUrl(apiKey, serverUrl, dashboardUrl) {
         serverUrl,
       },
     );
-    return typeof data.url === 'string' && data.url
-      ? normalizeAuthenticatedDashboardUrl(data.url, serverUrl)
-      : null;
+    return typeof data.url === 'string' && data.url ? data.url : null;
   } catch {
     return null;
   }
@@ -292,7 +260,7 @@ async function requireDashboardConnectionForEdit(site, serverUrl) {
 
 function exitWithDashboardConnectionRequired(site, timeoutMs) {
   exitWithError(
-    `Dashboard did not connect within ${timeoutMs / 1000}s. Run \`miles preview --json\`, open the returned url in your agent browser or regular browser, then retry.`,
+    `Dashboard did not connect within ${timeoutMs / 1000}s. Run \`miles preview --json\`, open the returned authenticated url in your agent browser or regular browser, then retry.`,
   );
 }
 

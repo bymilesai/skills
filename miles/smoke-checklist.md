@@ -52,7 +52,7 @@ export MILES_CLI=/path/to/installed/miles/scripts/miles
 
    ```bash
    "$MILES_CLI" preview --json
-   # Open the returned url with the host's browser/navigation tool.
+   # Open the returned authenticated url with the host's browser/navigation tool.
    # Rerun preview --json until connected is true.
    "$MILES_CLI" reply "Looks good, approved"
    ```
@@ -70,7 +70,7 @@ export MILES_CLI=/path/to/installed/miles/scripts/miles
 
    ```bash
    "$MILES_CLI" preview --json
-   # Open the returned url with the host's browser/navigation tool.
+   # Open the returned authenticated url with the host's browser/navigation tool.
    # Rerun preview --json until connected is true.
    "$MILES_CLI" select-design-direction 1
    "$MILES_CLI" status --json
@@ -80,7 +80,7 @@ export MILES_CLI=/path/to/installed/miles/scripts/miles
 
    ```bash
    "$MILES_CLI" preview --json
-   # Open the returned url with the host's browser/navigation tool.
+   # Open the returned authenticated url with the host's browser/navigation tool.
    # Rerun preview --json until connected is true.
    "$MILES_CLI" screenshot "<site-preview-url-or-path>" --json
    "$MILES_CLI" reply "Add an About page and keep the visual style consistent."
@@ -93,7 +93,7 @@ export MILES_CLI=/path/to/installed/miles/scripts/miles
    ```bash
    "$MILES_CLI" export-site --json
    "$MILES_CLI" preview --json
-   # Open the returned url with the host's browser/navigation tool.
+   # Open the returned authenticated url with the host's browser/navigation tool.
    # Rerun preview --json until connected is true.
    "$MILES_CLI" build-theme
    "$MILES_CLI" export-theme --json

@@ -40,7 +40,7 @@ export MILES_CLI=/path/to/installed/miles/scripts/miles
    "$MILES_CLI" create-site "Build a small website for a local service business."
    ```
 
-   During long commands, verify the agent gives one short start message, then either uses host-rendered progress or sends only sparse long-silence updates based on meaningful Miles milestones. It should not turn streamed output into a chat transcript.
+   During long commands, verify the agent gives one short start message, then either uses host-rendered progress or sends only sparse updates based on meaningful Miles milestones. Active edits should show useful progress every 30-45 seconds when no live progress UI exists; long generation/build phases can be quieter. It should not turn streamed output into a chat transcript.
 
 3. Relay Miles' questions to the user. Send the user's exact answers back with:
 
@@ -90,6 +90,8 @@ export MILES_CLI=/path/to/installed/miles/scripts/miles
    "$MILES_CLI" wait
    "$MILES_CLI" status --json
    ```
+
+   For a second small edit immediately afterward, verify the agent sends the edit directly instead of running another redundant `preview --json`. If the CLI returns `dashboard_connection_required`, verify the agent opens `preview --json`, waits for `connected: true`, and retries the same edit once.
 
 9. Export the result when needed.
 

@@ -64,10 +64,10 @@ Miles can stream many useful milestones while it works, but in Codex agent mode 
 
 1. Send one short start message before a long Miles operation, explaining what Miles is doing and what you will verify afterward.
 2. Prefer host-rendered progress when available, such as a single updating activity block or chip fed by the latest meaningful Miles milestone.
-3. If no visible progress surface exists, or if there is no visible progress for 60-90 seconds, send one sparse chat update using the latest meaningful Miles output. Do not post every log line.
+3. If no visible progress surface exists, send sparse chat updates using the latest meaningful Miles output: every 30-45 seconds during active edits, or every 60-90 seconds during longer generation/build phases when there is no new visible progress. Do not post every log line.
 4. Send one short completion message that says what changed and what was verified.
 
-Use Miles output as signal, not transcript. Surface milestones such as inspecting layout, applying a change, verifying desktop/mobile, saving, or design directions becoming ready. Keep raw logs in tool output or expandable details when the host supports that.
+Use Miles output as signal, not transcript. Surface milestones such as locating a section, inspecting layout/CSS, applying a change, verifying desktop/mobile, saving, or design directions becoming ready. Keep raw logs in tool output or expandable details when the host supports that.
 
 ## Opening the Active Dashboard
 
@@ -87,7 +87,7 @@ Open the returned `url` with the host's browser/navigation tool. Use the exact U
 "$MILES_CLI" preview --open
 ```
 
-The CLI does not launch dashboard windows from action commands. If the host browser rejects the authenticated handoff URL because of browser security policy, treat that as a hard stop for in-app dashboard opening. Do not try to get the same result by opening `dashboardUrl`, using raw browser protocols, or switching to another browser surface. Tell the user the in-app dashboard could not be opened by policy and use `"$MILES_CLI" preview --open` only when an external browser fallback is acceptable. Do this before design-direction generation, design selection, theme conversion, and any edits after `[site_ready: true]`.
+The CLI does not launch dashboard windows from action commands. If the host browser rejects the authenticated handoff URL because of browser security policy, treat that as a hard stop for in-app dashboard opening. Do not try to get the same result by opening `dashboardUrl`, using raw browser protocols, or switching to another browser surface. Tell the user the in-app dashboard could not be opened by policy and use `"$MILES_CLI" preview --open` only when an external browser fallback is acceptable. Do this before design-direction generation, design selection, and theme conversion. For normal edit replies, let the CLI connection guard below decide whether reconnecting is needed.
 
 ### Codex In-App Browser Requirement
 
@@ -106,6 +106,16 @@ Do not decide Browser is unavailable just because there is no direct browser too
 If Codex rejects the authenticated handoff URL due to browser security policy, do not retry with `dashboardUrl` as a workaround. That URL is intentionally unauthenticated. Stop the in-app browser setup, explain the policy denial, and use `"$MILES_CLI" preview --open` only when opening the external browser is acceptable. Otherwise continue CLI-only and explain that browser-backed work may wait for a dashboard connection.
 
 Only fall back to `"$MILES_CLI" preview --open` or printing the dashboard URL if the Browser plugin is not listed, the Browser skill file cannot be read, `node_repl` JavaScript execution is not available after tool discovery, the Browser bootstrap fails, or the Browser policy denies the authenticated handoff.
+
+### Connection Reuse for Edits
+
+Miles browser-backed edits need the dashboard WebSocket, but the CLI checks this internally for edit replies.
+
+Do not run `preview --json` before every `miles reply` edit. For small follow-up edits, send the edit directly. If the dashboard is not connected when the edit requires browser backing, the CLI fails immediately with `dashboard_connection_required`; then run `"$MILES_CLI" preview --json`, open the returned authenticated URL, wait for `connected: true`, and retry the same edit once.
+
+Open or re-check the dashboard proactively when the browser tab changed, the user navigated away, the browser was interrupted, several minutes passed, Miles reports `dashboard_connection_required`, a prior edit failed or hung, or the operation is high-stakes such as design selection, theme conversion, export setup, or the first edit after a long pause.
+
+For straightforward visual edits, proceed with a focused Miles edit request. Inspect enough to identify the target, apply the change, then verify desktop and mobile behavior; do not add a long preflight unless the target is ambiguous, the first attempt fails, or the edit requires structural understanding.
 
 ## Step 1: Authenticate
 
@@ -336,7 +346,7 @@ When `select-design-direction` finishes (indicated by `[site_ready: true]`), Mil
 "$MILES_CLI" export-site          # Get static HTML download URL and file info
 ```
 
-Before requesting edits to a generated site, make sure the dashboard is open and `preview --json` reports `connected: true`. Miles needs the open dashboard WebSocket session for browser-backed edits after the site is generated.
+For generated-site edits, send straightforward `miles reply` requests directly when the dashboard was recently opened or appears visibly connected. The CLI checks whether the edit needs the dashboard WebSocket and fails immediately with `dashboard_connection_required` when the browser is not connected. On that error, run `"$MILES_CLI" preview --json`, open the returned authenticated URL, wait for `connected: true`, then retry the same edit once.
 
 ## Step 6: WordPress Theme (Separate Step)
 

@@ -55,6 +55,8 @@ After a site exists, request additional pages or multi-page edits through Miles 
 
 ```bash
 miles reply "Add About and Services pages that match the current design direction."
+# If this fails with dashboard_connection_required, run miles preview --json,
+# open the authenticated URL, wait for connected: true, then retry once.
 miles wait
 miles status --json
 miles screenshot /preview/site-id/index.html --json

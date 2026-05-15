@@ -245,22 +245,25 @@ async function requireDashboardConnectionForEdit(site, serverUrl) {
     data.siteReady || browserBackedPhases.has(data.phase || '');
   if (!needsBrowser) return;
 
-  const dashboardUrl = getDashboardUrl(site);
-  console.log(`Dashboard: ${dashboardUrl}`);
-  console.log('Waiting for dashboard connection before editing...');
-  const connected = await waitForDashboardConnection(
-    site,
-    serverUrl,
-    DASHBOARD_CONNECT_TIMEOUT_MS,
-  );
+  const connected = await getDashboardConnectionStatus(site, serverUrl);
   if (!connected) {
-    exitWithDashboardConnectionRequired(site, DASHBOARD_CONNECT_TIMEOUT_MS);
+    exitWithDashboardConnectionRequired(site);
   }
 }
 
-function exitWithDashboardConnectionRequired(site, timeoutMs) {
+function exitWithDashboardConnectionRequired(site, timeoutMs = null) {
+  const dashboardUrl = getDashboardUrl(site);
+  const prefix =
+    timeoutMs === null
+      ? 'Dashboard connection required before this browser-backed operation.'
+      : `Dashboard did not connect within ${timeoutMs / 1000}s.`;
   exitWithError(
-    `Dashboard did not connect within ${timeoutMs / 1000}s. Run \`miles preview --json\`, open the returned authenticated url in your agent browser or regular browser, then retry.`,
+    `${prefix} Run \`miles preview --json\`, open the returned authenticated url in your agent browser or regular browser, then retry the same command.`,
+    1,
+    {
+      code: 'dashboard_connection_required',
+      dashboardUrl,
+    },
   );
 }
 

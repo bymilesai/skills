@@ -51,7 +51,7 @@ Supports `--json`.
 ### `miles reply "<message>"`
 Sends a message to Miles and auto-waits for the response.
 Use this to answer Miles' questions during discovery, approve the brief, or give feedback.
-After a site is generated, browser-backed edits require the dashboard WebSocket connection. Open the dashboard with `miles preview --json` before sending edit requests; the CLI will stop with a clear error if an edit needs the dashboard and it is not connected.
+After a site is generated, browser-backed edits require the dashboard WebSocket connection. Send `miles reply` directly for normal edits; when an edit needs the dashboard and it is not connected, the CLI fails immediately with `dashboard_connection_required`. Recover by running `miles preview --json`, opening the authenticated URL, waiting for `connected: true`, then retrying the same reply once.
 
 For text that contains shell-sensitive characters such as `$`, backticks, quotes, or multiline Markdown, prefer:
 
@@ -118,4 +118,6 @@ For agent composition, use `--json` with non-streaming inspection commands such 
 
 Long-running commands such as `create-site`, `reply`, `wait`, `select-design-direction`, and `build-theme` stream progress as text, print the final Miles response to stdout, and write the same response to the hook relay file in `MILES_HOME`.
 
-For Codex agent mode, treat streamed progress as milestone input for a compact visible status, not as chat transcript. Surface a short start message, sparse long-silence updates from the latest meaningful milestone, and a short completion summary.
+For Codex agent mode, treat streamed progress as milestone input for a compact visible status, not as chat transcript. Surface a short start message, sparse updates from the latest meaningful milestone during long operations, and a short completion summary.
+
+Browser-backed edits need the dashboard WebSocket, but agents do not need to pre-check before every `miles reply`. Let the CLI guard the operation. If it returns `dashboard_connection_required`, open the authenticated dashboard URL with `miles preview --json`, wait for `connected: true`, and retry once. Keep proactive checks for high-stakes operations such as design selection and theme conversion.

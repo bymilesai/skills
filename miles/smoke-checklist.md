@@ -40,6 +40,8 @@ export MILES_CLI=/path/to/installed/miles/scripts/miles
    "$MILES_CLI" create-site "Build a small website for a local service business."
    ```
 
+   During long commands, verify the agent gives one short start message, then either uses host-rendered progress or sends only sparse long-silence updates based on meaningful Miles milestones. It should not turn streamed output into a chat transcript.
+
 3. Relay Miles' questions to the user. Send the user's exact answers back with:
 
    ```bash

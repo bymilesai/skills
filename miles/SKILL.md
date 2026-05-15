@@ -58,6 +58,17 @@ Use `MILES_HOME=/path/to/isolated/state` when you need a clean test environment.
 
 Set the Bash timeout to 10 minutes (600000ms) for all miles commands — site building and theme conversion can take several minutes.
 
+## Codex Progress Visibility
+
+Miles can stream many useful milestones while it works, but in Codex agent mode the Miles dashboard chat may be hidden from the user. Keep the main Codex chat calm while still showing that Miles is alive:
+
+1. Send one short start message before a long Miles operation, explaining what Miles is doing and what you will verify afterward.
+2. Prefer host-rendered progress when available, such as a single updating activity block or chip fed by the latest meaningful Miles milestone.
+3. If no visible progress surface exists, or if there is no visible progress for 60-90 seconds, send one sparse chat update using the latest meaningful Miles output. Do not post every log line.
+4. Send one short completion message that says what changed and what was verified.
+
+Use Miles output as signal, not transcript. Surface milestones such as inspecting layout, applying a change, verifying desktop/mobile, saving, or design directions becoming ready. Keep raw logs in tool output or expandable details when the host supports that.
+
 ## Opening the Active Dashboard
 
 During long visual phases, keep the active Miles dashboard visible so the user can see progress. Prefer the host agent's internal browser when one is available. In Codex, this means reading and using the Browser skill, which controls the in-app browser through `node_repl`; do not require a direct browser tool namespace. Only use the CLI's external browser fallback after that path has been attempted or is unavailable.

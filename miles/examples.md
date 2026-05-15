@@ -95,7 +95,8 @@ miles preview --json
 # Keep the returned authenticated url open in the agent browser.
 # Rerun preview --json until connected is true, then:
 miles select-design-direction 1
-# Miles builds the site (streams progress, returns when done)
+# Miles builds the site. Surface only sparse meaningful progress in chat,
+# such as applying, verifying, saving, and completion milestones.
 miles preview --json
 ```
 
@@ -107,6 +108,8 @@ miles status
 # [phase: building]
 # Note: `create-site`, `reply`, and `select-design-direction` all stream
 # progress automatically. Use `miles wait` only if a command was interrupted.
+# In Codex, do not relay every progress line. Use the latest meaningful
+# milestone for a compact visible status or occasional long-silence update.
 ```
 
 ## Credit Management

@@ -117,3 +117,5 @@ The CLI outputs plain text optimized for LLM consumption. Status tags appear in 
 For agent composition, use `--json` with non-streaming inspection commands such as `doctor`, `whoami`, `status`, `sites`, `design-directions`, `screenshot`, `messages`, `export-site`, and `export-theme`.
 
 Long-running commands such as `create-site`, `reply`, `wait`, `select-design-direction`, and `build-theme` stream progress as text, print the final Miles response to stdout, and write the same response to the hook relay file in `MILES_HOME`.
+
+For Codex agent mode, treat streamed progress as milestone input for a compact visible status, not as chat transcript. Surface a short start message, sparse long-silence updates from the latest meaningful milestone, and a short completion summary.

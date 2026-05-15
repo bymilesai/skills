@@ -228,29 +228,6 @@ async function waitForDashboardConnection(
   return false;
 }
 
-async function requireDashboardConnectionForEdit(site, serverUrl) {
-  const data = await apiRequest(
-    'GET',
-    `/api/v2/headless/conversations/${site.conversationId}/status`,
-    { auth: site.siteToken, serverUrl },
-  );
-  const browserBackedPhases = new Set([
-    'site_preview',
-    'site_generation',
-    'building',
-    'converting',
-    'complete',
-  ]);
-  const needsBrowser =
-    data.siteReady || browserBackedPhases.has(data.phase || '');
-  if (!needsBrowser) return;
-
-  const connected = await getDashboardConnectionStatus(site, serverUrl);
-  if (!connected) {
-    exitWithDashboardConnectionRequired(site);
-  }
-}
-
 function exitWithDashboardConnectionRequired(site, timeoutMs = null) {
   const dashboardUrl = getDashboardUrl(site);
   const prefix =
@@ -858,19 +835,31 @@ async function cmdReply(args) {
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
-  await requireDashboardConnectionForEdit(site, serverUrl);
+  let response;
+  try {
+    response = await apiRequest(
+      'POST',
+      `/api/v2/headless/conversations/${site.conversationId}/message`,
+      {
+        auth: site.siteToken,
+        body: { message },
+        serverUrl,
+      },
+    );
+  } catch (err) {
+    if (
+      err instanceof ApiError &&
+      err.data?.code === 'dashboard_connection_required'
+    ) {
+      exitWithDashboardConnectionRequired(site);
+    }
+    throw err;
+  }
 
-  await apiRequest(
-    'POST',
-    `/api/v2/headless/conversations/${site.conversationId}/message`,
-    {
-      auth: site.siteToken,
-      body: { message },
-      serverUrl,
-    },
-  );
-
-  await doWait(creds, site.conversationId, serverUrl);
+  await doWait(creds, site.conversationId, serverUrl, undefined, {
+    sinceMessageId: response?.sinceMessageId,
+    skipInitialRestCheck: true,
+  });
 }
 
 async function cmdWait() {
@@ -987,7 +976,13 @@ function formatProgress(progress, elapsed) {
  * conversation chunks, and shows real-time progress from data parts.
  * Returns true if handled successfully, false if WS is unavailable.
  */
-async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
+async function doWaitWebSocket(
+  creds,
+  conversationId,
+  serverUrl,
+  maxWaitMs,
+  options = {},
+) {
   // WebSocket global is available in Node 22+ or Node 20 with --experimental-websocket
   if (typeof globalThis.WebSocket === 'undefined') {
     return false;
@@ -1032,9 +1027,12 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
     // Use short timeoutMs for race-condition checks, longer for final fetch
     const fetchAndOutput = async (timeoutMs = 2000) => {
       try {
+        const since = options.sinceMessageId
+          ? `&sinceMessageId=${encodeURIComponent(options.sinceMessageId)}`
+          : '';
         const data = await apiRequest(
           'GET',
-          `/api/v2/headless/conversations/${conversationId}/wait?timeout=${timeoutMs}`,
+          `/api/v2/headless/conversations/${conversationId}/wait?timeout=${timeoutMs}${since}`,
           { auth: token, serverUrl },
         );
         if (data.status !== 'running') {
@@ -1111,12 +1109,14 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
         if (msg.type === 'ack' && msg.originalId === subscribeMessageId) {
           // Race condition guard: the agent may have finished before we subscribed.
           // Do an immediate non-blocking REST check (100ms timeout = just check status, no long-poll).
-          const alreadyDone = await fetchAndOutput(100);
-          if (alreadyDone) {
-            cleanup();
-            clearTimeout(timeoutTimer);
-            resolve(true);
-            return;
+          if (!options.skipInitialRestCheck) {
+            const alreadyDone = await fetchAndOutput(100);
+            if (alreadyDone) {
+              cleanup();
+              clearTimeout(timeoutTimer);
+              resolve(true);
+              return;
+            }
           }
 
           // Still running — start heartbeat timer
@@ -1361,7 +1361,7 @@ async function doWait(
     // Try WebSocket first for real-time progress
     const wsHandled = await Promise.race(
       [
-        doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs),
+        doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs, options),
         watchdog.failurePromise,
       ],
     );
@@ -1378,7 +1378,11 @@ async function doWait(
         [
           apiRequest(
             'GET',
-            `/api/v2/headless/conversations/${conversationId}/wait?timeout=${POLL_TIMEOUT_MS}`,
+            `/api/v2/headless/conversations/${conversationId}/wait?timeout=${POLL_TIMEOUT_MS}${
+              options.sinceMessageId
+                ? `&sinceMessageId=${encodeURIComponent(options.sinceMessageId)}`
+                : ''
+            }`,
             { auth: token, serverUrl },
           ),
           watchdog.failurePromise,

@@ -79,7 +79,7 @@ Miles: verifying desktop and mobile...
 Miles: saving changes...
 ```
 
-Use Miles output as signal, not transcript. Translate raw logs into short action states such as locating a section, inspecting layout/CSS, applying a change, verifying desktop/mobile, saving, or design directions becoming ready. Prefer phase changes over every emitted line: inspect -> apply -> save -> verify. Suppress repeated or vague updates such as "coordinating specialist work" unless there has been a long silence and no better signal. If the stream is active but has not emitted a new meaningful action, say nothing or use a single neutral `Miles: stream active...` style line; do not tell the user you are "waiting for an edit milestone." Keep raw logs in tool output or expandable details when the host supports that.
+Use Miles output as signal, not transcript. Translate raw logs into short action states such as locating a section, inspecting layout/CSS, applying a change, verifying desktop/mobile, saving, or design directions becoming ready. If the stream is active but has not emitted a new meaningful action, say nothing or use a single neutral `Miles: stream active...` style line; do not tell the user you are "waiting for an edit milestone." Keep raw logs in tool output or expandable details when the host supports that.
 
 Bad:
 

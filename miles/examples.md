@@ -43,8 +43,10 @@ miles preview --json
 
 ```bash
 miles design-directions --json
-miles screenshot /preview/site-id/previews/hero-id/index.html --json
-# Open or inspect the returned screenshot path before asking the user to choose.
+# With the dashboard connected, inspect the visible design canvas in the agent browser.
+# Use the JSON metadata for direction numbers, names, statuses, and preview URLs.
+# Recommend one direction based on visual hierarchy, brief fit, layout, imagery, and polish.
+# Use miles screenshot only if the browser preview is unavailable or the response needs images.
 ```
 
 ## Multi-Page Update

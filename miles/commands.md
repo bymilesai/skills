@@ -72,12 +72,13 @@ Supports `--json`.
 ## Design Directions
 
 ### `miles design-directions`
-Returns design direction preview URLs and screenshot commands.
+Returns design direction numbers, names, statuses, preview URLs, and screenshot commands.
 If no directions exist yet, shows the current phase and what's needed.
 Supports `--json`.
+When the dashboard is connected and visually usable, use these results as metadata for browser-first review rather than as an instruction to screenshot every direction.
 
 ### `miles select-design-direction <number>`
-Selects a design direction by number (1, 2, or 3). Triggers Miles to build the full site.
+Selects a design direction by number. Triggers Miles to build the full site.
 Requires the dashboard WebSocket connection before starting the build. Run `miles preview --json`, open the returned authenticated URL with the host browser tool, and rerun `miles preview --json` until `connected` is true before selecting.
 
 ### `miles build-theme`
@@ -87,6 +88,7 @@ Requires the dashboard WebSocket connection before conversion. Run `miles previe
 ### `miles screenshot <preview-url>`
 Captures a preview URL to a JPEG under `$MILES_HOME/screenshots` and prints the file path.
 Supports `--json`, including target URL, path, byte count, content type, and structured error details when capture fails.
+Use this as a fallback when browser previews are unavailable, blocked, not connected, not visible, or when the final response needs embedded local image files. Do not make screenshots the default review path once the connected dashboard is available.
 
 ## Export
 

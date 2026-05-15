@@ -63,8 +63,9 @@ export MILES_CLI=/path/to/installed/miles/scripts/miles
 
    ```bash
    "$MILES_CLI" design-directions --json
-   "$MILES_CLI" screenshot "<preview-url-or-path>" --json
    ```
+
+   If `preview --json` reports `connected: true`, use the visible dashboard canvas as the primary review surface. Inspect the directions in the browser, compare them against the brief, and give the user a concise recommendation. Use `"$MILES_CLI" screenshot "<preview-url-or-path>" --json` only when the dashboard/browser preview is unavailable, blocked, not visibly loaded, or when local image files are needed in the final response.
 
 7. Select the approved design direction.
 

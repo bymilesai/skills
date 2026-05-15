@@ -191,7 +191,7 @@ Choose one option.
 
 Reply with one number, or describe the changes.
 
-For design direction selection, use a table with the design numbers and concise labels. If local screenshots are available, include them as Markdown images in the table using absolute file paths. Make clear that the user should choose one design direction. Keep the prompt short and ask the user to reply with one design number or requested changes.
+For design direction selection, use the connected dashboard as the primary visual canvas when it is available. Inspect the visible design cards before asking the user to choose, then give a concise recommendation and a short table of notes. If local screenshots are already available and useful, include them as Markdown images using absolute file paths; do not generate screenshots by default when the dashboard is connected and visually usable. Ask the user to reply with one design number or requested changes.
 
 Then send the user's answer:
 
@@ -220,7 +220,7 @@ User prompt: "Build a website for my yoga studio"
 6. Miles responds with next question → repeat relay
 7. Miles presents brief (phase: brief_review) → show brief to user, ask approval
 8. User approves → open the authenticated dashboard handoff from `"$MILES_CLI" preview --json`, wait for `connected: true`, then run `"$MILES_CLI" reply "Looks good, approved"`
-9. Miles generates design directions with the dashboard visible → present to user for selection
+9. Miles generates design directions with the dashboard visible → inspect them in the browser, recommend one, then present the choices to the user
 10. User picks design 2 → ensure `"$MILES_CLI" preview --json` shows `connected: true`, then run `"$MILES_CLI" select-design-direction 2`
 11. Miles builds the site → `[site_ready: true]`
 </example>
@@ -258,13 +258,32 @@ Self-check before sending: if the response does not include the actual brief con
 
 ## Step 4: Choose a Design Direction
 
-When Miles finishes generating design directions (phase: `design_directions_ready`), the context includes preview URLs for each design.
+When Miles finishes generating design directions (phase: `design_directions_ready`), the context includes preview URLs and metadata for each design.
 
 Before design-direction generation begins, tell the user it can take several minutes. Before you send the approval reply that starts generation, run `"$MILES_CLI" preview --json`, open the returned authenticated `url` with the host's internal browser/navigation tool, and rerun `preview --json` until `connected` is true. Then send the approval reply, for example `"$MILES_CLI" reply "Looks good, approved"`. This is required even if Miles has not returned design preview URLs yet; the dashboard URL shows generation progress while the user waits. Do not substitute `dashboardUrl` for the authenticated `url`; a fresh browser may not be logged in. If the internal browser is unavailable or the host policy denies the authenticated handoff, run `"$MILES_CLI" preview --open` as the explicit external-browser fallback when acceptable. During generation, send progress updates only for meaningful milestones: generation started, first design complete, halfway complete, all directions complete, or no visible progress for more than 90 seconds. Avoid repeated "still waiting" updates unless there is new information or a long silence.
 
-Visually inspect each design before presenting it to the user. Only say you visually inspected a design if a browser preview or screenshot actually loaded. If a preview URL uses `localhost`, do not assume it is reachable from the current environment; try it only when a browser or local request tool is available, then use `miles screenshot` as the fallback.
+When `preview --json` reports `connected: true`, treat the in-app browser dashboard as the primary design review surface. Run `"$MILES_CLI" design-directions --json` to get direction numbers, names, statuses, and preview URLs, then inspect the visible dashboard canvas or open individual preview URLs in the in-app browser as needed. Evaluate each option for visual hierarchy, tone match with the user's brief, layout quality, image quality, overall polish, and suitability for the business and audience.
 
-Use `miles screenshot` to capture preview URLs when browser inspection is unavailable or local preview URLs cannot be reached. It saves a JPEG and prints the path, then use the host image-reading capability to view the image:
+Give the user design judgment, not just neutral options. Make a recommendation tied to the brief, then present concise notes for each direction. A good response shape is:
+
+```markdown
+I inspected the design directions in the Miles dashboard.
+
+My recommendation: **Direction N, Name**.
+
+Why: <brief rationale tied to the user's brief>.
+
+| # | Direction | Notes |
+|---:|---|---|
+| 1 | Direction name | Short visual assessment |
+| 2 | Direction name | Short visual assessment |
+
+Reply with one design number, or describe changes you want before we build.
+```
+
+Only say you visually inspected a design if the dashboard, an individual browser preview, or a screenshot actually loaded. If the browser inspection is limited by loading errors or missing previews, say that clearly and fall back to the available metadata.
+
+Use `miles screenshot` as a fallback, not the default connected-dashboard path. Use it when the in-app browser cannot be opened, the authenticated handoff is blocked, `connected` remains false, the dashboard does not visibly show previews, an individual preview URL needs inspection outside the dashboard, the final response needs embedded local images, or the user explicitly asks for screenshots. It saves a JPEG and prints the path, then use the host image-reading capability to view the image:
 
 ```bash
 "$MILES_CLI" screenshot /preview/abc123/previews/hero-xyz/index.html
@@ -276,9 +295,7 @@ If `miles screenshot` fails, rerun it once with `--json` and inspect the `detail
 "$MILES_CLI" screenshot --json /preview/abc123/previews/hero-xyz/index.html
 ```
 
-If screenshots are unavailable and preview URLs are not reachable, do not claim visual inspection happened. Tell the user that visual preview capture failed, include the design names, any descriptions Miles returned, and preview URLs, then ask whether to choose from descriptions, retry screenshots, or request new directions.
-
-When evaluating designs, consider: visual hierarchy, tone match with the business, layout quality, image quality, overall polish.
+If browser previews and screenshots are unavailable, do not claim visual inspection happened. Tell the user that visual preview capture failed, include the design names, any descriptions Miles returned, and preview URLs, then ask whether to choose from descriptions, retry browser/screenshot inspection, or request new directions.
 
 If none fit, ask Miles for new directions with feedback:
 

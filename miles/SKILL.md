@@ -60,7 +60,7 @@ Set the Bash timeout to 10 minutes (600000ms) for all miles commands — site bu
 
 ## Codex Progress Visibility
 
-Miles can stream many useful milestones while it works, but in Codex agent mode the Miles dashboard chat may be hidden from the user. Keep the main Codex chat calm while still showing that Miles is alive.
+Miles can stream many useful milestones while it works, but in Codex agent mode the Miles dashboard chat may be hidden from the user. The CLI exposes public progress signals from Miles' live stream, including tool action descriptions, safe tool titles, observations, design/build progress data, and final responses. Keep the main Codex chat calm while still showing that Miles is alive.
 
 Prefer host-rendered progress when available, such as a single updating activity block or chip fed by the latest meaningful Miles milestone.
 
@@ -79,7 +79,7 @@ Miles: verifying desktop and mobile...
 Miles: saving changes...
 ```
 
-Use Miles output as signal, not transcript. Translate raw logs into short action states such as locating a section, inspecting layout/CSS, applying a change, verifying desktop/mobile, saving, or design directions becoming ready. Keep raw logs in tool output or expandable details when the host supports that.
+Use Miles output as signal, not transcript. Translate raw logs into short action states such as locating a section, inspecting layout/CSS, applying a change, verifying desktop/mobile, saving, or design directions becoming ready. If the stream is active but has not emitted a new meaningful action, say nothing or use a single neutral `Miles: stream active...` style line; do not tell the user you are "waiting for an edit milestone." Keep raw logs in tool output or expandable details when the host supports that.
 
 Bad:
 

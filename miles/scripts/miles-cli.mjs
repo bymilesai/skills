@@ -79,6 +79,7 @@ let cliOptions = { json: false };
 
 // Track hero preview statuses across data parts for aggregate progress display
 const heroProgressTracker = new Map();
+const MAX_PROGRESS_TEXT_CHARS = 110;
 
 // ============================================================================
 // Credential management
@@ -971,6 +972,129 @@ function formatProgress(progress, elapsed) {
   return null;
 }
 
+function sanitizeProgressText(value) {
+  if (typeof value !== 'string') return null;
+  let text = value
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/[`*_#>]+/g, '')
+    .trim();
+  if (!text) return null;
+
+  text = text
+    .replace(
+      /([?&](?:code|token|jwt|key|secret|signature|state)=)[^&\s]+/gi,
+      '$1[redacted]',
+    )
+    .replace(/\/Users\/[^\s]+/g, '[local path]')
+    .replace(/\/app\/[^\s]+/g, '[app path]');
+
+  if (text.startsWith('Miles:')) {
+    text = text.slice('Miles:'.length).trim();
+  }
+
+  if (text.length > MAX_PROGRESS_TEXT_CHARS) {
+    text = `${text.slice(0, MAX_PROGRESS_TEXT_CHARS - 1).trimEnd()}…`;
+  }
+
+  return text || null;
+}
+
+function formatActionProgress(text, elapsed) {
+  const clean = sanitizeProgressText(text);
+  if (!clean) return null;
+  return `Miles: ${clean} (${elapsed}s)`;
+}
+
+function extractActionDescription(input) {
+  if (!input || typeof input !== 'object') return null;
+  const value = input._actionDescription;
+  return typeof value === 'string' ? value : null;
+}
+
+function extractActionDescriptionFromInputText(inputText) {
+  if (typeof inputText !== 'string' || !inputText.includes('_actionDescription')) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(inputText);
+    return extractActionDescription(parsed);
+  } catch {}
+
+  const match = inputText.match(
+    /"_actionDescription"\s*:\s*"((?:[^"\\]|\\.)*)"/,
+  );
+  if (!match) return null;
+
+  try {
+    return JSON.parse(`"${match[1]}"`);
+  } catch {
+    return match[1].replace(/\\"/g, '"');
+  }
+}
+
+function publicToolProgressLabel(toolName) {
+  if (typeof toolName !== 'string' || !toolName) return null;
+
+  const toolLabels = [
+    [/getPageOutline/i, 'reading page outline'],
+    [/searchBlocks/i, 'locating matching blocks'],
+    [/getBlockDetails/i, 'inspecting block structure'],
+    [/getBlockStyleDiagnostics/i, 'checking layout styles'],
+    [/updateBlockAttributes|patchBlockCss|batchEdit/i, 'applying page changes'],
+    [/insertBlock|createPattern|reusePattern/i, 'adding page content'],
+    [/removeBlock|deletePattern/i, 'removing page content'],
+    [/moveBlock|duplicateBlock/i, 'rearranging page content'],
+    [/focusBlock/i, 'selecting page content'],
+    [/saveEditor|savePattern|save/i, 'saving changes'],
+    [/screenshot/i, 'capturing a visual check'],
+    [/generateImage|uploadMedia/i, 'working on images'],
+    [/listAvailableBlocks|getSchema|getPatterns|getMilesPatterns/i, 'checking available page components'],
+    [/httpRequest|discoverEndpoints|wpRest/i, 'checking WordPress data'],
+    [/buildPage|createContent/i, 'building page content'],
+    [/task/i, 'coordinating specialist work'],
+    [/gutenberg/i, 'working in the WordPress editor'],
+  ];
+
+  for (const [pattern, label] of toolLabels) {
+    if (pattern.test(toolName)) return label;
+  }
+
+  return null;
+}
+
+function formatToolProgress(chunk, elapsed) {
+  const actionDescription = extractActionDescription(chunk.input);
+  return formatActionProgress(
+    actionDescription || chunk.title || publicToolProgressLabel(chunk.toolName),
+    elapsed,
+  );
+}
+
+function formatObservationProgress(data, elapsed) {
+  if (!data || typeof data !== 'object') return null;
+  if (data.type === 'error') return null;
+  return formatActionProgress(data.content, elapsed);
+}
+
+function formatAgentSwitchProgress(data, elapsed) {
+  const agentName = data?.agentName;
+  if (typeof agentName !== 'string') return null;
+
+  if (/gutenberg|wordpress|editor/i.test(agentName)) {
+    return formatActionProgress('checking the WordPress editor', elapsed);
+  }
+  if (/static|site|design/i.test(agentName)) {
+    return formatActionProgress('reviewing the site design', elapsed);
+  }
+  if (/image/i.test(agentName)) {
+    return formatActionProgress('working on images', elapsed);
+  }
+
+  return formatActionProgress('coordinating specialist work', elapsed);
+}
+
 /**
  * WebSocket-based wait: connects to the server's WS endpoint, subscribes to
  * conversation chunks, and shows real-time progress from data parts.
@@ -1000,11 +1124,19 @@ async function doWaitWebSocket(
 
   return new Promise((resolve) => {
     const startTime = Date.now();
-    let lastProgressMsg = '';
+    let lastProgressKey = '';
     let hasStreamedText = false;
+    let hasReasoningProgress = false;
     let finished = false;
     let heartbeatTimer = null;
     let subscribeMessageId = null;
+    const activeToolInput = new Map();
+
+    const emitProgress = (message, key = message) => {
+      if (!message || key === lastProgressKey) return;
+      console.log(message);
+      lastProgressKey = key;
+    };
 
     const cleanup = () => {
       finished = true;
@@ -1124,7 +1256,10 @@ async function doWaitWebSocket(
             if (finished) return;
             const elapsed = Math.round((Date.now() - startTime) / 1000);
             if (elapsed > 0 && elapsed % 30 === 0) {
-              console.log(`Still working... (${elapsed}s)`);
+              emitProgress(
+                `Miles: stream active (${elapsed}s)`,
+                'stream-active',
+              );
             }
           }, 5000);
           return;
@@ -1135,19 +1270,85 @@ async function doWaitWebSocket(
           const chunk = msg.chunk || msg;
           const elapsed = Math.round((Date.now() - startTime) / 1000);
 
-          // Tool activity — show _actionDescription from tool input
-          if (chunk.type === 'tool-input-available' && chunk.input) {
-            const desc = chunk.input?._actionDescription;
-            if (typeof desc === 'string' && desc) {
-              console.log(`${desc} (${elapsed}s)`);
-              lastProgressMsg = desc;
+          if (chunk.type === 'reasoning-start' || chunk.type === 'reasoning-delta') {
+            if (!hasReasoningProgress) {
+              emitProgress(
+                formatActionProgress('planning the edit', elapsed),
+                'reasoning',
+              );
+              hasReasoningProgress = true;
             }
+          }
+          // Tool activity — show public titles, streamed action descriptions, or safe labels.
+          else if (chunk.type === 'tool-input-start') {
+            const toolCallId = chunk.toolCallId || chunk.id;
+            if (toolCallId) {
+              activeToolInput.set(toolCallId, {
+                toolName: chunk.toolName,
+                inputText: '',
+                emittedActionDescription: false,
+              });
+            }
+            const progressMsg = formatToolProgress(chunk, elapsed);
+            emitProgress(progressMsg, progressMsg);
+          } else if (chunk.type === 'tool-input-delta') {
+            const toolCallId = chunk.toolCallId || chunk.id;
+            const delta = chunk.inputTextDelta || chunk.delta || '';
+            if (toolCallId && typeof delta === 'string') {
+              const existing = activeToolInput.get(toolCallId) || {
+                toolName: chunk.toolName,
+                inputText: '',
+                emittedActionDescription: false,
+              };
+              existing.inputText = `${existing.inputText || ''}${delta}`;
+              if (chunk.toolName && !existing.toolName) {
+                existing.toolName = chunk.toolName;
+              }
+              activeToolInput.set(toolCallId, existing);
+
+              if (!existing.emittedActionDescription) {
+                const desc = extractActionDescriptionFromInputText(
+                  existing.inputText,
+                );
+                const progressMsg = formatActionProgress(desc, elapsed);
+                if (progressMsg) {
+                  emitProgress(progressMsg, `action:${toolCallId}:${desc}`);
+                  existing.emittedActionDescription = true;
+                }
+              }
+            }
+          } else if (chunk.type === 'tool-input-available') {
+            const toolCallId = chunk.toolCallId || chunk.id;
+            const progressMsg = formatToolProgress(chunk, elapsed);
+            const key =
+              extractActionDescription(chunk.input) ||
+              chunk.title ||
+              publicToolProgressLabel(chunk.toolName) ||
+              progressMsg;
+            emitProgress(progressMsg, key ? `tool:${key}` : progressMsg);
+            if (toolCallId) activeToolInput.delete(toolCallId);
+          } else if (chunk.type === 'tool-input-error') {
+            emitProgress(
+              formatActionProgress('checking a failed tool input', elapsed),
+              `tool-error:${chunk.toolCallId || chunk.id || elapsed}`,
+            );
+          } else if (chunk.type === 'tool-output-error') {
+            emitProgress(
+              formatActionProgress('tool step failed', elapsed),
+              `tool-output-error:${chunk.toolCallId || chunk.id || elapsed}`,
+            );
           }
           // Text streaming — print one narrative line when Miles starts responding.
           // Full text is fetched via REST when the finish chunk arrives.
-          else if (chunk.type === 'text-delta' && chunk.delta) {
+          else if (
+            chunk.type === 'text-delta' &&
+            (chunk.delta || chunk.text)
+          ) {
             if (!hasStreamedText) {
-              console.log(`Miles is responding... (${elapsed}s)`);
+              emitProgress(
+                formatActionProgress('writing the response', elapsed),
+                'text-response',
+              );
               hasStreamedText = true;
             }
           }
@@ -1155,8 +1356,9 @@ async function doWaitWebSocket(
           else if (chunk.type === 'data-user-question') {
             const firstQ = chunk.data?.questions?.[0];
             if (firstQ?.question) {
-              console.log(
+              emitProgress(
                 `Miles has a question: ${firstQ.question} (${elapsed}s)`,
+                'question',
               );
               if (firstQ.options?.length) {
                 firstQ.options.forEach((opt, i) => {
@@ -1164,9 +1366,11 @@ async function doWaitWebSocket(
                 });
               }
             } else {
-              console.log(`Miles has a question for you (${elapsed}s)`);
+              emitProgress(
+                `Miles has a question for you (${elapsed}s)`,
+                'question',
+              );
             }
-            lastProgressMsg = 'question';
             // Safety-net fallback: poll REST if finish chunk is delayed
             setTimeout(async () => {
               try {
@@ -1182,10 +1386,10 @@ async function doWaitWebSocket(
               }
             }, 5000);
           } else if (chunk.type === 'data-brief-editor') {
-            console.log(
+            emitProgress(
               `Miles has prepared a design brief for review (${elapsed}s)`,
+              'brief',
             );
-            lastProgressMsg = 'brief';
             // Safety-net fallback: poll REST if finish chunk is delayed
             setTimeout(async () => {
               try {
@@ -1206,12 +1410,16 @@ async function doWaitWebSocket(
             typeof chunk.type === 'string' &&
             chunk.type.startsWith('data-')
           ) {
-            const progress = { type: chunk.type, data: chunk.data };
-            const progressMsg = formatProgress(progress, elapsed);
-            if (progressMsg && progressMsg !== lastProgressMsg) {
-              console.log(`${progressMsg}`);
-              lastProgressMsg = progressMsg;
+            let progressMsg = null;
+            if (chunk.type === 'data-observation') {
+              progressMsg = formatObservationProgress(chunk.data, elapsed);
+            } else if (chunk.type === 'data-agent-switch') {
+              progressMsg = formatAgentSwitchProgress(chunk.data, elapsed);
+            } else {
+              const progress = { type: chunk.type, data: chunk.data };
+              progressMsg = formatProgress(progress, elapsed);
             }
+            emitProgress(progressMsg, progressMsg);
           }
 
           // Stream finished — fetch structured response via REST
@@ -1422,7 +1630,7 @@ async function doWait(
           console.log(`${msg}`);
           lastProgressMsg = msg;
         } else if (elapsed > 0 && elapsed % 30 === 0) {
-          console.log(`Still working... (${elapsed}s)`);
+          console.log(`Miles: still working (${elapsed}s)`);
         }
 
         continue;

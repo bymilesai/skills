@@ -80,6 +80,7 @@ let cliOptions = { json: false };
 // Track hero preview statuses across data parts for aggregate progress display
 const heroProgressTracker = new Map();
 const MAX_PROGRESS_TEXT_CHARS = 110;
+const MAX_ACTION_PROGRESS_LINES = 4;
 
 // ============================================================================
 // Credential management
@@ -1006,6 +1007,85 @@ function formatActionProgress(text, elapsed) {
   return `Miles: ${clean} (${elapsed}s)`;
 }
 
+function normalizeProgressText(text) {
+  return sanitizeProgressText(text)
+    ?.replace(/\(\d+s\)$/g, '')
+    .replace(/\b\d+\s*\/\s*\d+\b/g, '')
+    .replace(/\b\d+\b/g, '')
+    .replace(/[.。…]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function classifyProgressPhase(text) {
+  const normalized = normalizeProgressText(text) || '';
+  if (!normalized) return 'other';
+  if (/\b(save|saving|saved|persist|persisting)\b/.test(normalized)) {
+    return 'save';
+  }
+  if (
+    /\b(verify|verifying|verified|test|testing|preview|screenshot|mobile|desktop|scroll|overlap)\b/.test(
+      normalized,
+    )
+  ) {
+    return 'verify';
+  }
+  if (
+    /\b(apply|applying|update|updating|fix|fixing|remove|removing|add|adding|insert|inserting|move|moving|increase|increasing|clean|cleaning|adjust|adjusting|rearrange|rearranging)\b/.test(
+      normalized,
+    )
+  ) {
+    return 'apply';
+  }
+  if (
+    /\b(inspect|inspecting|check|checking|read|reading|locate|locating|find|finding|navigate|navigating|open|opening|discover|discovering|review|reviewing)\b/.test(
+      normalized,
+    )
+  ) {
+    return 'inspect';
+  }
+  if (/\b(plan|planning|think|thinking)\b/.test(normalized)) {
+    return 'plan';
+  }
+  if (/\b(write|writing|respond|responding)\b/.test(normalized)) {
+    return 'respond';
+  }
+  return 'other';
+}
+
+function isVagueProgressText(text) {
+  const normalized = normalizeProgressText(text) || '';
+  return (
+    !normalized ||
+    normalized === 'coordinating specialist work' ||
+    normalized === 'checking the wordpress editor' ||
+    normalized === 'stream active' ||
+    normalized === 'still working' ||
+    normalized === 'planning the edit' ||
+    normalized === 'working in the wordpress editor'
+  );
+}
+
+function progressSubject(text) {
+  const normalized = normalizeProgressText(text) || '';
+  return normalized
+    .replace(
+      /^(miles: )?(is |i'm |im )?(planning|inspecting|inspect|checking|check|reading|read|locating|locate|finding|find|navigating|navigate|reviewing|review|applying|apply|updating|update|fixing|fix|removing|remove|adding|add|moving|move|saving|save|verifying|verify|testing|test|writing|write)\b\s*/i,
+      '',
+    )
+    .replace(/\b(the|a|an|current|changes|change)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function hasMeaningfulTargetChange(previousText, nextText) {
+  const previousSubject = progressSubject(previousText);
+  const nextSubject = progressSubject(nextText);
+  if (!previousSubject || !nextSubject) return false;
+  return previousSubject !== nextSubject;
+}
+
 function extractActionDescription(input) {
   if (!input || typeof input !== 'object') return null;
   const value = input._actionDescription;
@@ -1053,7 +1133,6 @@ function publicToolProgressLabel(toolName) {
     [/listAvailableBlocks|getSchema|getPatterns|getMilesPatterns/i, 'checking available page components'],
     [/httpRequest|discoverEndpoints|wpRest/i, 'checking WordPress data'],
     [/buildPage|createContent/i, 'building page content'],
-    [/task/i, 'coordinating specialist work'],
     [/gutenberg/i, 'working in the WordPress editor'],
   ];
 
@@ -1092,7 +1171,7 @@ function formatAgentSwitchProgress(data, elapsed) {
     return formatActionProgress('working on images', elapsed);
   }
 
-  return formatActionProgress('coordinating specialist work', elapsed);
+  return null;
 }
 
 /**
@@ -1125,17 +1204,54 @@ async function doWaitWebSocket(
   return new Promise((resolve) => {
     const startTime = Date.now();
     let lastProgressKey = '';
+    let lastActionPhase = '';
+    let lastActionProgressText = '';
+    let actionProgressCount = 0;
     let hasStreamedText = false;
     let hasReasoningProgress = false;
     let finished = false;
     let heartbeatTimer = null;
     let subscribeMessageId = null;
     const activeToolInput = new Map();
+    const emittedProgress = new Set();
 
-    const emitProgress = (message, key = message) => {
+    const emitProgress = (message, key = message, options = {}) => {
       if (!message || key === lastProgressKey) return;
+
+      const normalized = normalizeProgressText(message);
+      if (!normalized) return;
+
+      if (emittedProgress.has(normalized)) return;
+
+      const force = options.force === true;
+      const countAsAction = options.countAsAction !== false;
+      const phase = options.phase || classifyProgressPhase(message);
+      const vague = options.vague ?? isVagueProgressText(message);
+
+      if (!force && vague && actionProgressCount > 0) return;
+
+      if (countAsAction && actionProgressCount >= MAX_ACTION_PROGRESS_LINES) {
+        return;
+      }
+
+      if (
+        !force &&
+        countAsAction &&
+        phase === lastActionPhase &&
+        !hasMeaningfulTargetChange(lastActionProgressText, message)
+      ) {
+        return;
+      }
+
       console.log(message);
       lastProgressKey = key;
+      emittedProgress.add(normalized);
+
+      if (countAsAction) {
+        actionProgressCount += 1;
+        lastActionPhase = phase;
+        lastActionProgressText = message;
+      }
     };
 
     const cleanup = () => {
@@ -1259,6 +1375,7 @@ async function doWaitWebSocket(
               emitProgress(
                 `Miles: stream active (${elapsed}s)`,
                 'stream-active',
+                { countAsAction: false },
               );
             }
           }, 5000);
@@ -1275,6 +1392,7 @@ async function doWaitWebSocket(
               emitProgress(
                 formatActionProgress('planning the edit', elapsed),
                 'reasoning',
+                { countAsAction: false },
               );
               hasReasoningProgress = true;
             }
@@ -1331,11 +1449,13 @@ async function doWaitWebSocket(
             emitProgress(
               formatActionProgress('checking a failed tool input', elapsed),
               `tool-error:${chunk.toolCallId || chunk.id || elapsed}`,
+              { force: true },
             );
           } else if (chunk.type === 'tool-output-error') {
             emitProgress(
               formatActionProgress('tool step failed', elapsed),
               `tool-output-error:${chunk.toolCallId || chunk.id || elapsed}`,
+              { force: true },
             );
           }
           // Text streaming — print one narrative line when Miles starts responding.
@@ -1348,6 +1468,7 @@ async function doWaitWebSocket(
               emitProgress(
                 formatActionProgress('writing the response', elapsed),
                 'text-response',
+                { countAsAction: false },
               );
               hasStreamedText = true;
             }
@@ -1359,6 +1480,7 @@ async function doWaitWebSocket(
               emitProgress(
                 `Miles has a question: ${firstQ.question} (${elapsed}s)`,
                 'question',
+                { force: true },
               );
               if (firstQ.options?.length) {
                 firstQ.options.forEach((opt, i) => {
@@ -1369,6 +1491,7 @@ async function doWaitWebSocket(
               emitProgress(
                 `Miles has a question for you (${elapsed}s)`,
                 'question',
+                { force: true },
               );
             }
             // Safety-net fallback: poll REST if finish chunk is delayed
@@ -1389,6 +1512,7 @@ async function doWaitWebSocket(
             emitProgress(
               `Miles has prepared a design brief for review (${elapsed}s)`,
               'brief',
+              { force: true },
             );
             // Safety-net fallback: poll REST if finish chunk is delayed
             setTimeout(async () => {
@@ -1419,7 +1543,11 @@ async function doWaitWebSocket(
               const progress = { type: chunk.type, data: chunk.data };
               progressMsg = formatProgress(progress, elapsed);
             }
-            emitProgress(progressMsg, progressMsg);
+            emitProgress(progressMsg, progressMsg, {
+              countAsAction:
+                chunk.type === 'data-observation' ||
+                chunk.type === 'data-agent-switch',
+            });
           }
 
           // Stream finished — fetch structured response via REST

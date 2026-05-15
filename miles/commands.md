@@ -118,6 +118,6 @@ For agent composition, use `--json` with non-streaming inspection commands such 
 
 Long-running commands such as `create-site`, `reply`, `wait`, `select-design-direction`, and `build-theme` stream progress as text, print the final Miles response to stdout, and write the same response to the hook relay file in `MILES_HOME`.
 
-For Codex agent mode, treat streamed progress as milestone input for a compact visible status, not as chat transcript. Surface a short start message, sparse updates from the latest meaningful milestone during long operations, and a short completion summary.
+For Codex agent mode, treat streamed progress as milestone input for a compact visible status, not as chat transcript. When chat fallback is needed, use action-log lines like `Miles: verifying mobile layout...`, cap single-edit updates, and finish with a compact checklist.
 
 Browser-backed edits need the dashboard WebSocket, but agents do not need to pre-check before every `miles reply`. Let the CLI guard the operation. If it returns `dashboard_connection_required`, open the authenticated dashboard URL with `miles preview --json`, wait for `connected: true`, and retry once. Keep proactive checks for high-stakes operations such as design selection and theme conversion.

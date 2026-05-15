@@ -40,7 +40,7 @@ export MILES_CLI=/path/to/installed/miles/scripts/miles
    "$MILES_CLI" create-site "Build a small website for a local service business."
    ```
 
-   During long commands, verify the agent gives one short start message, then either uses host-rendered progress or sends only sparse updates based on meaningful Miles milestones. Active edits should show useful progress every 30-45 seconds when no live progress UI exists; long generation/build phases can be quieter. It should not turn streamed output into a chat transcript.
+   During long commands, verify the agent gives one short start line, then either uses host-rendered progress or sends compact action-log lines based on meaningful Miles milestones. A single edit should have at most three progress lines plus a compact completion checklist. It should not turn streamed output into a transcript or explanatory paragraphs.
 
 3. Relay Miles' questions to the user. Send the user's exact answers back with:
 

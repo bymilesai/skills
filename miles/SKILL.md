@@ -60,14 +60,49 @@ Set the Bash timeout to 10 minutes (600000ms) for all miles commands — site bu
 
 ## Codex Progress Visibility
 
-Miles can stream many useful milestones while it works, but in Codex agent mode the Miles dashboard chat may be hidden from the user. Keep the main Codex chat calm while still showing that Miles is alive:
+Miles can stream many useful milestones while it works, but in Codex agent mode the Miles dashboard chat may be hidden from the user. Keep the main Codex chat calm while still showing that Miles is alive.
 
-1. Send one short start message before a long Miles operation, explaining what Miles is doing and what you will verify afterward.
-2. Prefer host-rendered progress when available, such as a single updating activity block or chip fed by the latest meaningful Miles milestone.
-3. If no visible progress surface exists, send sparse chat updates using the latest meaningful Miles output: every 30-45 seconds during active edits, or every 60-90 seconds during longer generation/build phases when there is no new visible progress. Do not post every log line.
-4. Send one short completion message that says what changed and what was verified.
+Prefer host-rendered progress when available, such as a single updating activity block or chip fed by the latest meaningful Miles milestone.
 
-Use Miles output as signal, not transcript. Surface milestones such as locating a section, inspecting layout/CSS, applying a change, verifying desktop/mobile, saving, or design directions becoming ready. Keep raw logs in tool output or expandable details when the host supports that.
+If no visible progress surface exists, use compact action-log updates in chat. Do not write explanatory progress paragraphs. For a single edit, send at most:
+
+1. One start line.
+2. Up to three progress lines.
+3. One compact completion checklist.
+
+Progress lines should be one line, under 12 words when possible, and prefixed consistently:
+
+```text
+Miles: locating Visit section...
+Miles: removing card styling...
+Miles: verifying desktop and mobile...
+Miles: saving changes...
+```
+
+Use Miles output as signal, not transcript. Translate raw logs into short action states such as locating a section, inspecting layout/CSS, applying a change, verifying desktop/mobile, saving, or design directions becoming ready. Keep raw logs in tool output or expandable details when the host supports that.
+
+Bad:
+
+```text
+Miles is now in the right area: it found the Visit section and is inspecting the section root plus the existing Visit Card, which is the boxed piece we want removed.
+```
+
+Good:
+
+```text
+Miles: inspecting Visit card structure...
+```
+
+Completion messages should be compact and verification-focused:
+
+```markdown
+Done.
+
+- Removed Visit card container
+- Made background edge-to-edge
+- Centered location content and directions button
+- Verified desktop and mobile layout
+```
 
 ## Opening the Active Dashboard
 

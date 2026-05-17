@@ -9,8 +9,9 @@ import {
 } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join, resolve } from 'path';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
+import { createServer } from 'http';
 import {
   buildDevicePollingRateLimitMessage,
   buildDevicePollingTimeoutMessage,
@@ -26,6 +27,7 @@ const skillDir = resolve(scriptDir, '..');
 const launcherPath = join(scriptDir, 'miles');
 const cliPath = join(scriptDir, 'miles-cli.mjs');
 const tempRoots = [];
+const mockServers = [];
 
 function makeTempDir(prefix = 'miles-cli-test-') {
   const dir = mkdtempSync(join(tmpdir(), prefix));
@@ -50,6 +52,47 @@ function run(args, options = {}) {
     encoding: 'utf8',
     input: options.input,
     env: envFor(milesHome, options.env),
+    timeout: options.timeout || 15000,
+  });
+}
+
+function runAsync(args, options = {}) {
+  const milesHome = options.milesHome || makeTempDir();
+  return new Promise((resolve) => {
+    const child = spawn(launcherPath, args, {
+      env: envFor(milesHome, options.env),
+    });
+    let stdout = '';
+    let stderr = '';
+    let didTimeout = false;
+    const timeout = setTimeout(() => {
+      didTimeout = true;
+      child.kill('SIGTERM');
+    }, options.timeout || 15000);
+
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    if (options.input) {
+      child.stdin.end(options.input);
+    } else {
+      child.stdin.end();
+    }
+    child.on('close', (status, signal) => {
+      clearTimeout(timeout);
+      resolve({
+        status,
+        signal,
+        stdout,
+        stderr,
+        error: didTimeout ? new Error('Command timed out') : undefined,
+      });
+    });
   });
 }
 
@@ -91,6 +134,21 @@ function runHook(command, milesHome) {
   return run(['hook'], {
     milesHome,
     input: hookPayload(command),
+  });
+}
+
+function startMockServer(handler) {
+  const server = createServer(handler);
+  mockServers.push(server);
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      resolve({
+        server,
+        url: `http://127.0.0.1:${address.port}`,
+      });
+    });
   });
 }
 
@@ -178,6 +236,29 @@ try {
     'login rate limit message should degrade cleanly without retry timing',
   );
 
+  const helpResult = run(['help']);
+  assert(helpResult.status === 0, 'help should exit cleanly');
+  assertIncludes(
+    helpResult.stdout,
+    'miles login                       Device auth flow (opens browser)',
+    'help should document external-browser login',
+  );
+  assertIncludes(
+    helpResult.stdout,
+    'miles preview [--open]',
+    'help should document host-controlled preview opening',
+  );
+  assertIncludes(
+    helpResult.stdout,
+    'miles select-design-direction <n> Choose a design direction',
+    'help should document design selection without browser side effects',
+  );
+  assertIncludes(
+    helpResult.stdout,
+    'miles build-theme                 Build WordPress theme',
+    'help should document theme conversion without browser side effects',
+  );
+
   const doctorHome = makeTempDir();
   const { result: doctorResult, json: doctor } = runJson(['doctor', '--json'], {
     milesHome: doctorHome,
@@ -218,6 +299,56 @@ try {
     replyResult.stderr,
     'No active conversation',
     'reply should preserve --json inside user prose',
+  );
+
+  const reconnectHome = makeTempDir();
+  writeFileSync(
+    join(reconnectHome, 'credentials.json'),
+    JSON.stringify({
+      activeSite: 'site-1',
+      sites: {
+        'site-1': {
+          siteToken: 'site-token',
+          conversationId: 'conversation-1',
+          dashboardUrl: 'https://beta.bymiles.ai/sites/site-1',
+        },
+      },
+    }),
+  );
+  const reconnectRequests = [];
+  const reconnectMock = await startMockServer((req, res) => {
+    reconnectRequests.push({ method: req.method, url: req.url });
+    req.on('data', () => {});
+    req.on('end', () => {
+      res.writeHead(409, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'dashboard_connection_required' }));
+    });
+  });
+  const reconnectResult = await runAsync(['reply', 'Make the form wider'], {
+    milesHome: reconnectHome,
+    env: { MILES_SERVER_URL: reconnectMock.url },
+  });
+  assert(
+    reconnectResult.status === 1,
+    `reply should fail fast when the server requires dashboard reconnection\nstatus: ${reconnectResult.status}\nrequests: ${JSON.stringify(reconnectRequests)}\nstdout:\n${reconnectResult.stdout}\nstderr:\n${reconnectResult.stderr}`,
+  );
+  assertIncludes(
+    reconnectResult.stderr,
+    'Dashboard connection required',
+    'reply should explain the dashboard reconnection requirement',
+  );
+  assertIncludes(
+    reconnectResult.stderr,
+    'miles preview --json',
+    'reply should tell agents how to recover from dashboard_connection_required',
+  );
+  assert(
+    reconnectRequests.some(
+      (request) =>
+        request.method === 'POST' &&
+        request.url === '/api/v2/headless/conversations/conversation-1/message',
+    ),
+    'reply should send the message to the active conversation endpoint',
   );
 
   const { result: unsupportedJsonResult, json: unsupportedJson } = runJson([
@@ -323,6 +454,9 @@ try {
   assert(existsSync(launcherPath), 'launcher should exist');
   console.log('Miles CLI smoke tests passed.');
 } finally {
+  for (const server of mockServers.reverse()) {
+    server.close();
+  }
   for (const root of tempRoots.reverse()) {
     rmSync(root, { recursive: true, force: true });
   }

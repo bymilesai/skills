@@ -23,21 +23,30 @@ miles reply "Serenity Flow Yoga in Portland, Oregon"
 # Miles asks more questions about services, style...
 miles reply "We offer hot yoga, vinyasa, and meditation classes. Modern minimalist style."
 # Miles creates a brief and asks for approval
+miles preview --json
+# Open the active dashboard progress URL in the agent browser.
+# Rerun preview --json until connected is true, then approve:
 miles reply "Looks great, approved!"
+# Miles starts generating design directions with the dashboard visible.
 # Miles generates design directions (streams progress, returns when done)
 miles design-directions
 # → Show preview URLs to user, let them pick
+miles preview --json
+# Open the returned authenticated url in the agent browser.
+# Rerun preview --json until connected is true, then:
 miles select-design-direction 2
 # Miles builds the site (streams progress, returns when done)
-miles preview
+miles preview --json
 ```
 
 ## Verify a Design Direction
 
 ```bash
 miles design-directions --json
-miles screenshot /preview/site-id/previews/hero-id/index.html --json
-# Open or inspect the returned screenshot path before asking the user to choose.
+# With the dashboard connected, inspect the visible design canvas in the agent browser.
+# Use the JSON metadata for direction numbers, names, and preview URLs.
+# Recommend one direction based on visual hierarchy, brief fit, layout, imagery, and polish.
+# Use miles screenshot only if the browser preview is unavailable or the response needs images.
 ```
 
 ## Multi-Page Update
@@ -46,7 +55,8 @@ After a site exists, request additional pages or multi-page edits through Miles 
 
 ```bash
 miles reply "Add About and Services pages that match the current design direction."
-miles wait
+# If this fails with dashboard_connection_required, run miles preview --json,
+# open the authenticated URL, wait for connected: true, then retry once.
 miles status --json
 miles screenshot /preview/site-id/index.html --json
 ```
@@ -61,6 +71,9 @@ miles create-site --brief ./client-brief.md "Build site for Portland yoga studio
 miles design-directions
 # → Push direction URLs to Notion/Slack for client review
 # Client picks design 1
+miles preview --json
+# Open the returned authenticated url in the agent browser.
+# Rerun preview --json until connected is true, then:
 miles select-design-direction 1
 # Miles builds the site (streams progress, returns when done)
 miles export-theme
@@ -74,11 +87,19 @@ When you want Miles to make all decisions:
 miles create-site "Build a modern website for Acme Corp, a B2B SaaS company that sells project management software. Use blue and white colors, professional tone, include pricing page."
 # The more detail you provide, the fewer questions Miles asks
 # Answer any remaining questions Miles has
+miles preview --json
+# Open the returned authenticated url in the agent browser.
+# Rerun preview --json until connected is true, then approve:
 miles reply "Yes, that brief looks perfect"
 # Miles generates directions, then:
+miles preview --json
+# Keep the returned authenticated url open in the agent browser.
+# Rerun preview --json until connected is true, then:
 miles select-design-direction 1
-# Miles builds the site (streams progress, returns when done)
-miles preview
+# Miles builds the site. In Codex, progress fallback should look like:
+# Miles: applying layout changes...
+# Miles: verifying desktop and mobile...
+miles preview --json
 ```
 
 ## Checking Progress
@@ -89,6 +110,8 @@ miles status
 # [phase: building]
 # Note: `create-site`, `reply`, and `select-design-direction` all stream
 # progress automatically. Use `miles wait` only if a command was interrupted.
+# In Codex, do not relay every progress line. Use compact action-log lines:
+# Miles: saving changes...
 ```
 
 ## Credit Management

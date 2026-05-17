@@ -53,10 +53,12 @@ const CREDENTIALS_DIR = MILES_HOME;
 const CREDENTIALS_FILE = join(CREDENTIALS_DIR, 'credentials.json');
 const LAST_RESPONSE_FILE = join(CREDENTIALS_DIR, 'last-response');
 const SCREENSHOTS_DIR = join(CREDENTIALS_DIR, 'screenshots');
-const DEFAULT_SERVER_URL = 'https://api.bymiles.ai';
+const DEFAULT_SERVER_URL = process.env.MILES_SERVER_URL || 'https://api.bymiles.ai';
 const MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
 const POLL_TIMEOUT_MS = 10000; // 10 second poll for faster progress updates
 const ERROR_BODY_MAX_CHARS = 2048;
+const DASHBOARD_CONNECT_TIMEOUT_MS = 30000;
+const PLAYGROUND_CONNECT_TIMEOUT_MS = 60000;
 const JSON_COMMANDS = new Set([
   'doctor',
   'logout',
@@ -77,6 +79,7 @@ let cliOptions = { json: false };
 
 // Track hero preview statuses across data parts for aggregate progress display
 const heroProgressTracker = new Map();
+const MAX_PROGRESS_TEXT_CHARS = 110;
 
 // ============================================================================
 // Credential management
@@ -152,6 +155,118 @@ function parseGlobalArgs(argv) {
   };
 }
 
+function hasCommandFlag(args, flag) {
+  return args.includes(flag);
+}
+
+function getDashboardUrl(site) {
+  if (!site?.dashboardUrl) return null;
+  return `${site.dashboardUrl}?agent=true`;
+}
+
+function getDashboardRedirectPath(dashboardUrl) {
+  if (!dashboardUrl) return null;
+  try {
+    const parsed = new URL(dashboardUrl);
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return null;
+  }
+}
+
+async function getAuthenticatedDashboardUrl(apiKey, serverUrl, dashboardUrl) {
+  if (!apiKey) return null;
+  const redirect = getDashboardRedirectPath(dashboardUrl);
+  if (!redirect) return null;
+
+  try {
+    const data = await apiRequest(
+      'POST',
+      '/api/v2/headless/auth/session-link',
+      {
+        auth: apiKey,
+        body: { redirect },
+        serverUrl,
+      },
+    );
+    return typeof data.url === 'string' && data.url ? data.url : null;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+async function getDashboardOpenUrl(creds, site, serverUrl) {
+  const dashboardUrl = getDashboardUrl(site);
+  if (!dashboardUrl) {
+    return {
+      dashboardUrl: null,
+      url: null,
+      authenticated: false,
+    };
+  }
+  const authenticatedUrl = await getAuthenticatedDashboardUrl(
+    creds.apiKey,
+    serverUrl,
+    dashboardUrl,
+  );
+  return {
+    dashboardUrl,
+    url: authenticatedUrl || dashboardUrl,
+    authenticated: Boolean(authenticatedUrl),
+  };
+}
+
+async function getDashboardConnectionStatus(site, serverUrl) {
+  const status = await apiRequest(
+    'GET',
+    `/api/v2/headless/conversations/${site.conversationId}/ws-status`,
+    { auth: site.siteToken, serverUrl },
+  );
+  return Boolean(status.connected);
+}
+
+async function waitForDashboardConnection(
+  site,
+  serverUrl,
+  timeoutMs = DASHBOARD_CONNECT_TIMEOUT_MS,
+) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await getDashboardConnectionStatus(site, serverUrl)) {
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return false;
+}
+
+function exitWithDashboardConnectionRequired(site, timeoutMs = null) {
+  const dashboardUrl = getDashboardUrl(site);
+  const prefix =
+    timeoutMs === null
+      ? 'Dashboard connection required before this browser-backed operation.'
+      : `Dashboard did not connect within ${timeoutMs / 1000}s.`;
+  exitWithError(
+    `${prefix} Run \`miles preview --json\`, open the returned authenticated url in your agent browser or regular browser, then retry the same command.`,
+    1,
+    {
+      code: 'dashboard_connection_required',
+      dashboardUrl,
+    },
+  );
+}
+
+function isDashboardConnectionRequiredError(err) {
+  return (
+    err instanceof ApiError &&
+    (err.data?.code === 'dashboard_connection_required' ||
+      err.data?.error === 'dashboard_connection_required')
+  );
+}
+
 function getActiveSiteSummary(creds) {
   const site = getActiveSite(creds);
   if (!site) return null;
@@ -192,6 +307,85 @@ function truncateText(text, maxChars = ERROR_BODY_MAX_CHARS) {
     text: `${text.slice(0, maxChars - '...[truncated]'.length)}...[truncated]`,
     truncated: true,
   };
+}
+
+function stripOneTrailingNewline(text) {
+  return text.replace(/\r?\n$/, '');
+}
+
+function readReplyMessage(args) {
+  const stdinIndex = args.indexOf('--stdin');
+  const fileIndex = args.indexOf('--file');
+
+  if (stdinIndex !== -1 && fileIndex !== -1) {
+    exitWithError('Use either `miles reply --stdin` or `miles reply --file <path>`, not both.');
+  }
+
+  if (stdinIndex !== -1) {
+    const remaining = args.filter((_, index) => index !== stdinIndex);
+    if (remaining.length > 0) {
+      exitWithError('Usage: miles reply --stdin');
+    }
+    return stripOneTrailingNewline(readFileSync(0, 'utf8'));
+  }
+
+  if (fileIndex !== -1) {
+    const filePath = args[fileIndex + 1];
+    if (!filePath) {
+      exitWithError('Usage: miles reply --file <path>');
+    }
+    const remaining = args.filter(
+      (_, index) => index !== fileIndex && index !== fileIndex + 1,
+    );
+    if (remaining.length > 0) {
+      exitWithError('Usage: miles reply --file <path>');
+    }
+    return stripOneTrailingNewline(readFileSync(filePath, 'utf8'));
+  }
+
+  return args.join(' ');
+}
+
+function collectScreenshotErrorLines(status, targetUrl, errorBody) {
+  const body = errorBody?.body;
+  const detail = body?.detail;
+  const lines = [`Screenshot failed (HTTP ${status})`];
+  const messages = [];
+
+  if (body?.error) messages.push(body.error);
+  if (body?.message) messages.push(body.message);
+
+  for (const message of messages) {
+    if (!message || lines.some((line) => line.endsWith(message))) continue;
+    lines.push(`Message: ${message}`);
+  }
+
+  if (typeof detail === 'string' && detail) {
+    lines.push(`Server detail: ${detail}`);
+  } else if (detail && typeof detail === 'object') {
+    if (detail.error && !messages.includes(detail.error)) {
+      lines.push(`Server error: ${detail.error}`);
+    }
+    if (detail.detail) {
+      lines.push(`Server detail: ${detail.detail}`);
+    }
+  }
+
+  const nestedTarget =
+    body?.targetUrl ||
+    (detail && typeof detail === 'object' ? detail.targetUrl : null) ||
+    targetUrl;
+  if (nestedTarget) {
+    lines.push(`Target: ${nestedTarget}`);
+  }
+  if (errorBody?.contentType) {
+    lines.push(`Content-Type: ${errorBody.contentType}`);
+  }
+  if (body?.raw) {
+    lines.push(`Body: ${body.raw}`);
+  }
+
+  return lines;
 }
 
 async function readResponseErrorBody(response) {
@@ -296,10 +490,13 @@ function openUrl(url) {
 // Commands
 // ============================================================================
 
-async function cmdLogin() {
+async function cmdLogin(args = []) {
   loadCredentials();
+  const shouldOpen = !hasCommandFlag(args, '--no-open');
   const serverUrl = DEFAULT_SERVER_URL;
-  console.log(`Opening browser for Miles login...`);
+  console.log(
+    shouldOpen ? 'Opening browser for Miles login...' : 'Starting Miles login...',
+  );
 
   // Request device code
   const data = await apiRequest('POST', '/api/v2/auth/device/device-code', {
@@ -318,9 +515,15 @@ async function cmdLogin() {
   }
 
   console.log(`\nYour code: ${userCode}`);
-  console.log(`Opening: ${verificationUrl}\n`);
+  console.log(`Login URL: ${verificationUrl}\n`);
 
-  openUrl(verificationUrl);
+  if (shouldOpen) {
+    openUrl(verificationUrl);
+  } else {
+    console.log(
+      'Open this URL in a browser and confirm the code matches.',
+    );
+  }
 
   console.log('Waiting for authorization...');
 
@@ -649,24 +852,33 @@ async function cmdReply(args) {
     );
   }
 
-  const message = args.join(' ');
+  const message = readReplyMessage(args);
   if (!message) {
-    exitWithError('Usage: miles reply "<message>"');
+    exitWithError('Usage: miles reply "<message>" | miles reply --stdin | miles reply --file <path>');
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
+  let response;
+  try {
+    response = await apiRequest(
+      'POST',
+      `/api/v2/headless/conversations/${site.conversationId}/message`,
+      {
+        auth: site.siteToken,
+        body: { message },
+        serverUrl,
+      },
+    );
+  } catch (err) {
+    if (isDashboardConnectionRequiredError(err)) {
+      exitWithDashboardConnectionRequired(site);
+    }
+    throw err;
+  }
 
-  await apiRequest(
-    'POST',
-    `/api/v2/headless/conversations/${site.conversationId}/message`,
-    {
-      auth: site.siteToken,
-      body: { message },
-      serverUrl,
-    },
-  );
-
-  await doWait(creds, site.conversationId, serverUrl);
+  await doWait(creds, site.conversationId, serverUrl, undefined, {
+    sinceMessageId: response?.sinceMessageId,
+  });
 }
 
 async function cmdWait() {
@@ -778,12 +990,147 @@ function formatProgress(progress, elapsed) {
   return null;
 }
 
+function sanitizeProgressText(value) {
+  if (typeof value !== 'string') return null;
+  let text = value
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/[`*_#>]+/g, '')
+    .trim();
+  if (!text) return null;
+
+  text = text
+    .replace(
+      /([?&](?:code|token|jwt|key|secret|signature|state|authorization|apiKey|api_key|access_token|refresh_token)=)[^&\s]+/gi,
+      '$1[redacted]',
+    )
+    .replace(/\b(Authorization:\s*Bearer\s+)[^\s]+/gi, '$1[redacted]')
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1[redacted]')
+    .replace(/\/Users\/[^\s]+/g, '[local path]')
+    .replace(/\/home\/[^\s]+/g, '[local path]')
+    .replace(/[A-Za-z]:\\[^\s]+/g, '[local path]')
+    .replace(/\/app\/[^\s]+/g, '[app path]');
+
+  if (text.startsWith('Miles:')) {
+    text = text.slice('Miles:'.length).trim();
+  }
+
+  if (text.length > MAX_PROGRESS_TEXT_CHARS) {
+    text = `${text.slice(0, MAX_PROGRESS_TEXT_CHARS - 1).trimEnd()}…`;
+  }
+
+  return text || null;
+}
+
+function formatActionProgress(text, elapsed) {
+  const clean = sanitizeProgressText(text);
+  if (!clean) return null;
+  return `Miles: ${clean} (${elapsed}s)`;
+}
+
+function extractActionDescription(input) {
+  if (!input || typeof input !== 'object') return null;
+  const value = input._actionDescription;
+  return typeof value === 'string' ? value : null;
+}
+
+function extractActionDescriptionFromInputText(inputText) {
+  if (typeof inputText !== 'string' || !inputText.includes('_actionDescription')) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(inputText);
+    return extractActionDescription(parsed);
+  } catch {}
+
+  const match = inputText.match(
+    /"_actionDescription"\s*:\s*"((?:[^"\\]|\\.)*)"/,
+  );
+  if (!match) return null;
+
+  try {
+    return JSON.parse(`"${match[1]}"`);
+  } catch {
+    return null;
+  }
+}
+
+function publicToolProgressLabel(toolName) {
+  if (typeof toolName !== 'string' || !toolName) return null;
+
+  const toolLabels = [
+    [/getPageOutline/i, 'reading page outline'],
+    [/searchBlocks/i, 'locating matching blocks'],
+    [/getBlockDetails/i, 'inspecting block structure'],
+    [/getBlockStyleDiagnostics/i, 'checking layout styles'],
+    [/updateBlockAttributes|patchBlockCss|batchEdit/i, 'applying page changes'],
+    [/insertBlock|createPattern|reusePattern/i, 'adding page content'],
+    [/removeBlock|deletePattern/i, 'removing page content'],
+    [/moveBlock|duplicateBlock/i, 'rearranging page content'],
+    [/focusBlock/i, 'selecting page content'],
+    [/saveEditor|savePattern|save/i, 'saving changes'],
+    [/screenshot/i, 'capturing a visual check'],
+    [/generateImage|uploadMedia/i, 'working on images'],
+    [/listAvailableBlocks|getSchema|getPatterns|getMilesPatterns/i, 'checking available page components'],
+    [/httpRequest|discoverEndpoints|wpRest/i, 'checking WordPress data'],
+    [/buildPage|createContent/i, 'building page content'],
+    [/task/i, 'coordinating specialist work'],
+    [/gutenberg/i, 'working in the WordPress editor'],
+  ];
+
+  for (const [pattern, label] of toolLabels) {
+    if (pattern.test(toolName)) return label;
+  }
+
+  return null;
+}
+
+function formatToolProgress(chunk, elapsed) {
+  const actionDescription = extractActionDescription(chunk.input);
+  return formatActionProgress(
+    actionDescription || chunk.title || publicToolProgressLabel(chunk.toolName),
+    elapsed,
+  );
+}
+
+function formatObservationProgress(data, elapsed) {
+  if (!data || typeof data !== 'object') return null;
+  if (data.type === 'error') {
+    return formatActionProgress('encountered an issue while updating progress', elapsed);
+  }
+  return formatActionProgress(data.content, elapsed);
+}
+
+function formatAgentSwitchProgress(data, elapsed) {
+  const agentName = data?.agentName;
+  if (typeof agentName !== 'string') return null;
+
+  if (/gutenberg|wordpress|editor/i.test(agentName)) {
+    return formatActionProgress('checking the WordPress editor', elapsed);
+  }
+  if (/static|site|design/i.test(agentName)) {
+    return formatActionProgress('reviewing the site design', elapsed);
+  }
+  if (/image/i.test(agentName)) {
+    return formatActionProgress('working on images', elapsed);
+  }
+
+  return formatActionProgress('coordinating specialist work', elapsed);
+}
+
 /**
  * WebSocket-based wait: connects to the server's WS endpoint, subscribes to
  * conversation chunks, and shows real-time progress from data parts.
  * Returns true if handled successfully, false if WS is unavailable.
  */
-async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
+async function doWaitWebSocket(
+  creds,
+  conversationId,
+  serverUrl,
+  maxWaitMs,
+  options = {},
+) {
   // WebSocket global is available in Node 22+ or Node 20 with --experimental-websocket
   if (typeof globalThis.WebSocket === 'undefined') {
     return false;
@@ -801,11 +1148,19 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
 
   return new Promise((resolve) => {
     const startTime = Date.now();
-    let lastProgressMsg = '';
+    let lastProgressKey = '';
     let hasStreamedText = false;
+    let hasReasoningProgress = false;
     let finished = false;
     let heartbeatTimer = null;
     let subscribeMessageId = null;
+    const activeToolInput = new Map();
+
+    const emitProgress = (message, key = message) => {
+      if (!message || key === lastProgressKey) return;
+      console.log(message);
+      lastProgressKey = key;
+    };
 
     const cleanup = () => {
       finished = true;
@@ -828,9 +1183,12 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
     // Use short timeoutMs for race-condition checks, longer for final fetch
     const fetchAndOutput = async (timeoutMs = 2000) => {
       try {
+        const since = options.sinceMessageId
+          ? `&sinceMessageId=${encodeURIComponent(options.sinceMessageId)}`
+          : '';
         const data = await apiRequest(
           'GET',
-          `/api/v2/headless/conversations/${conversationId}/wait?timeout=${timeoutMs}`,
+          `/api/v2/headless/conversations/${conversationId}/wait?timeout=${timeoutMs}${since}`,
           { auth: token, serverUrl },
         );
         if (data.status !== 'running') {
@@ -920,7 +1278,10 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
             if (finished) return;
             const elapsed = Math.round((Date.now() - startTime) / 1000);
             if (elapsed > 0 && elapsed % 30 === 0) {
-              console.log(`Still working... (${elapsed}s)`);
+              emitProgress(
+                `Miles: stream active (${elapsed}s)`,
+                'stream-active',
+              );
             }
           }, 5000);
           return;
@@ -931,19 +1292,83 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
           const chunk = msg.chunk || msg;
           const elapsed = Math.round((Date.now() - startTime) / 1000);
 
-          // Tool activity — show _actionDescription from tool input
-          if (chunk.type === 'tool-input-available' && chunk.input) {
-            const desc = chunk.input?._actionDescription;
-            if (typeof desc === 'string' && desc) {
-              console.log(`${desc} (${elapsed}s)`);
-              lastProgressMsg = desc;
+          if (chunk.type === 'reasoning-start' || chunk.type === 'reasoning-delta') {
+            if (!hasReasoningProgress) {
+              emitProgress(
+                formatActionProgress('planning the edit', elapsed),
+                'reasoning',
+              );
+              hasReasoningProgress = true;
             }
+          }
+          // Tool activity — show public titles, streamed action descriptions, or safe labels.
+          else if (chunk.type === 'tool-input-start') {
+            const toolCallId = chunk.toolCallId || chunk.id;
+            if (toolCallId) {
+              activeToolInput.set(toolCallId, {
+                toolName: chunk.toolName,
+                inputText: '',
+                emittedActionDescription: false,
+              });
+            }
+          } else if (chunk.type === 'tool-input-delta') {
+            const toolCallId = chunk.toolCallId || chunk.id;
+            const delta = chunk.inputTextDelta || chunk.delta || '';
+            if (toolCallId && typeof delta === 'string') {
+              const existing = activeToolInput.get(toolCallId) || {
+                toolName: chunk.toolName,
+                inputText: '',
+                emittedActionDescription: false,
+              };
+              existing.inputText = `${existing.inputText || ''}${delta}`;
+              if (chunk.toolName && !existing.toolName) {
+                existing.toolName = chunk.toolName;
+              }
+              activeToolInput.set(toolCallId, existing);
+
+              if (!existing.emittedActionDescription) {
+                const desc = extractActionDescriptionFromInputText(
+                  existing.inputText,
+                );
+                const progressMsg = formatActionProgress(desc, elapsed);
+                if (progressMsg) {
+                  emitProgress(progressMsg, `action:${toolCallId}:${desc}`);
+                  existing.emittedActionDescription = true;
+                }
+              }
+            }
+          } else if (chunk.type === 'tool-input-available') {
+            const toolCallId = chunk.toolCallId || chunk.id;
+            const progressMsg = formatToolProgress(chunk, elapsed);
+            const key =
+              extractActionDescription(chunk.input) ||
+              chunk.title ||
+              publicToolProgressLabel(chunk.toolName) ||
+              progressMsg;
+            emitProgress(progressMsg, key ? `tool:${key}` : progressMsg);
+            if (toolCallId) activeToolInput.delete(toolCallId);
+          } else if (chunk.type === 'tool-input-error') {
+            emitProgress(
+              formatActionProgress('checking a failed tool input', elapsed),
+              `tool-error:${chunk.toolCallId || chunk.id || elapsed}`,
+            );
+          } else if (chunk.type === 'tool-output-error') {
+            emitProgress(
+              formatActionProgress('tool step failed', elapsed),
+              `tool-output-error:${chunk.toolCallId || chunk.id || elapsed}`,
+            );
           }
           // Text streaming — print one narrative line when Miles starts responding.
           // Full text is fetched via REST when the finish chunk arrives.
-          else if (chunk.type === 'text-delta' && chunk.delta) {
+          else if (
+            chunk.type === 'text-delta' &&
+            (chunk.delta || chunk.text)
+          ) {
             if (!hasStreamedText) {
-              console.log(`Miles is responding... (${elapsed}s)`);
+              emitProgress(
+                formatActionProgress('writing the response', elapsed),
+                'text-response',
+              );
               hasStreamedText = true;
             }
           }
@@ -951,8 +1376,9 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
           else if (chunk.type === 'data-user-question') {
             const firstQ = chunk.data?.questions?.[0];
             if (firstQ?.question) {
-              console.log(
+              emitProgress(
                 `Miles has a question: ${firstQ.question} (${elapsed}s)`,
+                'question',
               );
               if (firstQ.options?.length) {
                 firstQ.options.forEach((opt, i) => {
@@ -960,9 +1386,11 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
                 });
               }
             } else {
-              console.log(`Miles has a question for you (${elapsed}s)`);
+              emitProgress(
+                `Miles has a question for you (${elapsed}s)`,
+                'question',
+              );
             }
-            lastProgressMsg = 'question';
             // Safety-net fallback: poll REST if finish chunk is delayed
             setTimeout(async () => {
               try {
@@ -978,10 +1406,10 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
               }
             }, 5000);
           } else if (chunk.type === 'data-brief-editor') {
-            console.log(
+            emitProgress(
               `Miles has prepared a design brief for review (${elapsed}s)`,
+              'brief',
             );
-            lastProgressMsg = 'brief';
             // Safety-net fallback: poll REST if finish chunk is delayed
             setTimeout(async () => {
               try {
@@ -1002,12 +1430,16 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
             typeof chunk.type === 'string' &&
             chunk.type.startsWith('data-')
           ) {
-            const progress = { type: chunk.type, data: chunk.data };
-            const progressMsg = formatProgress(progress, elapsed);
-            if (progressMsg && progressMsg !== lastProgressMsg) {
-              console.log(`${progressMsg}`);
-              lastProgressMsg = progressMsg;
+            let progressMsg = null;
+            if (chunk.type === 'data-observation') {
+              progressMsg = formatObservationProgress(chunk.data, elapsed);
+            } else if (chunk.type === 'data-agent-switch') {
+              progressMsg = formatAgentSwitchProgress(chunk.data, elapsed);
+            } else {
+              const progress = { type: chunk.type, data: chunk.data };
+              progressMsg = formatProgress(progress, elapsed);
             }
+            emitProgress(progressMsg, progressMsg);
           }
 
           // Stream finished — fetch structured response via REST
@@ -1020,6 +1452,8 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
               console.error(
                 'Failed to fetch final response after finish chunk.',
               );
+              resolve(false);
+              return;
             }
             resolve(true);
             return;
@@ -1048,88 +1482,13 @@ async function doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs) {
   });
 }
 
-/**
- * Connection watchdog: monitors the Playground WebSocket connection and
- * reopens the browser if it drops. Runs as a background loop alongside
- * doWait. This keeps long-running browser-dependent work visible if
- * the Playground reconnects during the run.
- *
- * Returns a stop function to call when the wait is complete.
- */
-function startConnectionWatchdog(
+async function doWait(
+  creds,
   conversationId,
-  token,
   serverUrl,
-  dashboardUrl,
+  maxWaitMs,
+  options = {},
 ) {
-  let rejectFailure;
-  const failurePromise = new Promise((_, reject) => {
-    rejectFailure = reject;
-  });
-
-  if (!dashboardUrl) {
-    return {
-      stop() {},
-      failurePromise,
-    };
-  }
-
-  let running = true;
-  // Only activate once we've seen the connection up at least once.
-  // This prevents reopening the browser during early phases (discovery,
-  // brief, hero generation) when the browser was never opened.
-  let connectionSeenOnce = false;
-
-  const fail = (err) => {
-    if (!running) return;
-    running = false;
-    rejectFailure(err);
-  };
-
-  const watch = async () => {
-    while (running) {
-      await new Promise((r) => setTimeout(r, 5000));
-      if (!running) break;
-
-      const status = await apiRequest(
-        'GET',
-        `/api/v2/headless/conversations/${conversationId}/ws-status`,
-        { auth: token, serverUrl },
-      );
-      if (status.connected) {
-        connectionSeenOnce = true;
-      } else if (connectionSeenOnce) {
-        console.log('  Connection lost. Reopening dashboard...');
-        openUrl(dashboardUrl);
-        // Wait for reconnection
-        const reconnectStart = Date.now();
-        while (running && Date.now() - reconnectStart < 30000) {
-          await new Promise((r) => setTimeout(r, 2000));
-          const recheck = await apiRequest(
-            'GET',
-            `/api/v2/headless/conversations/${conversationId}/ws-status`,
-            { auth: token, serverUrl },
-          );
-          if (recheck.connected) {
-            console.log('  Playground reconnected.');
-            break;
-          }
-        }
-      }
-    }
-  };
-
-  watch().catch(fail);
-
-  return {
-    stop() {
-      running = false;
-    },
-    failurePromise,
-  };
-}
-
-async function doWait(creds, conversationId, serverUrl, maxWaitMs) {
   const maxWait = maxWaitMs || MAX_WAIT_MS;
   const site = getActiveSite(creds);
   const token = site?.siteToken;
@@ -1137,102 +1496,86 @@ async function doWait(creds, conversationId, serverUrl, maxWaitMs) {
     exitWithError('No site token. Use `miles create-site` first.');
   }
 
-  // Start connection watchdog to auto-recover if the browser closes
-  const dashboardUrl = site?.dashboardUrl
-    ? `${site.dashboardUrl}?agent=true`
-    : null;
-  const watchdog = startConnectionWatchdog(
+  // Try WebSocket first for real-time progress
+  const wsHandled = await doWaitWebSocket(
+    creds,
     conversationId,
-    token,
     serverUrl,
-    dashboardUrl,
+    maxWaitMs,
+    options,
   );
+  if (wsHandled) return;
 
-  try {
-    // Try WebSocket first for real-time progress
-    const wsHandled = await Promise.race(
-      [
-        doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs),
-        watchdog.failurePromise,
-      ],
+  // Fallback: polling loop
+  const startTime = Date.now();
+  let lastDirectionCount = 0;
+  let announcedPhase = '';
+  let lastProgressMsg = '';
+
+  while (Date.now() - startTime < maxWait) {
+    const data = await apiRequest(
+      'GET',
+      `/api/v2/headless/conversations/${conversationId}/wait?timeout=${POLL_TIMEOUT_MS}${
+        options.sinceMessageId
+          ? `&sinceMessageId=${encodeURIComponent(options.sinceMessageId)}`
+          : ''
+      }`,
+      { auth: token, serverUrl },
     );
-    if (wsHandled) return;
 
-    // Fallback: polling loop
-    const startTime = Date.now();
-    let lastDirectionCount = 0;
-    let announcedPhase = '';
-    let lastProgressMsg = '';
+    if (data.status === 'running') {
+      // Show phase-aware progress to stdout so it's visible in agent UIs
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
+      const phase = data.phase || 'working';
 
-    while (Date.now() - startTime < maxWait) {
-      const data = await Promise.race(
-        [
-          apiRequest(
-            'GET',
-            `/api/v2/headless/conversations/${conversationId}/wait?timeout=${POLL_TIMEOUT_MS}`,
-            { auth: token, serverUrl },
-          ),
-          watchdog.failurePromise,
-        ],
-      );
-
-      if (data.status === 'running') {
-        // Show phase-aware progress to stdout so it's visible in agent UIs
-        const elapsed = Math.round((Date.now() - startTime) / 1000);
-        const phase = data.phase || 'working';
-
-        // Announce phase transitions
-        if (phase !== announcedPhase) {
-          announcedPhase = phase;
-          const phaseLabels = {
-            discovery: 'Miles is thinking...',
-            brief_review: 'Miles is creating the design brief...',
-            generating_design_directions:
-              'Miles is generating new design directions...',
-            design_directions_ready: 'Design directions are ready for review.',
-            building: 'Miles is building the full site...',
-            site_preview: 'Site generated, preparing preview...',
-            converting: 'Miles is converting to WordPress theme...',
-          };
-          console.log(phaseLabels[phase] || `Miles is working... [${phase}]`);
-        }
-
-        // Show progress from data parts if available
-        const progressMsg = formatProgress(data.progress, elapsed);
-        if (progressMsg && progressMsg !== lastProgressMsg) {
-          console.log(`${progressMsg}`);
-          lastProgressMsg = progressMsg;
-        } else if (data.directionCount > lastDirectionCount) {
-          lastDirectionCount = data.directionCount;
-          const total = data.directionTotal || '?';
-          const msg = `${data.directionCount} of ${total} design directions ready (${elapsed}s)`;
-          console.log(`${msg}`);
-          lastProgressMsg = msg;
-        } else if (elapsed > 0 && elapsed % 30 === 0) {
-          console.log(`Still working... (${elapsed}s)`);
-        }
-
-        continue;
+      // Announce phase transitions
+      if (phase !== announcedPhase) {
+        announcedPhase = phase;
+        const phaseLabels = {
+          discovery: 'Miles is thinking...',
+          brief_review: 'Miles is creating the design brief...',
+          generating_design_directions:
+            'Miles is generating new design directions...',
+          design_directions_ready: 'Design directions are ready for review.',
+          building: 'Miles is building the full site...',
+          site_preview: 'Site generated, preparing preview...',
+          converting: 'Miles is converting to WordPress theme...',
+        };
+        console.log(phaseLabels[phase] || `Miles is working... [${phase}]`);
       }
 
-      // Got a response
+      // Show progress from data parts if available
+      const progressMsg = formatProgress(data.progress, elapsed);
+      if (progressMsg && progressMsg !== lastProgressMsg) {
+        console.log(`${progressMsg}`);
+        lastProgressMsg = progressMsg;
+      } else if (data.directionCount > lastDirectionCount) {
+        lastDirectionCount = data.directionCount;
+        const total = data.directionTotal || '?';
+        const msg = `${data.directionCount} of ${total} design directions ready (${elapsed}s)`;
+        console.log(`${msg}`);
+        lastProgressMsg = msg;
+      } else if (elapsed > 0 && elapsed % 30 === 0) {
+        console.log(`Miles: stream active (${elapsed}s)`);
+      }
 
-      const output = formatWaitResponse(data);
-      writeLastResponse(output);
-      console.log('');
-      console.log(output);
-      return;
+      continue;
     }
 
-    // Timed out - tell the agent what's happening so it can act
-    const statusMsg = announcedPhase
-      ? `Miles is still working. [phase: ${announcedPhase}]`
-      : 'Miles is still working.';
-    console.log(statusMsg);
-    console.log('Use `miles wait` to continue polling for the response.');
-  } finally {
-    watchdog.stop();
+    // Got a response
+    const output = formatWaitResponse(data);
+    writeLastResponse(output);
+    console.log('');
+    console.log(output);
+    return;
   }
+
+  // Timed out - tell the agent what's happening so it can act
+  const statusMsg = announcedPhase
+    ? `Miles is still working. [phase: ${announcedPhase}]`
+    : 'Miles is still working.';
+  console.log(statusMsg);
+  console.log('Use `miles wait` to continue polling for the response.');
 }
 
 function formatWaitResponse(data) {
@@ -1432,44 +1775,34 @@ async function cmdSelectDesignDirection(args) {
     exitWithError('No active conversation.');
   }
 
-  const directionNumber = parseInt(args[0]);
-  if (!directionNumber || directionNumber < 1) {
+  const rawDirectionNumber = args[0];
+  if (!/^\d+$/.test(rawDirectionNumber || '')) {
     exitWithError('Usage: miles select-design-direction <number>');
   }
+  const directionNumber = parseInt(rawDirectionNumber, 10);
 
   const serverUrl = DEFAULT_SERVER_URL;
 
   console.log(`Selecting design direction ${directionNumber}...`);
 
-  // Open the dashboard first — the browser must be connected before we
-  // trigger the build so the dashboard can display the live build progress.
-  const dashboardUrl = `${site.dashboardUrl}?agent=true`;
-  console.log(`Opening dashboard...`);
-  openUrl(dashboardUrl);
-
   // Wait for the dashboard WebSocket connection before starting the build.
   // This ensures the dashboard subscribes to the conversation stream and
   // can display live build progress instead of joining mid-stream.
-  console.log(`Waiting for dashboard to connect...`);
-  const wsConnectStart = Date.now();
-  const WS_CONNECT_TIMEOUT = 30000;
-  let dashboardConnected = false;
-  while (Date.now() - wsConnectStart < WS_CONNECT_TIMEOUT) {
-    const status = await apiRequest(
-      'GET',
-      `/api/v2/headless/conversations/${site.conversationId}/ws-status`,
-      { auth: site.siteToken, serverUrl },
+  const dashboardUrl = getDashboardUrl(site);
+  if (!dashboardUrl) {
+    exitWithError(
+      'Active site is missing its dashboard URL. Run `miles sites` and `miles use <siteId>`, or recreate the site.',
     );
-    if (status.connected) {
-      dashboardConnected = true;
-      break;
-    }
-    await new Promise((r) => setTimeout(r, 1000));
   }
+  console.log(`Dashboard: ${dashboardUrl}`);
+  console.log(`Waiting for dashboard to connect...`);
+  const dashboardConnected = await waitForDashboardConnection(
+    site,
+    serverUrl,
+    DASHBOARD_CONNECT_TIMEOUT_MS,
+  );
   if (!dashboardConnected) {
-    console.log(
-      `Dashboard did not connect within ${WS_CONNECT_TIMEOUT / 1000}s — proceeding anyway.`,
-    );
+    exitWithDashboardConnectionRequired(site, DASHBOARD_CONNECT_TIMEOUT_MS);
   }
 
   const data = await apiRequest(
@@ -1531,8 +1864,9 @@ async function cmdScreenshot(args) {
         contentType: errorBody.contentType,
       });
     } else {
-      console.error(msg);
-      if (body?.raw) console.error(`Body: ${body.raw}`);
+      for (const line of collectScreenshotErrorLines(response.status, url, errorBody)) {
+        console.error(line);
+      }
     }
     process.exit(1);
   }
@@ -1641,21 +1975,56 @@ async function cmdUse(args) {
   }
 }
 
-async function cmdPreview() {
+async function cmdPreview(args = []) {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site) {
     exitWithError('No active site.');
   }
 
-  const url = `${site.dashboardUrl}?agent=true`;
-  if (cliOptions.json) {
-    emitJson({ url, activeSite: getActiveSiteSummary(creds) });
-    return;
-  } else {
-    console.log(url);
+  const serverUrl = DEFAULT_SERVER_URL;
+  const shouldOpen = hasCommandFlag(args, '--open');
+  const dashboard = await getDashboardOpenUrl(creds, site, serverUrl);
+  if (!dashboard.url) {
+    exitWithError(
+      'Active site is missing its dashboard URL. Run `miles sites` and `miles use <siteId>`, or recreate the site.',
+    );
   }
-  openUrl(url);
+
+  let connected = null;
+  let connectionStatusError = null;
+  if (site.conversationId) {
+    try {
+      connected = await getDashboardConnectionStatus(site, serverUrl);
+    } catch (err) {
+      connectionStatusError = err.message || 'Could not check dashboard connection.';
+      if (!cliOptions.json) {
+        console.error(`WebSocket status unavailable: ${connectionStatusError}`);
+      }
+    }
+  }
+  if (cliOptions.json) {
+    const payload = {
+      url: dashboard.url,
+      dashboardUrl: dashboard.dashboardUrl,
+      authenticated: dashboard.authenticated,
+      connected,
+      activeSite: getActiveSiteSummary(creds),
+    };
+    if (connectionStatusError) {
+      payload.connectionStatusError = connectionStatusError;
+    }
+    emitJson(payload);
+    return;
+  }
+  console.log(dashboard.url);
+  if (dashboard.authenticated) {
+    console.log('Authentication: browser login handoff');
+  }
+  if (connected !== null) {
+    console.log(`WebSocket: ${connected ? 'connected' : 'not connected'}`);
+  }
+  if (shouldOpen) openUrl(dashboard.url);
 }
 
 async function cmdBalance() {
@@ -1746,9 +2115,14 @@ async function cmdBuildTheme() {
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
-  const dashboardUrl = `${site.dashboardUrl}?agent=true`;
+  const dashboardUrl = getDashboardUrl(site);
+  if (!dashboardUrl) {
+    exitWithError(
+      'Active site is missing its dashboard URL. Run `miles sites` and `miles use <siteId>`, or recreate the site.',
+    );
+  }
 
-  // Check if Playground is already connected (opened during select-design-direction)
+  // Check if the dashboard is already connected before theme conversion.
   let connected = false;
   const status = await apiRequest(
     'GET',
@@ -1758,13 +2132,11 @@ async function cmdBuildTheme() {
   connected = status.connected;
 
   if (!connected) {
-    // Fallback: open browser and wait for connection
-    console.log(`Opening dashboard: ${dashboardUrl}`);
-    openUrl(dashboardUrl);
+    console.log(`Dashboard: ${dashboardUrl}`);
 
     console.log('Waiting for WordPress Playground to connect...');
     const wsStart = Date.now();
-    while (Date.now() - wsStart < 60000) {
+    while (Date.now() - wsStart < PLAYGROUND_CONNECT_TIMEOUT_MS) {
       await new Promise((r) => setTimeout(r, 2000));
       const currentStatus = await apiRequest(
         'GET',
@@ -1782,10 +2154,7 @@ async function cmdBuildTheme() {
     }
 
     if (!connected) {
-      console.error(
-        'Timed out waiting for Playground connection. Make sure the dashboard is open in a browser.',
-      );
-      process.exit(1);
+      exitWithDashboardConnectionRequired(site, PLAYGROUND_CONNECT_TIMEOUT_MS);
     }
     console.log('Playground connected.');
   }
@@ -1798,8 +2167,7 @@ async function cmdBuildTheme() {
     { auth: site.siteToken, serverUrl },
   );
 
-  // Wait for completion — doWait includes a connection watchdog that
-  // auto-reopens the browser if the Playground connection drops.
+  // Wait for completion after the agent has established the dashboard session.
   await doWait(creds, site.conversationId, serverUrl);
   console.log('To edit this site, run: miles reply "describe your changes"');
 }
@@ -1970,16 +2338,18 @@ Site Management:
   miles create-site --brief <file>  Create with pre-built brief (skip discovery)
   miles sites                       List all sites
   miles use <siteId>                Switch active site
-  miles preview                     Get/open dashboard URL
+  miles preview [--open]            Get dashboard URL
   miles balance                     Show credit balance
 
 Conversation:
   miles reply "<message>"           Send message to Miles, wait for response
+  miles reply --stdin               Read reply text from stdin
+  miles reply --file <path>         Read reply text from a file
   miles wait                        Long-poll for Miles' response
   miles status                      Quick status check (non-blocking)
   miles design-directions           Get design direction preview URLs
   miles select-design-direction <n> Choose a design direction
-  miles build-theme                 Build WordPress theme (opens browser, waits, converts)
+  miles build-theme                 Build WordPress theme (waits, converts)
   miles screenshot <preview-url>    Screenshot a preview URL (saves JPEG, prints path)
   miles messages                    Full conversation history
 

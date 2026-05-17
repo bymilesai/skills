@@ -40,41 +40,66 @@ export MILES_CLI=/path/to/installed/miles/scripts/miles
    "$MILES_CLI" create-site "Build a small website for a local service business."
    ```
 
+   During long commands, verify the agent gives one short start line, then either uses host-rendered progress or sends compact action-log lines based on meaningful Miles milestones. A single edit should have at most three progress lines plus a compact completion checklist. It should not turn streamed output into a transcript or explanatory paragraphs.
+
 3. Relay Miles' questions to the user. Send the user's exact answers back with:
 
    ```bash
    "$MILES_CLI" reply "user answer"
    ```
 
-4. When Miles presents a brief, show it to the user and require explicit approval or requested changes.
+4. When Miles presents a brief, show it to the user and require explicit approval or requested changes. Before sending an approval reply that starts design-direction generation, open the dashboard URL and wait for the WebSocket to connect.
 
-5. When design directions are ready, inspect them before selection.
+5. Open the active dashboard progress URL in the agent browser.
+
+   ```bash
+   "$MILES_CLI" preview --json
+   # Open the returned authenticated url with the host's browser/navigation tool.
+   # Rerun preview --json until connected is true.
+   "$MILES_CLI" reply "Looks good, approved"
+   ```
+
+   If no internal browser is available, run `"$MILES_CLI" preview --open`.
+
+6. When design directions are ready, inspect them before selection.
 
    ```bash
    "$MILES_CLI" design-directions --json
-   "$MILES_CLI" screenshot "<preview-url-or-path>" --json
    ```
 
-6. Select the approved design direction.
+   If `preview --json` reports `connected: true`, use the visible dashboard canvas as the primary review surface. Inspect the directions in the browser, compare them against the brief, and give the user a concise recommendation. Use `"$MILES_CLI" screenshot "<preview-url-or-path>" --json` only when the dashboard/browser preview is unavailable, blocked, not visibly loaded, or when local image files are needed in the final response.
+
+7. Select the approved design direction.
 
    ```bash
+   "$MILES_CLI" preview --json
+   # Open the returned authenticated url with the host's browser/navigation tool.
+   # Rerun preview --json until connected is true.
    "$MILES_CLI" select-design-direction 1
    "$MILES_CLI" status --json
    ```
 
-7. Verify the built site and request one multi-page or content update.
+8. Verify the built site and request one multi-page or content update.
 
    ```bash
+   "$MILES_CLI" preview --json
+   # Open the returned authenticated url with the host's browser/navigation tool.
+   # Rerun preview --json until connected is true.
    "$MILES_CLI" screenshot "<site-preview-url-or-path>" --json
    "$MILES_CLI" reply "Add an About page and keep the visual style consistent."
    "$MILES_CLI" wait
    "$MILES_CLI" status --json
    ```
 
-8. Export the result when needed.
+   For a second small edit immediately afterward, verify the agent sends the edit directly instead of running another redundant `preview --json`. If the CLI returns `dashboard_connection_required`, verify the agent opens `preview --json`, waits for `connected: true`, and retries the same edit once.
+
+9. Export the result when needed.
 
    ```bash
    "$MILES_CLI" export-site --json
+   "$MILES_CLI" preview --json
+   # Open the returned authenticated url with the host's browser/navigation tool.
+   # Rerun preview --json until connected is true.
    "$MILES_CLI" build-theme
    "$MILES_CLI" export-theme --json
    ```

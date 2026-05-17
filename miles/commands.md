@@ -72,7 +72,7 @@ Supports `--json`.
 ## Design Directions
 
 ### `miles design-directions`
-Returns design direction numbers, names, statuses, preview URLs, and screenshot commands.
+Returns design direction numbers, names, preview URLs, and screenshot commands.
 If no directions exist yet, shows the current phase and what's needed.
 Supports `--json`.
 When the dashboard is connected and visually usable, use these results as metadata for browser-first review rather than as an instruction to screenshot every direction.
@@ -119,5 +119,6 @@ For agent composition, use `--json` with non-streaming inspection commands such 
 Long-running commands such as `create-site`, `reply`, `wait`, `select-design-direction`, and `build-theme` stream progress as text, print the final Miles response to stdout, and write the same response to the hook relay file in `MILES_HOME`. The stream includes public progress signals from tool action descriptions, safe tool titles, observations, design/build progress data, and final responses.
 
 For Codex agent mode, treat streamed progress as milestone input for a compact visible status, not as chat transcript. When chat fallback is needed, use action-log lines like `Miles: verifying mobile layout...`, cap single-edit updates, and finish with a compact checklist. If the stream is active but there is no new meaningful action yet, do not say "waiting for edit milestone"; either stay quiet or use one neutral line such as `Miles: stream active...`.
+If a CLI progress line already starts with `Miles:`, do not add another `Miles:` prefix when forwarding or paraphrasing it.
 
 Browser-backed edits need the dashboard WebSocket, but agents do not need to pre-check before every `miles reply`. Let the CLI guard the operation. If it returns `dashboard_connection_required`, open the authenticated dashboard URL with `miles preview --json`, wait for `connected: true`, and retry once. Keep proactive checks for high-stakes operations such as design selection and theme conversion.

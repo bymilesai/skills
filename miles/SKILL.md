@@ -81,6 +81,8 @@ Miles: saving changes...
 
 Use Miles output as signal, not transcript. Translate raw logs into short action states such as locating a section, inspecting layout/CSS, applying a change, verifying desktop/mobile, saving, or design directions becoming ready. If the stream is active but has not emitted a new meaningful action, say nothing or use a single neutral `Miles: stream active...` style line; do not tell the user you are "waiting for an edit milestone." Keep raw logs in tool output or expandable details when the host supports that.
 
+If the CLI progress line already starts with `Miles:`, forward or paraphrase it without adding a second `Miles:` prefix.
+
 Bad:
 
 ```text
@@ -318,7 +320,7 @@ When Miles finishes generating design directions (phase: `design_directions_read
 
 Before design-direction generation begins, tell the user it can take several minutes. Before you send the approval reply that starts generation, run `"$MILES_CLI" preview --json`, open the returned authenticated `url` with the host's internal browser/navigation tool, and rerun `preview --json` until `connected` is true. Then send the approval reply, for example `"$MILES_CLI" reply "Looks good, approved"`. This is required even if Miles has not returned design preview URLs yet; the dashboard URL shows generation progress while the user waits. Do not substitute `dashboardUrl` for the authenticated `url`; a fresh browser may not be logged in. If the internal browser is unavailable or the host policy denies the authenticated handoff, run `"$MILES_CLI" preview --open` as the explicit external-browser fallback when acceptable. During generation, send progress updates only for meaningful milestones: generation started, first design complete, halfway complete, all directions complete, or no visible progress for more than 90 seconds. Use the Codex Progress Visibility action-log style above. Avoid repeated "still waiting" updates unless there is new information or a long silence.
 
-When `preview --json` reports `connected: true`, treat the in-app browser dashboard as the primary design review surface. Run `"$MILES_CLI" design-directions --json` to get direction numbers, names, statuses, and preview URLs. Inspect the visible dashboard canvas first; open individual preview URLs in the in-app browser only when the dashboard cards do not expose enough detail to make a useful judgment. Evaluate each option for visual hierarchy, tone match with the user's brief, layout quality, image quality, overall polish, and suitability for the business and audience.
+When `preview --json` reports `connected: true`, treat the in-app browser dashboard as the primary design review surface. Run `"$MILES_CLI" design-directions --json` to get direction numbers, names, and preview URLs. Inspect the visible dashboard canvas first; open individual preview URLs in the in-app browser only when the dashboard cards do not expose enough detail to make a useful judgment. Evaluate each option for visual hierarchy, tone match with the user's brief, layout quality, image quality, overall polish, and suitability for the business and audience.
 
 Give the user design judgment, not just neutral options. Make a recommendation tied to the brief, then present concise notes for each direction. A good response shape is:
 

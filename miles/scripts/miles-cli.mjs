@@ -53,7 +53,7 @@ const CREDENTIALS_DIR = MILES_HOME;
 const CREDENTIALS_FILE = join(CREDENTIALS_DIR, 'credentials.json');
 const LAST_RESPONSE_FILE = join(CREDENTIALS_DIR, 'last-response');
 const SCREENSHOTS_DIR = join(CREDENTIALS_DIR, 'screenshots');
-const DEFAULT_SERVER_URL = 'https://api.bymiles.ai';
+const DEFAULT_SERVER_URL = process.env.MILES_SERVER_URL || 'https://api.bymiles.ai';
 const MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
 const POLL_TIMEOUT_MS = 10000; // 10 second poll for faster progress updates
 const ERROR_BODY_MAX_CHARS = 2048;
@@ -159,40 +159,54 @@ function hasCommandFlag(args, flag) {
   return args.includes(flag);
 }
 
-function findPositiveIntegerArg(args) {
-  const value = args.find((arg) => /^\d+$/.test(arg));
-  return value ? parseInt(value, 10) : null;
-}
-
 function getDashboardUrl(site) {
+  if (!site?.dashboardUrl) return null;
   return `${site.dashboardUrl}?agent=true`;
 }
 
 function getDashboardRedirectPath(dashboardUrl) {
-  const parsed = new URL(dashboardUrl);
-  return `${parsed.pathname}${parsed.search}`;
+  if (!dashboardUrl) return null;
+  try {
+    const parsed = new URL(dashboardUrl);
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return null;
+  }
 }
 
 async function getAuthenticatedDashboardUrl(apiKey, serverUrl, dashboardUrl) {
   if (!apiKey) return null;
+  const redirect = getDashboardRedirectPath(dashboardUrl);
+  if (!redirect) return null;
+
   try {
     const data = await apiRequest(
       'POST',
       '/api/v2/headless/auth/session-link',
       {
         auth: apiKey,
-        body: { redirect: getDashboardRedirectPath(dashboardUrl) },
+        body: { redirect },
         serverUrl,
       },
     );
     return typeof data.url === 'string' && data.url ? data.url : null;
-  } catch {
-    return null;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) {
+      return null;
+    }
+    throw err;
   }
 }
 
 async function getDashboardOpenUrl(creds, site, serverUrl) {
   const dashboardUrl = getDashboardUrl(site);
+  if (!dashboardUrl) {
+    return {
+      dashboardUrl: null,
+      url: null,
+      authenticated: false,
+    };
+  }
   const authenticatedUrl = await getAuthenticatedDashboardUrl(
     creds.apiKey,
     serverUrl,
@@ -242,6 +256,14 @@ function exitWithDashboardConnectionRequired(site, timeoutMs = null) {
       code: 'dashboard_connection_required',
       dashboardUrl,
     },
+  );
+}
+
+function isDashboardConnectionRequiredError(err) {
+  return (
+    err instanceof ApiError &&
+    (err.data?.code === 'dashboard_connection_required' ||
+      err.data?.error === 'dashboard_connection_required')
   );
 }
 
@@ -848,10 +870,7 @@ async function cmdReply(args) {
       },
     );
   } catch (err) {
-    if (
-      err instanceof ApiError &&
-      err.data?.code === 'dashboard_connection_required'
-    ) {
+    if (isDashboardConnectionRequiredError(err)) {
       exitWithDashboardConnectionRequired(site);
     }
     throw err;
@@ -859,7 +878,6 @@ async function cmdReply(args) {
 
   await doWait(creds, site.conversationId, serverUrl, undefined, {
     sinceMessageId: response?.sinceMessageId,
-    skipInitialRestCheck: true,
   });
 }
 
@@ -983,10 +1001,14 @@ function sanitizeProgressText(value) {
 
   text = text
     .replace(
-      /([?&](?:code|token|jwt|key|secret|signature|state)=)[^&\s]+/gi,
+      /([?&](?:code|token|jwt|key|secret|signature|state|authorization|apiKey|api_key|access_token|refresh_token)=)[^&\s]+/gi,
       '$1[redacted]',
     )
+    .replace(/\b(Authorization:\s*Bearer\s+)[^\s]+/gi, '$1[redacted]')
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1[redacted]')
     .replace(/\/Users\/[^\s]+/g, '[local path]')
+    .replace(/\/home\/[^\s]+/g, '[local path]')
+    .replace(/[A-Za-z]:\\[^\s]+/g, '[local path]')
     .replace(/\/app\/[^\s]+/g, '[app path]');
 
   if (text.startsWith('Miles:')) {
@@ -1030,7 +1052,7 @@ function extractActionDescriptionFromInputText(inputText) {
   try {
     return JSON.parse(`"${match[1]}"`);
   } catch {
-    return match[1].replace(/\\"/g, '"');
+    return null;
   }
 }
 
@@ -1074,7 +1096,9 @@ function formatToolProgress(chunk, elapsed) {
 
 function formatObservationProgress(data, elapsed) {
   if (!data || typeof data !== 'object') return null;
-  if (data.type === 'error') return null;
+  if (data.type === 'error') {
+    return formatActionProgress('encountered an issue while updating progress', elapsed);
+  }
   return formatActionProgress(data.content, elapsed);
 }
 
@@ -1241,14 +1265,12 @@ async function doWaitWebSocket(
         if (msg.type === 'ack' && msg.originalId === subscribeMessageId) {
           // Race condition guard: the agent may have finished before we subscribed.
           // Do an immediate non-blocking REST check (100ms timeout = just check status, no long-poll).
-          if (!options.skipInitialRestCheck) {
-            const alreadyDone = await fetchAndOutput(100);
-            if (alreadyDone) {
-              cleanup();
-              clearTimeout(timeoutTimer);
-              resolve(true);
-              return;
-            }
+          const alreadyDone = await fetchAndOutput(100);
+          if (alreadyDone) {
+            cleanup();
+            clearTimeout(timeoutTimer);
+            resolve(true);
+            return;
           }
 
           // Still running — start heartbeat timer
@@ -1289,8 +1311,6 @@ async function doWaitWebSocket(
                 emittedActionDescription: false,
               });
             }
-            const progressMsg = formatToolProgress(chunk, elapsed);
-            emitProgress(progressMsg, progressMsg);
           } else if (chunk.type === 'tool-input-delta') {
             const toolCallId = chunk.toolCallId || chunk.id;
             const delta = chunk.inputTextDelta || chunk.delta || '';
@@ -1432,6 +1452,8 @@ async function doWaitWebSocket(
               console.error(
                 'Failed to fetch final response after finish chunk.',
               );
+              resolve(false);
+              return;
             }
             resolve(true);
             return;
@@ -1460,85 +1482,6 @@ async function doWaitWebSocket(
   });
 }
 
-/**
- * Connection watchdog: monitors the Playground WebSocket connection and
- * reports when the browser connection drops. Runs as a background loop alongside
- * doWait for commands that explicitly opt into browser monitoring.
- *
- * Returns a stop function to call when the wait is complete.
- */
-function startConnectionWatchdog(
-  conversationId,
-  token,
-  serverUrl,
-  dashboardUrl,
-) {
-  let rejectFailure;
-  const failurePromise = new Promise((_, reject) => {
-    rejectFailure = reject;
-  });
-
-  if (!dashboardUrl) {
-    return {
-      stop() {},
-      failurePromise,
-    };
-  }
-
-  let running = true;
-  // Only activate once we've seen the connection up at least once.
-  // This prevents lost-connection noise during early phases when the
-  // dashboard has not been opened yet.
-  let connectionSeenOnce = false;
-
-  const fail = (err) => {
-    if (!running) return;
-    running = false;
-    rejectFailure(err);
-  };
-
-  const watch = async () => {
-    while (running) {
-      await new Promise((r) => setTimeout(r, 5000));
-      if (!running) break;
-
-      const status = await apiRequest(
-        'GET',
-        `/api/v2/headless/conversations/${conversationId}/ws-status`,
-        { auth: token, serverUrl },
-      );
-      if (status.connected) {
-        connectionSeenOnce = true;
-      } else if (connectionSeenOnce) {
-        console.log(`  Connection lost. Reopen dashboard: ${dashboardUrl}`);
-        // Wait for reconnection
-        const reconnectStart = Date.now();
-        while (running && Date.now() - reconnectStart < 30000) {
-          await new Promise((r) => setTimeout(r, 2000));
-          const recheck = await apiRequest(
-            'GET',
-            `/api/v2/headless/conversations/${conversationId}/ws-status`,
-            { auth: token, serverUrl },
-          );
-          if (recheck.connected) {
-            console.log('  Playground reconnected.');
-            break;
-          }
-        }
-      }
-    }
-  };
-
-  watch().catch(fail);
-
-  return {
-    stop() {
-      running = false;
-    },
-    failurePromise,
-  };
-}
-
 async function doWait(
   creds,
   conversationId,
@@ -1553,107 +1496,86 @@ async function doWait(
     exitWithError('No site token. Use `miles create-site` first.');
   }
 
-  // Start connection watchdog to auto-recover if the CLI owns browser opening.
-  const dashboardUrl =
-    options.allowExternalBrowserOpen === true && site?.dashboardUrl
-      ? `${site.dashboardUrl}?agent=true`
-      : null;
-  const watchdog = startConnectionWatchdog(
+  // Try WebSocket first for real-time progress
+  const wsHandled = await doWaitWebSocket(
+    creds,
     conversationId,
-    token,
     serverUrl,
-    dashboardUrl,
+    maxWaitMs,
+    options,
   );
+  if (wsHandled) return;
 
-  try {
-    // Try WebSocket first for real-time progress
-    const wsHandled = await Promise.race(
-      [
-        doWaitWebSocket(creds, conversationId, serverUrl, maxWaitMs, options),
-        watchdog.failurePromise,
-      ],
+  // Fallback: polling loop
+  const startTime = Date.now();
+  let lastDirectionCount = 0;
+  let announcedPhase = '';
+  let lastProgressMsg = '';
+
+  while (Date.now() - startTime < maxWait) {
+    const data = await apiRequest(
+      'GET',
+      `/api/v2/headless/conversations/${conversationId}/wait?timeout=${POLL_TIMEOUT_MS}${
+        options.sinceMessageId
+          ? `&sinceMessageId=${encodeURIComponent(options.sinceMessageId)}`
+          : ''
+      }`,
+      { auth: token, serverUrl },
     );
-    if (wsHandled) return;
 
-    // Fallback: polling loop
-    const startTime = Date.now();
-    let lastDirectionCount = 0;
-    let announcedPhase = '';
-    let lastProgressMsg = '';
+    if (data.status === 'running') {
+      // Show phase-aware progress to stdout so it's visible in agent UIs
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
+      const phase = data.phase || 'working';
 
-    while (Date.now() - startTime < maxWait) {
-      const data = await Promise.race(
-        [
-          apiRequest(
-            'GET',
-            `/api/v2/headless/conversations/${conversationId}/wait?timeout=${POLL_TIMEOUT_MS}${
-              options.sinceMessageId
-                ? `&sinceMessageId=${encodeURIComponent(options.sinceMessageId)}`
-                : ''
-            }`,
-            { auth: token, serverUrl },
-          ),
-          watchdog.failurePromise,
-        ],
-      );
-
-      if (data.status === 'running') {
-        // Show phase-aware progress to stdout so it's visible in agent UIs
-        const elapsed = Math.round((Date.now() - startTime) / 1000);
-        const phase = data.phase || 'working';
-
-        // Announce phase transitions
-        if (phase !== announcedPhase) {
-          announcedPhase = phase;
-          const phaseLabels = {
-            discovery: 'Miles is thinking...',
-            brief_review: 'Miles is creating the design brief...',
-            generating_design_directions:
-              'Miles is generating new design directions...',
-            design_directions_ready: 'Design directions are ready for review.',
-            building: 'Miles is building the full site...',
-            site_preview: 'Site generated, preparing preview...',
-            converting: 'Miles is converting to WordPress theme...',
-          };
-          console.log(phaseLabels[phase] || `Miles is working... [${phase}]`);
-        }
-
-        // Show progress from data parts if available
-        const progressMsg = formatProgress(data.progress, elapsed);
-        if (progressMsg && progressMsg !== lastProgressMsg) {
-          console.log(`${progressMsg}`);
-          lastProgressMsg = progressMsg;
-        } else if (data.directionCount > lastDirectionCount) {
-          lastDirectionCount = data.directionCount;
-          const total = data.directionTotal || '?';
-          const msg = `${data.directionCount} of ${total} design directions ready (${elapsed}s)`;
-          console.log(`${msg}`);
-          lastProgressMsg = msg;
-        } else if (elapsed > 0 && elapsed % 30 === 0) {
-          console.log(`Miles: still working (${elapsed}s)`);
-        }
-
-        continue;
+      // Announce phase transitions
+      if (phase !== announcedPhase) {
+        announcedPhase = phase;
+        const phaseLabels = {
+          discovery: 'Miles is thinking...',
+          brief_review: 'Miles is creating the design brief...',
+          generating_design_directions:
+            'Miles is generating new design directions...',
+          design_directions_ready: 'Design directions are ready for review.',
+          building: 'Miles is building the full site...',
+          site_preview: 'Site generated, preparing preview...',
+          converting: 'Miles is converting to WordPress theme...',
+        };
+        console.log(phaseLabels[phase] || `Miles is working... [${phase}]`);
       }
 
-      // Got a response
+      // Show progress from data parts if available
+      const progressMsg = formatProgress(data.progress, elapsed);
+      if (progressMsg && progressMsg !== lastProgressMsg) {
+        console.log(`${progressMsg}`);
+        lastProgressMsg = progressMsg;
+      } else if (data.directionCount > lastDirectionCount) {
+        lastDirectionCount = data.directionCount;
+        const total = data.directionTotal || '?';
+        const msg = `${data.directionCount} of ${total} design directions ready (${elapsed}s)`;
+        console.log(`${msg}`);
+        lastProgressMsg = msg;
+      } else if (elapsed > 0 && elapsed % 30 === 0) {
+        console.log(`Miles: stream active (${elapsed}s)`);
+      }
 
-      const output = formatWaitResponse(data);
-      writeLastResponse(output);
-      console.log('');
-      console.log(output);
-      return;
+      continue;
     }
 
-    // Timed out - tell the agent what's happening so it can act
-    const statusMsg = announcedPhase
-      ? `Miles is still working. [phase: ${announcedPhase}]`
-      : 'Miles is still working.';
-    console.log(statusMsg);
-    console.log('Use `miles wait` to continue polling for the response.');
-  } finally {
-    watchdog.stop();
+    // Got a response
+    const output = formatWaitResponse(data);
+    writeLastResponse(output);
+    console.log('');
+    console.log(output);
+    return;
   }
+
+  // Timed out - tell the agent what's happening so it can act
+  const statusMsg = announcedPhase
+    ? `Miles is still working. [phase: ${announcedPhase}]`
+    : 'Miles is still working.';
+  console.log(statusMsg);
+  console.log('Use `miles wait` to continue polling for the response.');
 }
 
 function formatWaitResponse(data) {
@@ -1853,10 +1775,11 @@ async function cmdSelectDesignDirection(args) {
     exitWithError('No active conversation.');
   }
 
-  const directionNumber = findPositiveIntegerArg(args);
-  if (!directionNumber || directionNumber < 1) {
+  const rawDirectionNumber = args[0];
+  if (!/^\d+$/.test(rawDirectionNumber || '')) {
     exitWithError('Usage: miles select-design-direction <number>');
   }
+  const directionNumber = parseInt(rawDirectionNumber, 10);
 
   const serverUrl = DEFAULT_SERVER_URL;
 
@@ -1866,6 +1789,11 @@ async function cmdSelectDesignDirection(args) {
   // This ensures the dashboard subscribes to the conversation stream and
   // can display live build progress instead of joining mid-stream.
   const dashboardUrl = getDashboardUrl(site);
+  if (!dashboardUrl) {
+    exitWithError(
+      'Active site is missing its dashboard URL. Run `miles sites` and `miles use <siteId>`, or recreate the site.',
+    );
+  }
   console.log(`Dashboard: ${dashboardUrl}`);
   console.log(`Waiting for dashboard to connect...`);
   const dashboardConnected = await waitForDashboardConnection(
@@ -2057,17 +1985,36 @@ async function cmdPreview(args = []) {
   const serverUrl = DEFAULT_SERVER_URL;
   const shouldOpen = hasCommandFlag(args, '--open');
   const dashboard = await getDashboardOpenUrl(creds, site, serverUrl);
-  const connected = site.conversationId
-    ? await getDashboardConnectionStatus(site, serverUrl)
-    : null;
+  if (!dashboard.url) {
+    exitWithError(
+      'Active site is missing its dashboard URL. Run `miles sites` and `miles use <siteId>`, or recreate the site.',
+    );
+  }
+
+  let connected = null;
+  let connectionStatusError = null;
+  if (site.conversationId) {
+    try {
+      connected = await getDashboardConnectionStatus(site, serverUrl);
+    } catch (err) {
+      connectionStatusError = err.message || 'Could not check dashboard connection.';
+      if (!cliOptions.json) {
+        console.error(`WebSocket status unavailable: ${connectionStatusError}`);
+      }
+    }
+  }
   if (cliOptions.json) {
-    emitJson({
+    const payload = {
       url: dashboard.url,
       dashboardUrl: dashboard.dashboardUrl,
       authenticated: dashboard.authenticated,
       connected,
       activeSite: getActiveSiteSummary(creds),
-    });
+    };
+    if (connectionStatusError) {
+      payload.connectionStatusError = connectionStatusError;
+    }
+    emitJson(payload);
     return;
   }
   console.log(dashboard.url);
@@ -2169,8 +2116,13 @@ async function cmdBuildTheme() {
 
   const serverUrl = DEFAULT_SERVER_URL;
   const dashboardUrl = getDashboardUrl(site);
+  if (!dashboardUrl) {
+    exitWithError(
+      'Active site is missing its dashboard URL. Run `miles sites` and `miles use <siteId>`, or recreate the site.',
+    );
+  }
 
-  // Check if Playground is already connected (opened during select-design-direction)
+  // Check if the dashboard is already connected before theme conversion.
   let connected = false;
   const status = await apiRequest(
     'GET',

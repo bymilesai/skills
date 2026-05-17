@@ -44,7 +44,7 @@ miles preview --json
 ```bash
 miles design-directions --json
 # With the dashboard connected, inspect the visible design canvas in the agent browser.
-# Use the JSON metadata for direction numbers, names, statuses, and preview URLs.
+# Use the JSON metadata for direction numbers, names, and preview URLs.
 # Recommend one direction based on visual hierarchy, brief fit, layout, imagery, and polish.
 # Use miles screenshot only if the browser preview is unavailable or the response needs images.
 ```
@@ -57,7 +57,6 @@ After a site exists, request additional pages or multi-page edits through Miles 
 miles reply "Add About and Services pages that match the current design direction."
 # If this fails with dashboard_connection_required, run miles preview --json,
 # open the authenticated URL, wait for connected: true, then retry once.
-miles wait
 miles status --json
 miles screenshot /preview/site-id/index.html --json
 ```

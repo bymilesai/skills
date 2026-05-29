@@ -66,7 +66,7 @@ On a fresh session, after install, or when you are unsure whether host-specific 
 ~/.miles/bin/miles-skill check-update --json
 ```
 
-This command has a local 24-hour gate. It should not fetch update metadata on every Miles use, and it should only ask the user about updates when JSON returns `"shouldPrompt": true`.
+This command has a local 24-hour gate. It should not fetch update metadata on every Miles use, and it should only ask the user about updates when JSON returns `"shouldPrompt": true`. Urgent updates may keep returning `"shouldPrompt": true` from the cached result until the user updates.
 
 If an update is available, summarize that it updates local Miles skill files and launchers, then ask approval before running:
 

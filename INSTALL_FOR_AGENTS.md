@@ -118,7 +118,7 @@ First run the gated update check:
 ~/.miles/bin/miles-skill check-update --json
 ```
 
-The update check is locally cached for 24 hours. If it returns `"shouldPrompt": true`, tell the user an update is available, summarize that it updates the local Miles skill files and launcher, and ask approval before running:
+The update check is locally cached for 24 hours. If it returns `"shouldPrompt": true`, tell the user an update is available, summarize that it updates the local Miles skill files and launcher, and ask approval before running. Urgent updates may keep returning `"shouldPrompt": true` from the cached result until the user updates.
 
 ```bash
 ~/.miles/bin/miles-skill update

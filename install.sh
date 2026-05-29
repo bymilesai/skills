@@ -5,7 +5,6 @@ INSTALLER_VERSION=2026.05.29.2
 DEFAULT_UPDATE_CHECK_INTERVAL_SECONDS=86400
 
 DRY_RUN=0
-EXPLAIN=0
 JSON_OUTPUT=0
 AGENT=all
 ACTION=install
@@ -50,7 +49,6 @@ parse_args() {
         ;;
       --explain | --print-summary)
         ACTION=explain
-        EXPLAIN=1
         ;;
       --json)
         JSON_OUTPUT=1
@@ -299,7 +297,7 @@ print_uninstall_plan() {
     printf '  "action": "uninstall_agent_skill",\n'
     printf '  "purge": %s,\n' "$(json_bool "$PURGE")"
     printf '  "destinations": [\n'
-    print_destinations_json_from_stream uninstall_parent_dirs
+    print_uninstall_destinations_json_from_stream uninstall_parent_dirs
     printf '\n  ],\n'
     printf '  "launchers": [\n'
     printf '    "%s",\n' "$(json_escape "$(display_path "$HOME/.miles/bin/miles")")"
@@ -317,7 +315,13 @@ EOF
 
   uninstall_parent_dirs | while IFS= read -r parent_dir; do
     dest_dir="$parent_dir/miles"
-    printf '  - %s (%s)\n' "$(display_path "$dest_dir")" "$(exists_status "$dest_dir")"
+    if is_miles_owned_skill_dir "$dest_dir"; then
+      printf '  - %s (will remove)\n' "$(display_path "$dest_dir")"
+    elif [ -e "$dest_dir" ]; then
+      printf '  - %s (not Miles-owned; will keep)\n' "$(display_path "$dest_dir")"
+    else
+      printf '  - %s (not installed)\n' "$(display_path "$dest_dir")"
+    fi
   done
 
   cat <<EOF
@@ -408,12 +412,23 @@ check_update() {
   now=$(now_epoch)
   interval=$(update_check_interval_seconds)
 
+  if [ ! -f "$(receipt_file)" ]; then
+    print_update_result true false false false unknown false "No Miles install receipt found. Run the installer first."
+    return
+  fi
+
   if [ "$FORCE_CHECK" -eq 0 ] && [ -f "$(update_last_check_file)" ] && [ -f "$(update_cache_file)" ]; then
     last=$(cat "$(update_last_check_file)" 2>/dev/null || printf '0')
     if is_integer "$last"; then
       age=$((now - last))
       if [ "$age" -ge 0 ] && [ "$age" -lt "$interval" ]; then
-        print_update_result false true "$(cache_value updateAvailable false)" false "$(cache_value latestVersion unknown)" "$(cache_value urgent false)" ""
+        cached_update_available=$(cache_value updateAvailable false)
+        cached_urgent=$(cache_value urgent false)
+        cached_should_prompt=false
+        if [ "$cached_update_available" = true ] && [ "$cached_urgent" = true ]; then
+          cached_should_prompt=true
+        fi
+        print_update_result false true "$cached_update_available" "$cached_should_prompt" "$(cache_value latestVersion unknown)" "$cached_urgent" ""
         return
       fi
     fi
@@ -424,9 +439,6 @@ check_update() {
   manifest_file="$tmp_dir/version.json"
 
   if ! try_download_file "$(manifest_url)" "$manifest_file"; then
-    mkdir -p "$(install_dir)"
-    printf '%s\n' "$now" >"$(update_last_check_file)"
-    write_update_cache "$(receipt_value version unknown)" unknown false false
     print_update_result true false false false unknown false "Could not fetch update manifest"
     return
   fi
@@ -440,7 +452,7 @@ check_update() {
 
   update_available=false
   should_prompt=false
-  if [ "$latest_version" != unknown ] && [ "$installed_version" != "$latest_version" ]; then
+  if [ "$latest_version" != unknown ] && [ "$installed_version" != unknown ] && [ "$installed_version" != "$latest_version" ]; then
     update_available=true
     should_prompt=true
   fi
@@ -1008,6 +1020,31 @@ print_destinations_json_from_file() {
   done <"$parents_file"
 }
 
+print_uninstall_destinations_json_from_stream() {
+  stream_fn=$1
+  first=1
+  $stream_fn | while IFS= read -r parent_dir; do
+    [ -n "$parent_dir" ] || continue
+    dest_dir="$parent_dir/miles"
+    owned=false
+    will_remove=false
+    if is_miles_owned_skill_dir "$dest_dir"; then
+      owned=true
+      will_remove=true
+    fi
+    if [ "$first" -eq 1 ]; then
+      first=0
+    else
+      printf ',\n'
+    fi
+    printf '    { "path": "%s", "exists": %s, "owned": %s, "willRemove": %s }' \
+      "$(json_escape "$(display_path "$dest_dir")")" \
+      "$(json_bool_exists "$dest_dir")" \
+      "$owned" \
+      "$will_remove"
+  done
+}
+
 is_miles_owned_skill_dir() {
   dest_dir=$1
   if [ -f "$dest_dir/.miles-install" ]; then
@@ -1173,7 +1210,7 @@ log() {
 }
 
 fail() {
-  printf 'Miles install failed: %s\n' "$*" >&2
+  printf 'Miles skill %s failed: %s\n' "$ACTION" "$*" >&2
   exit 1
 }
 

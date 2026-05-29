@@ -103,7 +103,7 @@ The installer also writes a lifecycle helper:
 ~/.miles/bin/miles-skill uninstall
 ```
 
-Agents should run `check-update --json` when Miles is first used in a session. The check is cached for 24 hours and should only prompt the user when it returns `"shouldPrompt": true`. Updates and uninstall always require user approval.
+Agents should run `check-update --json` when Miles is first used in a session. The check is cached for 24 hours and should only prompt the user when it returns `"shouldPrompt": true`. Urgent updates may keep returning `"shouldPrompt": true` from the cached result until the user updates. Updates and uninstall always require user approval.
 
 The workflow looks like:
 

@@ -110,7 +110,7 @@ Check setup and authentication:
 ~/.miles/bin/miles whoami
 ```
 
-The update check is locally gated and should fetch update metadata at most once every 24 hours. If it returns `"shouldPrompt": true`, summarize the update and ask approval before running:
+The update check is locally gated and should fetch update metadata at most once every 24 hours. If it returns `"shouldPrompt": true`, summarize the update and ask approval before running. Urgent updates may keep returning `"shouldPrompt": true` from the cached result until the user updates.
 
 ```bash
 ~/.miles/bin/miles-skill update

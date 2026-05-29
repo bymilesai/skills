@@ -7,10 +7,30 @@ Checks the local CLI runtime, skill path, `MILES_HOME`, credentials file, hook r
 
 Use this first when validating an install or when an agent cannot find the Miles CLI.
 
-### `miles login`
-Starts device auth and opens the OS/default browser. Gets an API key stored in `$MILES_HOME/credentials.json`.
-Login intentionally uses the external browser because in-app browsers may not support hardware security keys or other identity-provider requirements.
-Default server: `https://api.bymiles.ai`
+### `miles login --request --json`
+Requests a Miles device login code and exits immediately, without polling or opening a browser.
+
+JSON output includes `deviceCode`, `userCode`, complete code-embedded `verificationUrl`, `verificationUrlComplete`, `intervalSeconds`, `expiresInSeconds`, and `expiresAt`. Agents should show `userCode` and `verificationUrl` to the user, ask the user to confirm the browser page shows the same code, then stop until the user authorizes.
+
+`deviceCode` is a bearer secret for the polling step. Do not paste it into user-facing messages, logs, or shared telemetry.
+
+### `miles login --poll <deviceCode> --json [--timeout <seconds>] [--once]`
+Polls Miles for the result of a device login request. On success, saves the API key to `$MILES_HOME/credentials.json`.
+
+JSON output uses stable `status` values:
+
+```json
+{ "ok": true, "status": "authorized", "apiKeyPrefix": "mk_live_..." }
+{ "ok": false, "status": "pending" }
+{ "ok": false, "status": "expired" }
+{ "ok": false, "status": "denied" }
+{ "ok": false, "status": "timeout" }
+```
+
+Use `--once` for a single status check. Without `--once`, the command waits until authorization succeeds, expires, is denied, or times out. Default server: `https://api.bymiles.ai`.
+
+### `miles login [--no-open]`
+Legacy human-oriented device auth flow. It prints the code, optionally opens the OS/default browser, then blocks while polling. Agents must use the split request/poll commands instead so they can show the device code before waiting.
 
 By default, `MILES_HOME` is `~/.miles`. Set `MILES_HOME=/path/to/isolated/state` for clean-machine smoke tests or separate agent environments.
 

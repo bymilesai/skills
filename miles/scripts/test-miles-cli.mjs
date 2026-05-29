@@ -104,7 +104,20 @@ function runJson(args, options = {}) {
     json = JSON.parse(result.stdout);
   } catch (err) {
     throw new Error(
-      `Expected JSON stdout for ${args.join(' ')}: ${err.message}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+      `Expected JSON stdout for ${args.join(' ')}: ${err.message}\nstatus: ${result.status}\nsignal: ${result.signal}\nerror: ${result.error?.message ?? 'none'}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+  }
+  return { result, json };
+}
+
+async function runJsonAsync(args, options = {}) {
+  const result = await runAsync(args, options);
+  let json;
+  try {
+    json = JSON.parse(result.stdout);
+  } catch (err) {
+    throw new Error(
+      `Expected JSON stdout for ${args.join(' ')}: ${err.message}\nstatus: ${result.status}\nsignal: ${result.signal}\nerror: ${result.error?.message ?? 'none'}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
     );
   }
   return { result, json };
@@ -198,7 +211,7 @@ try {
   );
   assertIncludes(
     buildDevicePollingTimeoutMessage(defaultPollingPlan.maxWaitMs),
-    'Run `miles login` again',
+    'Run `miles login --request --json`',
     'login timeout message should tell users how to recover',
   );
   assert(
@@ -227,13 +240,13 @@ try {
   const rateLimitWithRetry = buildDevicePollingRateLimitMessage(120);
   assert(
     rateLimitWithRetry ===
-      'Miles login polling was rate limited before authorization completed. Wait about 2m before trying again. Run `miles login` again for a fresh code.',
+      'Miles login polling was rate limited before authorization completed. Wait about 2m before trying again. Run `miles login --request --json` for a fresh code.',
     'login rate limit message should include retry guidance without extra spaces',
   );
   const rateLimitWithoutRetry = buildDevicePollingRateLimitMessage();
   assert(
     rateLimitWithoutRetry ===
-      'Miles login polling was rate limited before authorization completed. Run `miles login` again for a fresh code.',
+      'Miles login polling was rate limited before authorization completed. Run `miles login --request --json` for a fresh code.',
     'login rate limit message should degrade cleanly without retry timing',
   );
 
@@ -241,8 +254,13 @@ try {
   assert(helpResult.status === 0, 'help should exit cleanly');
   assertIncludes(
     helpResult.stdout,
-    'miles login                       Device auth flow (opens browser)',
-    'help should document external-browser login',
+    'miles login --request --json      Request a device login code',
+    'help should document split login code requests',
+  );
+  assertIncludes(
+    helpResult.stdout,
+    'miles login --poll <deviceCode>   Poll for device authorization',
+    'help should document split login polling',
   );
   assertIncludes(
     helpResult.stdout,
@@ -284,6 +302,142 @@ try {
   assert(whoamiResult.status === 0, 'whoami --json should exit 0 when logged out');
   assert(whoami.authenticated === false, 'whoami should report unauthenticated JSON');
   assert(whoami.milesHome === whoamiHome, 'whoami should honor MILES_HOME');
+
+  const loginRequestCalls = [];
+  const loginRequestMock = await startMockServer((req, res) => {
+    loginRequestCalls.push({ method: req.method, url: req.url });
+    req.resume();
+    if (req.method === 'POST' && req.url === '/api/v2/auth/device/device-code') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          deviceCode: 'device-secret-123',
+          userCode: 'YXQS-SHNK',
+          verificationUrl: 'https://beta.bymiles.ai/device',
+          interval: 5,
+          expiresIn: 600,
+        }),
+      );
+      return;
+    }
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'not_found' }));
+  });
+  const { result: loginRequestResult, json: loginRequest } = await runJsonAsync(
+    ['login', '--request', '--json'],
+    { env: { MILES_SERVER_URL: loginRequestMock.url } },
+  );
+  assert(loginRequestResult.status === 0, 'login request should exit immediately');
+  assert(loginRequest.ok === true, 'login request should return ok true');
+  assert(
+    loginRequest.deviceCode === 'device-secret-123',
+    'login request should expose deviceCode for the polling command',
+  );
+  assert(
+    loginRequest.userCode === 'YXQS-SHNK',
+    'login request should expose the user-facing code',
+  );
+  assert(
+    loginRequest.verificationUrl ===
+      'https://beta.bymiles.ai/device?code=YXQS-SHNK',
+    'login request should return a complete code-embedded URL',
+  );
+  assert(
+    loginRequest.verificationUrlComplete === true,
+    'login request should confirm the URL includes the code',
+  );
+  assert(
+    loginRequest.intervalSeconds === 5 && loginRequest.expiresInSeconds === 600,
+    'login request should normalize polling interval and expiry',
+  );
+  assert(loginRequest.expiresAt, 'login request should include an expiry timestamp');
+  assert(
+    loginRequestCalls.length === 1 &&
+      loginRequestCalls[0].url === '/api/v2/auth/device/device-code',
+    'login request should not poll before the agent shows the code',
+  );
+
+  const loginPendingMock = await startMockServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => {
+      assert(
+        req.method === 'POST' && req.url === '/api/v2/auth/device/device-token',
+        'login poll should call the device token endpoint',
+      );
+      assert(
+        JSON.parse(body).deviceCode === 'device-secret-123',
+        'login poll should send the requested deviceCode',
+      );
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'authorization_pending' }));
+    });
+  });
+  const { result: loginPendingResult, json: loginPending } = await runJsonAsync(
+    ['login', '--poll', 'device-secret-123', '--json', '--once'],
+    { env: { MILES_SERVER_URL: loginPendingMock.url } },
+  );
+  assert(loginPendingResult.status === 0, 'single pending poll should exit 0');
+  assert(
+    loginPending.ok === false && loginPending.status === 'pending',
+    'single pending poll should return a stable pending status',
+  );
+
+  const loginAuthHome = makeTempDir();
+  const loginAuthorizedMock = await startMockServer((req, res) => {
+    req.on('data', () => {});
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          apiKey: 'mk_live_test_1234567890',
+          keyPrefix: 'mk_live_test',
+        }),
+      );
+    });
+  });
+  const { result: loginAuthorizedResult, json: loginAuthorized } = await runJsonAsync(
+    ['login', '--poll', 'device-secret-123', '--json', '--once'],
+    {
+      milesHome: loginAuthHome,
+      env: { MILES_SERVER_URL: loginAuthorizedMock.url },
+    },
+  );
+  assert(loginAuthorizedResult.status === 0, 'authorized login poll should exit 0');
+  assert(
+    loginAuthorized.ok === true && loginAuthorized.status === 'authorized',
+    'authorized login poll should return a stable authorized status',
+  );
+  assert(
+    loginAuthorized.apiKeyPrefix === 'mk_live_test',
+    'authorized login poll should expose the key prefix',
+  );
+  const savedLoginCreds = JSON.parse(
+    readFileSync(join(loginAuthHome, 'credentials.json'), 'utf8'),
+  );
+  assert(
+    savedLoginCreds.apiKey === 'mk_live_test_1234567890',
+    'authorized login poll should save credentials',
+  );
+
+  const loginExpiredMock = await startMockServer((req, res) => {
+    req.on('data', () => {});
+    req.on('end', () => {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'expired_token' }));
+    });
+  });
+  const { result: loginExpiredResult, json: loginExpired } = await runJsonAsync(
+    ['login', '--poll', 'expired-device', '--json', '--once'],
+    { env: { MILES_SERVER_URL: loginExpiredMock.url } },
+  );
+  assert(loginExpiredResult.status === 1, 'expired login poll should fail');
+  assert(
+    loginExpired.ok === false && loginExpired.status === 'expired',
+    'expired login poll should return a recoverable expired status',
+  );
 
   const secureCredsHome = makeTempDir();
   writeFileSync(

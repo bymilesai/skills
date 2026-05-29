@@ -62,6 +62,7 @@ const DASHBOARD_CONNECT_TIMEOUT_MS = 30000;
 const PLAYGROUND_CONNECT_TIMEOUT_MS = 60000;
 const JSON_COMMANDS = new Set([
   'doctor',
+  'login',
   'logout',
   'whoami',
   'status',
@@ -172,6 +173,24 @@ function parseGlobalArgs(argv) {
 
 function hasCommandFlag(args, flag) {
   return args.includes(flag);
+}
+
+function getCommandFlagValue(args, flag) {
+  const index = args.indexOf(flag);
+  if (index === -1) return null;
+  const value = args[index + 1];
+  if (!value || value.startsWith('--')) return null;
+  return value;
+}
+
+function parsePositiveSecondsFlag(args, flag) {
+  const value = getCommandFlagValue(args, flag);
+  if (value === null) return null;
+  const seconds = Number(value);
+  if (!Number.isInteger(seconds) || seconds <= 0) {
+    exitWithError(`Usage: ${flag} must be a positive number of seconds.`, 2);
+  }
+  return seconds;
 }
 
 function getDashboardUrl(site) {
@@ -505,29 +524,273 @@ function openUrl(url) {
 // Commands
 // ============================================================================
 
+function normalizePositiveSeconds(value, fallback) {
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : fallback;
+}
+
+function buildCompleteVerificationUrl(verificationUrl, userCode) {
+  if (!verificationUrl || !userCode) return verificationUrl;
+  try {
+    const parsed = new URL(verificationUrl);
+    if (parsed.searchParams.get('code') !== userCode) {
+      parsed.searchParams.set('code', userCode);
+    }
+    return parsed.toString();
+  } catch {
+    const separator = verificationUrl.includes('?') ? '&' : '?';
+    return `${verificationUrl}${separator}code=${encodeURIComponent(userCode)}`;
+  }
+}
+
+function verificationUrlHasCode(verificationUrl, userCode) {
+  if (!verificationUrl || !userCode) return false;
+  try {
+    return new URL(verificationUrl).searchParams.get('code') === userCode;
+  } catch {
+    return verificationUrl.includes(`code=${encodeURIComponent(userCode)}`);
+  }
+}
+
+function normalizeDeviceCodeResponse(data) {
+  const deviceCode = data.deviceCode ?? data.device_code;
+  const userCode = data.userCode ?? data.user_code;
+  const completeUrl =
+    typeof data.verificationUrlComplete === 'string'
+      ? data.verificationUrlComplete
+      : (data.verificationUriComplete ?? data.verification_uri_complete);
+  const verificationUrl = buildCompleteVerificationUrl(
+    completeUrl ??
+      data.verificationUrl ??
+      data.verification_url ??
+      data.verificationUri ??
+      data.verification_uri,
+    userCode,
+  );
+  const intervalSeconds = normalizePositiveSeconds(
+    data.intervalSeconds ?? data.interval_seconds ?? data.interval,
+    5,
+  );
+  const expiresInSeconds = normalizePositiveSeconds(
+    data.expiresInSeconds ??
+      data.expires_in_seconds ??
+      data.expiresIn ??
+      data.expires_in,
+    600,
+  );
+
+  return {
+    ok: true,
+    deviceCode,
+    userCode,
+    verificationUrl,
+    verificationUrlComplete: verificationUrlHasCode(verificationUrl, userCode),
+    intervalSeconds,
+    expiresInSeconds,
+    expiresAt: new Date(Date.now() + expiresInSeconds * 1000).toISOString(),
+  };
+}
+
+async function requestLoginDeviceCode(serverUrl) {
+  const data = await apiRequest('POST', '/api/v2/auth/device/device-code', {
+    serverUrl,
+  });
+  const deviceAuth = normalizeDeviceCodeResponse(data);
+  if (!deviceAuth.deviceCode || !deviceAuth.userCode || !deviceAuth.verificationUrl) {
+    throw new ApiError('Invalid login response from Miles.', 502, {
+      missing: {
+        deviceCode: !deviceAuth.deviceCode,
+        userCode: !deviceAuth.userCode,
+        verificationUrl: !deviceAuth.verificationUrl,
+      },
+    });
+  }
+  return deviceAuth;
+}
+
+function printLoginRequest(deviceAuth) {
+  if (cliOptions.json) {
+    emitJson(deviceAuth);
+    return;
+  }
+
+  console.log(`Your code: ${deviceAuth.userCode}`);
+  console.log(`Login URL: ${deviceAuth.verificationUrl}`);
+  console.log(
+    'This request command exits without polling. Use `miles login --poll <deviceCode> --json` from the same agent session to finish.',
+  );
+}
+
+function printLoginPollResult(result, exitStatus = 0) {
+  if (cliOptions.json) {
+    emitJson(result);
+    if (exitStatus !== 0) process.exit(exitStatus);
+    return;
+  }
+
+  if (result.status === 'authorized') {
+    console.log('Logged in successfully!');
+    if (result.apiKeyPrefix) {
+      console.log(`API key: ${result.apiKeyPrefix}`);
+    }
+    return;
+  }
+
+  const messages = {
+    pending: 'Authorization is still pending.',
+    expired: 'Authorization expired. Start a fresh Miles login.',
+    denied: 'Authorization was denied. Start a fresh Miles login to retry.',
+    timeout: 'Authorization timed out. Start a fresh Miles login.',
+  };
+  const message = messages[result.status] ?? `Login status: ${result.status}`;
+  if (exitStatus === 0) {
+    console.log(message);
+  } else {
+    console.error(message);
+    process.exit(exitStatus);
+  }
+}
+
+function buildAuthorizedLoginResult(tokenData) {
+  const apiKeyPrefix =
+    tokenData.keyPrefix ??
+    (tokenData.apiKey ? `${String(tokenData.apiKey).slice(0, 8)}...` : null);
+  return {
+    ok: true,
+    status: 'authorized',
+    apiKeyPrefix,
+  };
+}
+
+function loginPollStatusFromApiError(err) {
+  if (!(err instanceof ApiError)) return null;
+  if (err.data?.error === 'authorization_pending') return 'pending';
+  if (err.data?.error === 'slow_down') return 'pending';
+  if (err.data?.error === 'access_denied') return 'denied';
+  if (err.data?.error === 'expired_token') return 'expired';
+  if (err.status === 429) return 'timeout';
+  return null;
+}
+
+async function pollLoginDeviceCode({
+  deviceCode,
+  serverUrl,
+  intervalSeconds,
+  timeoutSeconds,
+  once,
+}) {
+  const { pollIntervalMs, maxWaitMs } = getDeviceAuthPollingPlan({
+    intervalSeconds,
+    expiresInSeconds: timeoutSeconds,
+  });
+  const deadlineMs = Date.now() + (timeoutSeconds ? timeoutSeconds * 1000 : maxWaitMs);
+  let nextPollIntervalMs = pollIntervalMs;
+  let shouldWait = false;
+
+  while (Date.now() < deadlineMs) {
+    if (shouldWait) {
+      const remainingMs = deadlineMs - Date.now();
+      if (remainingMs <= 0) break;
+      await new Promise((r) =>
+        setTimeout(r, Math.min(nextPollIntervalMs, remainingMs)),
+      );
+    }
+    shouldWait = true;
+
+    try {
+      const tokenData = await apiRequest(
+        'POST',
+        '/api/v2/auth/device/device-token',
+        {
+          body: { deviceCode },
+          serverUrl,
+        },
+      );
+
+      if (tokenData.apiKey) {
+        saveCredentials({ apiKey: tokenData.apiKey });
+        return buildAuthorizedLoginResult(tokenData);
+      }
+    } catch (err) {
+      const status = loginPollStatusFromApiError(err);
+      if (!status) throw err;
+
+      if (err instanceof ApiError && err.data?.error === 'slow_down') {
+        nextPollIntervalMs = getSlowedDeviceAuthPollIntervalMs(
+          nextPollIntervalMs,
+          err.retryAfterSeconds,
+        );
+      }
+
+      if (status === 'pending') {
+        if (once) return { ok: false, status };
+        continue;
+      }
+
+      return {
+        ok: false,
+        status,
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    status: 'timeout',
+  };
+}
+
 async function cmdLogin(args = []) {
   loadCredentials();
-  const shouldOpen = !hasCommandFlag(args, '--no-open');
   const serverUrl = DEFAULT_SERVER_URL;
+  const wantsRequest = hasCommandFlag(args, '--request');
+  const wantsPoll = hasCommandFlag(args, '--poll');
+
+  if (wantsRequest && wantsPoll) {
+    exitWithError('Use either `miles login --request` or `miles login --poll <deviceCode>`, not both.', 2);
+  }
+
+  if (wantsRequest) {
+    const deviceAuth = await requestLoginDeviceCode(serverUrl);
+    printLoginRequest(deviceAuth);
+    return;
+  }
+
+  if (wantsPoll) {
+    const deviceCode = getCommandFlagValue(args, '--poll');
+    if (!deviceCode) {
+      exitWithError('Usage: miles login --poll <deviceCode> [--json] [--timeout <seconds>] [--once]', 2);
+    }
+    const result = await pollLoginDeviceCode({
+      deviceCode,
+      serverUrl,
+      intervalSeconds: 5,
+      timeoutSeconds: parsePositiveSecondsFlag(args, '--timeout'),
+      once: hasCommandFlag(args, '--once'),
+    });
+    const exitStatus =
+      result.status === 'authorized' || result.status === 'pending' ? 0 : 1;
+    printLoginPollResult(result, exitStatus);
+    return;
+  }
+
+  if (cliOptions.json) {
+    exitWithError('Use `miles login --request --json` to get a code, then `miles login --poll <deviceCode> --json` after the user authorizes it.', 2);
+  }
+
+  const shouldOpen = !hasCommandFlag(args, '--no-open');
   console.log(
     shouldOpen ? 'Opening browser for Miles login...' : 'Starting Miles login...',
   );
 
-  // Request device code
-  const data = await apiRequest('POST', '/api/v2/auth/device/device-code', {
-    serverUrl,
-  });
-  const { deviceCode, userCode, verificationUrl, interval } = data;
-  const expiresIn = data.expiresIn ?? data.expires_in;
-  if (!deviceCode || !userCode || !verificationUrl) {
-    throw new ApiError('Invalid login response from Miles.', 502, {
-      missing: {
-        deviceCode: !deviceCode,
-        userCode: !userCode,
-        verificationUrl: !verificationUrl,
-      },
-    });
-  }
+  const deviceAuth = await requestLoginDeviceCode(serverUrl);
+  const {
+    deviceCode,
+    userCode,
+    verificationUrl,
+    intervalSeconds,
+    expiresInSeconds,
+  } = deviceAuth;
 
   console.log(`\nYour code: ${userCode}`);
   console.log(`Login URL: ${verificationUrl}\n`);
@@ -544,8 +807,8 @@ async function cmdLogin(args = []) {
 
   const { pollIntervalMs, maxAttempts, maxWaitMs } =
     getDeviceAuthPollingPlan({
-      intervalSeconds: interval,
-      expiresInSeconds: expiresIn,
+      intervalSeconds,
+      expiresInSeconds,
     });
 
   let nextPollIntervalMs = pollIntervalMs;
@@ -2344,7 +2607,8 @@ if (!command || command === 'help' || command === '--help') {
 
 Authentication:
   miles doctor                      Check local CLI setup
-  miles login                       Device auth flow (opens browser)
+  miles login --request --json      Request a device login code
+  miles login --poll <deviceCode>   Poll for device authorization
   miles logout                      Clear stored credentials
   miles whoami                      Show current auth + active site
 

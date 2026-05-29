@@ -84,7 +84,7 @@ export function formatRetryAfter(retryAfterSeconds) {
 export function buildDevicePollingTimeoutMessage(maxWaitMs) {
   return [
     `Authorization was not completed within ${formatDuration(maxWaitMs)}.`,
-    'Run `miles login` again for a fresh code.',
+    'Run `miles login --request --json` for a fresh code.',
   ].join(' ');
 }
 
@@ -94,6 +94,6 @@ export function buildDevicePollingRateLimitMessage(retryAfterSeconds) {
     'Miles login polling was rate limited before authorization completed.',
   ];
   if (retryAfter) message.push(retryAfter);
-  message.push('Run `miles login` again for a fresh code.');
+  message.push('Run `miles login --request --json` for a fresh code.');
   return message.join(' ');
 }

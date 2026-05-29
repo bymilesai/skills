@@ -26,7 +26,8 @@ This is the complete set of commands. Do not invent others.
 |---------|---------|
 | `miles doctor` | Check local CLI setup and paths |
 | `miles whoami` | Check authentication status |
-| `miles login` | Authenticate (production, opens external browser) |
+| `miles login --request --json` | Request an agent-displayable device login code |
+| `miles login --poll <deviceCode> --json` | Poll for device login authorization |
 | `miles create-site "<description>" [--brief file]` | Create site, start conversation, wait for response |
 | `miles reply "<message>"` | Send a message to Miles, wait for response |
 | `miles reply --file <path>` | Send reply text from a file; best for prices, quotes, Markdown, or long answers |
@@ -83,13 +84,32 @@ Then check setup explicitly:
 "$MILES_CLI" whoami
 ```
 
-If Miles is not authenticated, run:
+If Miles is not authenticated, use the non-blocking device login flow:
 
 ```bash
-"$MILES_CLI" login
+"$MILES_CLI" login --request --json
 ```
 
-Do not assume the Claude Code `hooks:` frontmatter ran. Non-Claude agents may ignore those hooks, so normal skill instructions must still take the user through `doctor`, `whoami`, and `login` when needed.
+Parse `userCode`, `verificationUrl`, `deviceCode`, `intervalSeconds`, and `expiresInSeconds` from JSON. Show the user the code and complete URL as the final assistant message of the turn, then stop and wait for the user to authorize. Do not run another command after displaying the code in that turn.
+
+Your final message for that turn must include:
+
+```text
+Code: <userCode>
+Open: <verificationUrl>
+
+Open the URL, confirm the page shows this exact code, then click Authorize. Tell me when it is done.
+```
+
+After the user confirms authorization, run:
+
+```bash
+"$MILES_CLI" login --poll <deviceCode> --json --interval <intervalSeconds> --expires-in <expiresInSeconds>
+```
+
+If `status` is `authorized`, confirm with `"$MILES_CLI" whoami`, then continue. If `status` is `authorized_but_unsaved`, tell the user authorization succeeded but credentials could not be saved at `credentialsPath`, and include the error. If `status` is `pending`, keep polling the same `deviceCode`; when `nextPollIntervalSeconds` or `retryAfterSeconds` is present, wait at least that long before the next poll. If `status` is `rate_limited`, wait `retryAfterSeconds` before polling the same `deviceCode` again; do not request a fresh code. If `status` is `expired` or `timeout`, request a fresh code with `login --request --json` and show that new code to the user. If `status` is `denied`, tell the user authorization was declined and offer to retry with a fresh code. If `status` is `transport_error`, retry polling the same `deviceCode` unless the code has expired. If `status` is `invalid_request`, start a fresh login and report the error if it repeats.
+
+Do not assume the Claude Code `hooks:` frontmatter ran. Non-Claude agents may ignore those hooks, so normal skill instructions must still take the user through `doctor`, `whoami`, and the non-blocking login flow when needed.
 
 ## Updating or Uninstalling Miles
 
@@ -234,13 +254,34 @@ For straightforward visual edits, proceed with a focused Miles edit request. Ins
 "$MILES_CLI" whoami
 ```
 
-If not logged in:
+If not logged in, never run `login` blocking in the foreground. It hides the device code while the agent is waiting.
 
 ```bash
-"$MILES_CLI" login
+"$MILES_CLI" login --request --json
 ```
 
-This opens the OS/default browser for device authorization. Keep login in the external browser because in-app browsers may not support hardware security keys or other required identity-provider flows. After the CLI is logged in, `"$MILES_CLI" preview --json` can log the host's browser surface into the dashboard for viewing and WebSocket work.
+Parse the JSON, including `deviceCode`, `userCode`, complete `verificationUrl`, `intervalSeconds`, and `expiresInSeconds`. Display the agent-side `userCode` and complete `verificationUrl` to the user as the final assistant message of the turn. The user must compare the browser code with the agent code before authorizing; this is a security requirement. Prefer the complete URL over opening the OS/default browser because the host browser may differ from the user's active browser profile.
+
+Hard rules:
+
+- Never run `login` blocking in the foreground.
+- Always display the agent-side code to the user and ask them to confirm it matches the browser before they authorize.
+- Never tell the user to authorize a code the agent did not just generate. If a browser tab shows a different code than the current agent code, instruct the user to discard that tab.
+- The message containing the code must be the final assistant message of the turn, so the user can act on it.
+- Prefer the request/poll flow and hand the user the `verificationUrl`; OS browser opening can land in the wrong profile.
+- On `expired` or `timeout`, mint a fresh code rather than reusing the old one.
+- On `rate_limited`, wait before polling the same device code again; do not mint a fresh code.
+- When using `--once`, inspect `status`; exit code 0 can mean either `authorized` or `pending`.
+
+When the user says they have authorized, finish the login:
+
+```bash
+"$MILES_CLI" login --poll <deviceCode> --json --interval <intervalSeconds> --expires-in <expiresInSeconds>
+```
+
+When `status` is `authorized`, run `"$MILES_CLI" whoami` to confirm before continuing.
+
+After the CLI is logged in, `"$MILES_CLI" preview --json` can log the host's browser surface into the dashboard for viewing and WebSocket work.
 
 ## Step 2: Create a Site
 

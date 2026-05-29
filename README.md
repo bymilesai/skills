@@ -112,15 +112,43 @@ The installer also writes a lifecycle helper:
 
 Agents should run `check-update --json` when Miles is first used in a session. The check is cached for 24 hours and should only prompt the user when it returns `"shouldPrompt": true`. Urgent updates may keep returning `"shouldPrompt": true` from the cached result until the user updates. Updates and uninstall always require user approval.
 
-When files under `miles/` change, regenerate the payload manifest before testing or release:
+When files under `miles/` change during normal development, regenerate the payload manifest before testing:
 
 ```bash
 /opt/homebrew/bin/node scripts/generate-payload-manifest.mjs
 ```
 
+## Releasing Skill Updates
+
+Skill updates should ship as versioned releases, not moving branch archives. The release workflow mirrors the Miles plugin release model:
+
+1. Run the release script from a clean `trunk` checkout.
+2. The script bumps `version.json`, `install.sh`, and `payload-manifest.json`.
+3. The script opens and merges a release PR, then pushes a `skill-v<version>` tag.
+4. GitHub Actions packages an immutable `miles-skill-<version>.tar.gz` release asset, computes its SHA-256, and writes that checksum back to `trunk`'s `version.json`.
+5. Installed helpers compare their receipt version with `https://start.bymiles.ai/version.json` and prompt users when a newer release is available.
+
+Default patch release:
+
+```bash
+/opt/homebrew/bin/node scripts/release-skill.mjs patch
+```
+
+Urgent release that keeps prompting users until they update:
+
+```bash
+/opt/homebrew/bin/node scripts/release-skill.mjs --urgent patch
+```
+
+Preview the next version without changing files:
+
+```bash
+/opt/homebrew/bin/node scripts/release-skill.mjs --dry-run patch
+```
+
 The workflow looks like:
 
-1. **Authentication** — `miles login` opens a browser for device auth
+1. **Authentication** — agents use `miles login --request --json`, show the device code, then finish with `miles login --poll`
 2. **Create site** — `miles create-site "description"` starts a conversation with Miles
 3. **Discovery** — Miles asks questions, your agent relays them to you, sends your answers back
 4. **Brief review** — Miles presents a design brief for your approval

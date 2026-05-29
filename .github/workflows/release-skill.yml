@@ -1,0 +1,133 @@
+name: Release Miles Skill
+
+on:
+  push:
+    tags:
+      - 'skill-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  package-and-release:
+    runs-on: ubuntu-latest
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate release manifest
+        id: version
+        run: |
+          set -euo pipefail
+
+          TAG_NAME="${GITHUB_REF_NAME}"
+          VERSION="${TAG_NAME#skill-v}"
+
+          node - "$VERSION" <<'NODE'
+          const fs = require('fs');
+          const version = process.argv[2];
+          const manifest = JSON.parse(fs.readFileSync('version.json', 'utf8'));
+          const expectedBase = `https://github.com/bymilesai/skills/releases/download/skill-v${version}`;
+
+          if (manifest.version !== version) {
+            throw new Error(`version.json has ${manifest.version}, expected ${version}`);
+          }
+          if (manifest.source !== `${expectedBase}/miles-skill-${version}.tar.gz`) {
+            throw new Error(`version.json source does not point at the ${version} release asset`);
+          }
+          if (manifest.payloadManifest !== `${expectedBase}/payload-manifest-${version}.json`) {
+            throw new Error(`version.json payloadManifest does not point at the ${version} release asset`);
+          }
+          if (manifest.sourceSha256 !== null) {
+            throw new Error('version.json sourceSha256 must be null before the release asset is packaged');
+          }
+          NODE
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Run release checks
+        run: |
+          set -euo pipefail
+          node --check miles/scripts/miles-cli.mjs
+          node --check miles/scripts/test-miles-cli.mjs
+          node scripts/generate-payload-manifest.mjs --check
+          node test-install-lifecycle.mjs
+          node miles/scripts/test-miles-cli.mjs
+
+      - name: Package release asset
+        id: package
+        run: |
+          set -euo pipefail
+          mkdir -p build/release
+          node scripts/package-skill-release.mjs \
+            --version "${{ steps.version.outputs.version }}" \
+            --output-dir build/release \
+            --json > build/release/metadata.json
+
+          cat build/release/metadata.json
+
+          node - <<'NODE' >> "$GITHUB_OUTPUT"
+          const fs = require('fs');
+          const metadata = JSON.parse(fs.readFileSync('build/release/metadata.json', 'utf8'));
+          for (const [key, value] of Object.entries(metadata)) {
+            console.log(`${key}=${value}`);
+          }
+          NODE
+
+      - name: Create GitHub release
+        run: |
+          set -euo pipefail
+
+          gh release create "${{ steps.version.outputs.tag }}" \
+            "${{ steps.package.outputs.archive }}#${{ steps.package.outputs.archiveName }}" \
+            "${{ steps.package.outputs.payloadManifest }}#${{ steps.package.outputs.payloadManifestName }}" \
+            --repo bymilesai/skills \
+            --title "Miles Skill ${{ steps.version.outputs.version }}" \
+            --notes "Miles agent skill release ${{ steps.version.outputs.version }}.
+
+Source SHA-256: \`${{ steps.package.outputs.archiveSha256 }}\`"
+
+      - name: Publish checksum to trunk manifest
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin trunk
+          git checkout trunk
+
+          node - "${{ steps.version.outputs.version }}" "${{ steps.package.outputs.archiveSha256 }}" <<'NODE'
+          const fs = require('fs');
+          const version = process.argv[2];
+          const sha = process.argv[3];
+          const manifest = JSON.parse(fs.readFileSync('version.json', 'utf8'));
+
+          if (manifest.version !== version) {
+            throw new Error(`trunk version.json has ${manifest.version}, expected ${version}`);
+          }
+
+          manifest.sourceSha256 = sha;
+          fs.writeFileSync('version.json', `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
+
+          if git diff --quiet -- version.json; then
+            echo "version.json already contains the release SHA-256."
+            exit 0
+          fi
+
+          git add version.json
+          git commit -m "Publish skill ${{ steps.version.outputs.version }} checksum"
+          git push origin HEAD:trunk

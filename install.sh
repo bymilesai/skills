@@ -147,7 +147,9 @@ run_install() {
 
 Miles is installed.
 
-Ask now: "Use Miles to design my website."
+Tell your agent what site you want to create. A useful prompt is:
+"Use Miles to design a website for [business/project]. It should feel [style] and help visitors [goal]."
+If you already have a WordPress site, include its URL and what you want changed.
 If your agent does not see the new skill, start a new chat or reload the agent window.
 
 MSG

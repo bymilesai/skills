@@ -53,9 +53,9 @@ This installs the `miles/` skill into common agent skill directories such as:
 
 It also creates `~/.miles/bin/miles-skill`, a local helper for status, update checks, updates, and uninstall.
 
-After install, ask for Miles:
+After install, tell your agent what you want to build. A useful prompt includes the business or project, desired style, primary visitor goal, and any existing WordPress URL.
 
-> "Use Miles to design my website."
+> "Use Miles to design a warm, modern website for my yoga studio in Portland that helps visitors book intro classes."
 
 If your agent does not see the new skill, start a new chat or reload the agent window.
 

@@ -106,7 +106,7 @@ Tell the user they can try Miles now. Codex and Claude Code commonly pick up new
 
 Suggested wording:
 
-> Miles is installed. Ask: "Use Miles to design my website." If this agent does not see the new skill, start a new chat or reload the agent window.
+> Miles is installed. What site should we design? Tell me the business or project, the style you want, the main visitor goal, and any existing WordPress URL. For example: "Use Miles to design a warm, modern website for my yoga studio in Portland that helps visitors book intro classes." If this agent does not see the new skill, start a new chat or reload the agent window.
 
 ## 4. First use
 
@@ -146,7 +146,7 @@ If unauthenticated, run:
 Keep it short and concrete:
 
 ```text
-Miles is installed. Ask: "Use Miles to design my website." On first use I may ask you to log in at bymiles.ai. If this agent does not see the new skill, start a new chat or reload the agent window.
+Miles is installed. What site should we design? Tell me the business or project, the style you want, the main visitor goal, and any existing WordPress URL. On first use I may ask you to log in at bymiles.ai.
 ```
 
 ## 6. Uninstall

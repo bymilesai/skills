@@ -51,6 +51,8 @@ This installs the `miles/` skill into common agent skill directories such as:
 ~/.config/opencode/skills/miles/
 ```
 
+It also creates `~/.miles/bin/miles-skill`, a local helper for status, update checks, updates, and uninstall.
+
 After install, restart or reload your coding agent and ask for Miles again.
 
 > "Use Miles to design my website."
@@ -91,6 +93,17 @@ export MILES_HOME=/tmp/miles-skill-smoke
 export MILES_CLI=/path/to/installed/miles/scripts/miles
 "$MILES_CLI" doctor --json
 ```
+
+The installer also writes a lifecycle helper:
+
+```bash
+~/.miles/bin/miles-skill status --json
+~/.miles/bin/miles-skill check-update --json
+~/.miles/bin/miles-skill update
+~/.miles/bin/miles-skill uninstall
+```
+
+Agents should run `check-update --json` when Miles is first used in a session. The check is cached for 24 hours and should only prompt the user when it returns `"shouldPrompt": true`. Updates and uninstall always require user approval.
 
 The workflow looks like:
 

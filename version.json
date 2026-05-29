@@ -1,0 +1,9 @@
+{
+  "name": "miles",
+  "version": "2026.05.29.2",
+  "channel": "trunk",
+  "source": "https://github.com/bymilesai/skills/archive/refs/heads/trunk.tar.gz",
+  "installScript": "https://start.bymiles.ai/install.sh",
+  "updateCheckIntervalHours": 24,
+  "urgent": false
+}

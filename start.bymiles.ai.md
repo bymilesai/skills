@@ -65,9 +65,10 @@ It also creates:
 
 ```text
 ~/.miles/bin/miles
+~/.miles/bin/miles-skill
 ```
 
-The runtime requires Node.js 20+. The install path does not require `npx`, and the installer does not open a browser.
+The installer writes an install receipt at `~/.miles/install/receipt.json`. The runtime requires Node.js 20+. The install path does not require `npx`, and the installer does not open a browser.
 
 ## Approval Prompt
 
@@ -104,8 +105,15 @@ Ask Miles to build a website for my yoga studio.
 Check setup and authentication:
 
 ```bash
+~/.miles/bin/miles-skill check-update --json
 ~/.miles/bin/miles doctor --json
 ~/.miles/bin/miles whoami
+```
+
+The update check is locally gated and should fetch update metadata at most once every 24 hours. If it returns `"shouldPrompt": true`, summarize the update and ask approval before running:
+
+```bash
+~/.miles/bin/miles-skill update
 ```
 
 If the user is not logged in, run:
@@ -115,6 +123,31 @@ If the user is not logged in, run:
 ```
 
 The login flow opens the external browser for bymiles.ai device authorization.
+
+## Updating and uninstalling
+
+After install, users should not need to mention this setup URL. Treat these as natural prompts:
+
+```text
+Update Miles
+Uninstall Miles
+```
+
+For update:
+
+```bash
+~/.miles/bin/miles-skill check-update --json --force
+~/.miles/bin/miles-skill update
+```
+
+For uninstall:
+
+```bash
+~/.miles/bin/miles-skill uninstall --dry-run --json
+~/.miles/bin/miles-skill uninstall
+```
+
+Ask approval before running update or uninstall. Do not remove `~/.miles/credentials.json` unless the user explicitly asks to purge all local Miles data.
 
 ## More
 

@@ -33,7 +33,7 @@ Miles is installed.
 Next steps:
   1. Restart or reload your coding agent so it discovers the new skill.
   2. Ask: "Use Miles to help me design a site."
-  3. On first use, run `miles login` if Miles asks you to authenticate.
+  3. On first use, run `~/.miles/bin/miles login` if Miles asks you to authenticate.
 
 Installed skill locations:
   ~/.agents/skills/miles
@@ -151,7 +151,7 @@ EOF
 }
 
 log() {
-  printf '%s\n' "$*"
+  printf '%s\n' "$*" >&2
 }
 
 fail() {

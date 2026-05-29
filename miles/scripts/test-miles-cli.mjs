@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'fs';
 import { tmpdir } from 'os';
@@ -283,6 +284,25 @@ try {
   assert(whoamiResult.status === 0, 'whoami --json should exit 0 when logged out');
   assert(whoami.authenticated === false, 'whoami should report unauthenticated JSON');
   assert(whoami.milesHome === whoamiHome, 'whoami should honor MILES_HOME');
+
+  const secureCredsHome = makeTempDir();
+  writeFileSync(
+    join(secureCredsHome, 'credentials.json'),
+    JSON.stringify({ apiKey: 'existing-key' }),
+    { mode: 0o644 },
+  );
+  const { result: logoutResult } = runJson(['logout', '--json'], {
+    milesHome: secureCredsHome,
+  });
+  assert(logoutResult.status === 0, 'logout --json should exit cleanly');
+  assert(
+    (statSync(secureCredsHome).mode & 0o777) === 0o700,
+    'Miles home should be restricted to the current user',
+  );
+  assert(
+    (statSync(join(secureCredsHome, 'credentials.json')).mode & 0o777) === 0o600,
+    'credentials should be restricted to the current user',
+  );
 
   const { result: statusResult, json: status } = runJson(['status', '--json']);
   assert(statusResult.status === 1, 'status --json should fail without an active site');

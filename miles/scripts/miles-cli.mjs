@@ -9,6 +9,7 @@
 
 import {
   accessSync,
+  chmodSync,
   constants,
   existsSync,
   mkdirSync,
@@ -100,8 +101,22 @@ function loadCredentials() {
 }
 
 function saveCredentials(creds) {
-  mkdirSync(CREDENTIALS_DIR, { recursive: true });
-  writeFileSync(CREDENTIALS_FILE, JSON.stringify(creds, null, 2));
+  ensureCredentialsDir();
+  writeFileSync(CREDENTIALS_FILE, JSON.stringify(creds, null, 2), { mode: 0o600 });
+  try {
+    chmodSync(CREDENTIALS_FILE, 0o600);
+  } catch {
+    // Best effort on filesystems that do not preserve POSIX modes.
+  }
+}
+
+function ensureCredentialsDir() {
+  mkdirSync(CREDENTIALS_DIR, { recursive: true, mode: 0o700 });
+  try {
+    chmodSync(CREDENTIALS_DIR, 0o700);
+  } catch {
+    // Best effort on filesystems that do not preserve POSIX modes.
+  }
 }
 
 function getActiveSite(creds) {
@@ -110,7 +125,7 @@ function getActiveSite(creds) {
 }
 
 function writeLastResponse(text) {
-  mkdirSync(CREDENTIALS_DIR, { recursive: true });
+  ensureCredentialsDir();
   writeFileSync(LAST_RESPONSE_FILE, text);
 }
 
@@ -655,7 +670,7 @@ async function cmdDoctor() {
   let milesHomeDetail = MILES_HOME;
   let milesHomeWritable = true;
   try {
-    mkdirSync(MILES_HOME, { recursive: true });
+    ensureCredentialsDir();
     accessSync(MILES_HOME, constants.W_OK);
   } catch (err) {
     milesHomeWritable = false;

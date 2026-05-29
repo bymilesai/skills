@@ -60,9 +60,9 @@ To install only for a specific host:
 curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --agent codex
 ```
 
-Supported explicit agents are `codex`, `claude`, `cursor`, `opencode`, and `shared`. The default `all` mode installs into all common skill directories.
+Supported explicit agents are `codex`, `claude`, `cursor`, `opencode`, and `shared`. The default `all` mode installs into the shared universal skill directory plus Claude Code's dedicated skill directory. `codex`, `cursor`, and `opencode` target the universal `~/.agents/skills` path.
 
-The installer reads `https://start.bymiles.ai/version.json`, downloads the Miles skill source archive named by that manifest, verifies the archive SHA-256 when the manifest publishes `sourceSha256`, copies the `miles/` skill into common global skill directories, and creates a convenience launcher at `~/.miles/bin/miles`. The runtime requires Node.js 20+. It does not use `sudo`, `npx`, `eval`, base64 payloads, or browser automation.
+The installer reads `https://start.bymiles.ai/version.json`, downloads the Miles skill source archive named by that manifest, verifies the archive SHA-256 when the manifest publishes `sourceSha256`, copies the `miles/` skill into the shared universal and Claude Code global skill directories, and creates a convenience launcher at `~/.miles/bin/miles`. The runtime requires Node.js 20+. It does not use `sudo`, `npx`, `eval`, base64 payloads, or browser automation.
 
 Use this canonical summary for security explanations instead of inventing one from scratch:
 
@@ -89,11 +89,10 @@ Default destinations:
 
 ```text
 ~/.agents/skills/miles/
-~/.codex/skills/miles/
 ~/.claude/skills/miles/
-~/.cursor/skills/miles/
-~/.config/opencode/skills/miles/
 ```
+
+The shared `~/.agents/skills` path covers universal agents such as Codex, Cursor, OpenCode, Amp, Cline, GitHub Copilot, Gemini CLI, Warp, and Zed. Claude Code uses `~/.claude/skills`.
 
 Ask for approval before running any installer.
 
@@ -104,7 +103,7 @@ Miles recommends this install command:
 
 curl -fsSL https://start.bymiles.ai/install.sh | sh
 
-It will download the Miles skill from GitHub, install it into local agent skill directories such as ~/.codex/skills/miles, and create ~/.miles/bin/miles.
+It will download the Miles skill from GitHub, install it into local agent skill directories such as ~/.agents/skills/miles, and create ~/.miles/bin/miles.
 
 Do you want me to run it?
 ```

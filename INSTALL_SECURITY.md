@@ -18,9 +18,15 @@ The installer reads:
 https://start.bymiles.ai/version.json
 ```
 
-The manifest names the Miles source archive, optional `sourceSha256`, and payload manifest. When `sourceSha256` is present, the installer verifies the downloaded archive before extracting it.
+The manifest names the Miles source archive, optional `sourceSha256`, and payload manifest. Released versions use immutable GitHub Release assets such as:
 
-The payload manifest is:
+```text
+https://github.com/bymilesai/skills/releases/download/skill-v2026.05.29.5/miles-skill-2026.05.29.5.tar.gz
+```
+
+When `sourceSha256` is present, the installer verifies the downloaded archive before extracting it. Development manifests may temporarily use `sourceSha256: null`, but production releases should publish a checksum before users are asked to update.
+
+The payload manifest is versioned with the release. During local development and pre-release inspection it may also be served from:
 
 ```text
 https://start.bymiles.ai/payload-manifest.json
@@ -31,15 +37,14 @@ Dry runs perform read-only GETs for the install and payload manifests unless a l
 
 ## What It Writes
 
-The installer copies the `miles/` skill into selected local agent skill directories. Default universal install targets:
+The installer copies the `miles/` skill into selected local agent skill directories. Default install targets:
 
 ```text
 ~/.agents/skills/miles/
-~/.codex/skills/miles/
 ~/.claude/skills/miles/
-~/.cursor/skills/miles/
-~/.config/opencode/skills/miles/
 ```
+
+The shared `~/.agents/skills` path covers universal agents such as Codex, Cursor, and OpenCode. Claude Code uses `~/.claude/skills`.
 
 It also creates:
 

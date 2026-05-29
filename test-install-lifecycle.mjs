@@ -268,7 +268,27 @@ try {
 
   const status = runManagerJson(home, ['status', '--json']);
   assert(status.installed === true, 'status should report installed after install');
-  assert(status.destinations.length === 5, 'all-agent install should record destinations');
+  assert(status.destinations.length === 2, 'all-agent install should record universal and Claude destinations');
+  assert(
+    existsSync(join(home, '.agents/skills/miles/SKILL.md')),
+    'all-agent install should write the universal skill destination',
+  );
+  assert(
+    existsSync(join(home, '.claude/skills/miles/SKILL.md')),
+    'all-agent install should write the Claude Code skill destination',
+  );
+  assert(
+    !existsSync(join(home, '.codex/skills/miles')),
+    'all-agent install should not write a separate Codex skill destination',
+  );
+  assert(
+    !existsSync(join(home, '.cursor/skills/miles')),
+    'all-agent install should not write a separate Cursor skill destination',
+  );
+  assert(
+    !existsSync(join(home, '.config/opencode/skills/miles')),
+    'all-agent install should not write a separate OpenCode skill destination',
+  );
 
   const archiveDir = makeTempDir('miles-install-archive-');
   const archive = createSourceArchive(archiveDir);
@@ -286,8 +306,8 @@ try {
     sourceDir: null,
   });
   assert(
-    existsSync(join(archiveHome, '.codex/skills/miles/SKILL.md')),
-    'install should support checksum-verified archive manifests',
+    existsSync(join(archiveHome, '.agents/skills/miles/SKILL.md')),
+    'Codex install should use the universal skill destination',
   );
 
   const badSourceManifest = writeSourceManifest(
@@ -364,23 +384,23 @@ try {
   const updated = runManagerJson(home, ['status', '--json']);
   assert(updated.installed === true, 'status should still work after update');
 
-  const foreignDir = join(home, '.cursor/skills/miles');
+  const foreignDir = join(home, '.claude/skills/miles');
   rmSync(foreignDir, { recursive: true, force: true });
   mkdirSync(foreignDir, { recursive: true });
   writeFileSync(join(foreignDir, 'SKILL.md'), 'name: something-else\n');
 
   const uninstallPlan = runManagerJson(home, ['uninstall', '--dry-run', '--json']);
-  const cursorPlan = uninstallPlan.destinations.find((entry) =>
-    entry.path.includes('.cursor/skills/miles'),
+  const claudePlan = uninstallPlan.destinations.find((entry) =>
+    entry.path.includes('.claude/skills/miles'),
   );
-  assert(cursorPlan, 'uninstall plan should include recorded cursor destination');
-  assert(cursorPlan.exists === true, 'foreign cursor dir should exist in plan');
-  assert(cursorPlan.owned === false, 'foreign cursor dir should not be owned');
-  assert(cursorPlan.willRemove === false, 'foreign cursor dir should not be removed');
+  assert(claudePlan, 'uninstall plan should include recorded Claude destination');
+  assert(claudePlan.exists === true, 'foreign Claude dir should exist in plan');
+  assert(claudePlan.owned === false, 'foreign Claude dir should not be owned');
+  assert(claudePlan.willRemove === false, 'foreign Claude dir should not be removed');
 
   writeFileSync(join(home, '.miles/credentials.json'), '{"token":"keep"}\n');
   runManager(home, ['uninstall', '--json']);
-  assert(!existsSync(join(home, '.codex/skills/miles')), 'owned codex skill should be removed');
+  assert(!existsSync(join(home, '.agents/skills/miles')), 'owned universal skill should be removed');
   assert(existsSync(foreignDir), 'foreign skill dir should be preserved');
   assert(
     existsSync(join(home, '.miles/credentials.json')),

@@ -54,15 +54,14 @@ If you are Codex and outbound network access is blocked, tell the user Codex nee
 
 ## What The Installer Does
 
-The installer reads `https://start.bymiles.ai/version.json`, downloads the source archive named by that manifest, verifies the archive SHA-256 when the manifest publishes `sourceSha256`, and copies the `miles/` skill into these common agent skill directories:
+The installer reads `https://start.bymiles.ai/version.json`, downloads the source archive named by that manifest, verifies the archive SHA-256 when the manifest publishes `sourceSha256`, and copies the `miles/` skill into these agent skill directories by default:
 
 ```text
 ~/.agents/skills/miles/
-~/.codex/skills/miles/
 ~/.claude/skills/miles/
-~/.cursor/skills/miles/
-~/.config/opencode/skills/miles/
 ```
+
+The shared `~/.agents/skills` path covers universal agents such as Codex, Cursor, and OpenCode. Claude Code uses `~/.claude/skills`.
 
 It also creates:
 
@@ -88,7 +87,7 @@ Miles recommends this install command:
 
 curl -fsSL https://start.bymiles.ai/install.sh | sh
 
-It will download the Miles skill from GitHub, install it into local agent skill directories such as ~/.codex/skills/miles, and create ~/.miles/bin/miles.
+It will download the Miles skill from GitHub, install it into local agent skill directories such as ~/.agents/skills/miles, and create ~/.miles/bin/miles.
 
 Do you want me to run it?
 ```

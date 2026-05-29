@@ -1086,31 +1086,22 @@ destination_parent_dirs() {
     all)
       all_known_destination_parent_dirs
       ;;
-    shared)
+    shared | codex | cursor | opencode)
       printf '%s\n' "$HOME/.agents/skills"
-      ;;
-    codex)
-      printf '%s\n' "${CODEX_HOME:-$HOME/.codex}/skills"
       ;;
     claude)
       printf '%s\n' "$HOME/.claude/skills"
-      ;;
-    cursor)
-      printf '%s\n' "$HOME/.cursor/skills"
-      ;;
-    opencode)
-      printf '%s\n' "$HOME/.config/opencode/skills"
       ;;
   esac
 }
 
 all_known_destination_parent_dirs() {
+  # Follow the Vercel skills CLI grouping: Codex, Cursor, OpenCode,
+  # and other universal agents share .agents/skills. Claude Code uses
+  # its dedicated global skill directory.
   printf '%s\n' \
     "$HOME/.agents/skills" \
-    "${CODEX_HOME:-$HOME/.codex}/skills" \
-    "$HOME/.claude/skills" \
-    "$HOME/.cursor/skills" \
-    "$HOME/.config/opencode/skills"
+    "$HOME/.claude/skills"
 }
 
 status_parent_dirs() {
@@ -1127,20 +1118,11 @@ uninstall_parent_dirs() {
 
 primary_launcher_target() {
   case "$AGENT" in
-    all | shared)
+    all | shared | codex | cursor | opencode)
       printf '%s\n' "$HOME/.agents/skills/miles/scripts/miles"
-      ;;
-    codex)
-      printf '%s\n' "${CODEX_HOME:-$HOME/.codex}/skills/miles/scripts/miles"
       ;;
     claude)
       printf '%s\n' "$HOME/.claude/skills/miles/scripts/miles"
-      ;;
-    cursor)
-      printf '%s\n' "$HOME/.cursor/skills/miles/scripts/miles"
-      ;;
-    opencode)
-      printf '%s\n' "$HOME/.config/opencode/skills/miles/scripts/miles"
       ;;
   esac
 }

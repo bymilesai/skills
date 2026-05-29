@@ -229,6 +229,18 @@ try {
     JSON.stringify(payloadManifest.files) === JSON.stringify(actualPayloadFiles),
     'payload-manifest.json files should match miles/ contents',
   );
+  const payloadCheck = spawnSync(
+    process.execPath,
+    [join(repoRoot, 'scripts/generate-payload-manifest.mjs'), '--check'],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    },
+  );
+  assert(
+    payloadCheck.status === 0,
+    `payload manifest generator check should pass\nstdout:\n${payloadCheck.stdout}\nstderr:\n${payloadCheck.stderr}`,
+  );
 
   const dryRun = run(['--dry-run'], { home: makeTempDir() });
   assert(

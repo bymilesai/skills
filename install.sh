@@ -247,6 +247,7 @@ EOF
 
 print_dry_run() {
   tmp_dir=$(make_tmp_dir)
+  trap 'rm -rf "$tmp_dir"' EXIT INT TERM
   manifest_file=''
   source_url=$(archive_url)
   source_sha256=''
@@ -300,6 +301,7 @@ EOF
 
 print_update_dry_run() {
   tmp_dir=$(make_tmp_dir)
+  trap 'rm -rf "$tmp_dir"' EXIT INT TERM
   manifest_file=''
   source_url=$(archive_url)
   source_sha256=''
@@ -382,6 +384,7 @@ EOF
 
 print_json_plan() {
   tmp_dir=$(make_tmp_dir)
+  trap 'rm -rf "$tmp_dir"' EXIT INT TERM
   manifest_file=''
   source_url=$(archive_url)
   source_sha256=''

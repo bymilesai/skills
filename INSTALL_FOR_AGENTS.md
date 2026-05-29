@@ -46,6 +46,7 @@ curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --dry-run
 ```
 
 The dry run prints the source archive, checksum status, destination directories, launcher paths, Node.js status, and payload file list. It writes no files.
+It performs read-only GETs for the install and payload manifests unless a local source override is provided. If those fetches fail, it still prints the local plan and says the payload could not be inspected.
 
 To get a machine-readable plan:
 

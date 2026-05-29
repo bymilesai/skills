@@ -36,6 +36,7 @@ curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --dry-run
 ```
 
 The dry run shows the source archive, checksum status, destination directories, launcher paths, Node.js status, and payload file list.
+It performs read-only GETs for the install and payload manifests unless a local source override is provided; if those fetches fail, it still prints the local plan and says the payload could not be inspected.
 
 To install only for Codex:
 
@@ -110,6 +111,12 @@ The installer also writes a lifecycle helper:
 ```
 
 Agents should run `check-update --json` when Miles is first used in a session. The check is cached for 24 hours and should only prompt the user when it returns `"shouldPrompt": true`. Urgent updates may keep returning `"shouldPrompt": true` from the cached result until the user updates. Updates and uninstall always require user approval.
+
+When files under `miles/` change, regenerate the payload manifest before testing or release:
+
+```bash
+/opt/homebrew/bin/node scripts/generate-payload-manifest.mjs
+```
 
 The workflow looks like:
 

@@ -27,6 +27,7 @@ https://start.bymiles.ai/payload-manifest.json
 ```
 
 Dry runs show the payload root, file count, total bytes, and included files before writing anything.
+Dry runs perform read-only GETs for the install and payload manifests unless a local source override is provided. If those fetches fail, the dry run still prints the local plan and says the payload could not be inspected.
 
 ## What It Writes
 

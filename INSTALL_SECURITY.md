@@ -37,15 +37,14 @@ Dry runs perform read-only GETs for the install and payload manifests unless a l
 
 ## What It Writes
 
-The installer copies the `miles/` skill into selected local agent skill directories. Default universal install targets:
+The installer copies the `miles/` skill into selected local agent skill directories. Default install targets:
 
 ```text
 ~/.agents/skills/miles/
-~/.codex/skills/miles/
 ~/.claude/skills/miles/
-~/.cursor/skills/miles/
-~/.config/opencode/skills/miles/
 ```
+
+The shared `~/.agents/skills` path covers universal agents such as Codex, Cursor, and OpenCode. Claude Code uses `~/.claude/skills`.
 
 It also creates:
 

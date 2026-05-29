@@ -48,11 +48,10 @@ This installs the `miles/` skill into common agent skill directories such as:
 
 ```
 ~/.agents/skills/miles/
-~/.codex/skills/miles/
 ~/.claude/skills/miles/
-~/.cursor/skills/miles/
-~/.config/opencode/skills/miles/
 ```
+
+Miles follows the Vercel skills CLI convention: Codex, Cursor, OpenCode, and other universal agents use `~/.agents/skills`; Claude Code uses `~/.claude/skills`.
 
 It also creates `~/.miles/bin/miles-skill`, a local helper for status, update checks, updates, and uninstall. The installer reads `https://start.bymiles.ai/version.json` and verifies the source archive SHA-256 when the manifest publishes `sourceSha256`.
 

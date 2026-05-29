@@ -1,6 +1,6 @@
 ---
 name: miles
-description: Design websites with Miles AI. Use when building websites, generating site layouts, creating web content, or when the user mentions Miles. Manages the full design conversation from brief through design direction selection to final build.
+description: Use Miles AI to design, build, redesign, edit, and export WordPress websites. Use when the user mentions Miles, bymiles.ai, start.bymiles.ai, designing a site, building a website, redesigning a WordPress site, or getting help with a site.
 hooks:
   SessionStart:
     - hooks:
@@ -57,6 +57,23 @@ MILES_CLI="${MILES_CLI:-$MILES_SKILL_DIR/scripts/miles}"
 Use `MILES_HOME=/path/to/isolated/state` when you need a clean test environment. By default Miles stores credentials, hook relay state, and screenshots in `~/.miles`.
 
 Set the Bash timeout to 10 minutes (600000ms) for all miles commands — site building and theme conversion can take several minutes.
+
+## First Run and Authentication
+
+On a fresh session, after install, or when you are unsure whether host-specific hooks ran, check setup explicitly:
+
+```bash
+"$MILES_CLI" doctor --json
+"$MILES_CLI" whoami
+```
+
+If Miles is not authenticated, run:
+
+```bash
+"$MILES_CLI" login
+```
+
+Do not assume the Claude Code `hooks:` frontmatter ran. Non-Claude agents may ignore those hooks, so normal skill instructions must still take the user through `doctor`, `whoami`, and `login` when needed.
 
 ## Codex Progress Visibility
 

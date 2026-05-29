@@ -10,34 +10,63 @@ Miles can conduct a design interview, generates a strategic website brief, creat
 
 ## Install
 
+The easiest path is to ask your coding agent to install Miles from the public setup URL:
+
+> "Use Miles at start.bymiles.ai to help me design a site."
+
+Your agent should read the instructions at `https://start.bymiles.ai`, propose one install command, ask for your approval, then tell you to restart or reload the agent so the skill is discovered.
+
+The universal install command is:
+
+```bash
+curl -fsSL https://start.bymiles.ai/install.sh | sh
+```
+
+For an inspect-first install:
+
+```bash
+curl -fsSL https://start.bymiles.ai/install.sh -o /tmp/miles-install.sh
+sh /tmp/miles-install.sh
+```
+
+This installs the `miles/` skill into common agent skill directories such as:
+
+```
+~/.agents/skills/miles/
+~/.codex/skills/miles/
+~/.claude/skills/miles/
+~/.cursor/skills/miles/
+~/.config/opencode/skills/miles/
+```
+
+After install, restart or reload your coding agent and ask for Miles again.
+
+If you already use the Vercel skills CLI, this still works:
+
 ```bash
 npx skills add bymilesai/skills
 ```
 
-To validate a specific branch or tag before it becomes the default install:
+To validate a specific branch or tag with the skills CLI before it becomes the default install:
 
 ```bash
 npx skills add bymilesai/skills#branch-or-tag --skill miles
 ```
 
-Or manually place the `miles/` directory in your agent's documented skills folder:
-
-```
-~/.codex/skills/miles/
-~/.claude/skills/miles/
-<agent-skills-dir>/miles/
-```
+See [INSTALL_FOR_AGENTS.md](INSTALL_FOR_AGENTS.md) for the agent-facing install protocol and [start.bymiles.ai.md](start.bymiles.ai.md) for the content intended to be served at `https://start.bymiles.ai`.
 
 ## Requirements
 
 - Node.js 20+
 - A Miles AI account — sign up at [bymiles.ai](https://bymiles.ai)
 
+The current skill ships a zero-dependency Node CLI. The installer removes `npx` from the primary install path, but the runtime still needs Node 20+ until prebuilt binaries are published.
+
 ## Usage
 
 Once installed, just ask your AI agent to build a website with Miles:
 
-> "Ask Miles to build a website for my yoga studio in Portland"
+> "Use Miles to design a website for my yoga studio in Portland."
 
 The skill handles authentication, the design conversation with Miles, and the full build process. Your agent will relay Miles' questions to you and present design options for your approval. You can continue to make changes to your WordPress site with Miles.
 

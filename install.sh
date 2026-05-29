@@ -1,9 +1,29 @@
 #!/bin/sh
 set -eu
 
+DRY_RUN=0
+EXPLAIN=0
+JSON_OUTPUT=0
+AGENT=all
+
 main() {
   : "${HOME:?HOME must be set}"
   umask 077
+  parse_args "$@"
+
+  if [ "$EXPLAIN" -eq 1 ]; then
+    print_explain
+    exit 0
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    if [ "$JSON_OUTPUT" -eq 1 ]; then
+      print_json_plan
+    else
+      print_dry_run
+    fi
+    exit 0
+  fi
 
   tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/miles-install.XXXXXX")
   trap 'rm -rf "$tmp_dir"' EXIT INT TERM
@@ -19,44 +39,158 @@ main() {
     fail "Could not find miles/SKILL.md in $source_dir"
   fi
 
-  install_skill "$source_dir/miles" "$HOME/.agents/skills"
-  install_skill "$source_dir/miles" "${CODEX_HOME:-$HOME/.codex}/skills"
-  install_skill "$source_dir/miles" "$HOME/.claude/skills"
-  install_skill "$source_dir/miles" "$HOME/.cursor/skills"
-  install_skill "$source_dir/miles" "$HOME/.config/opencode/skills"
-  install_launcher "$HOME/.agents/skills/miles/scripts/miles"
+  destination_parent_dirs | while IFS= read -r parent_dir; do
+    install_skill "$source_dir/miles" "$parent_dir"
+  done
+  install_launcher "$(primary_launcher_target)"
 
   cat <<'MSG'
 
 Miles is installed.
 
-Next steps:
-  1. Restart or reload your coding agent so it discovers the new skill.
-  2. Ask: "Use Miles to help me design a site."
-  3. On first use, run `~/.miles/bin/miles login` if Miles asks you to authenticate.
-
-Installed skill locations:
-  ~/.agents/skills/miles
-  ~/.codex/skills/miles
-  ~/.claude/skills/miles
-  ~/.cursor/skills/miles
-  ~/.config/opencode/skills/miles
-
-Convenience CLI:
-  ~/.miles/bin/miles
+Restart or reload your coding agent so it discovers the new skill.
+Then ask: "Use Miles to design my website."
 
 MSG
+}
+
+parse_args() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --dry-run)
+        DRY_RUN=1
+        ;;
+      --explain | --print-summary)
+        EXPLAIN=1
+        ;;
+      --json)
+        JSON_OUTPUT=1
+        ;;
+      --agent)
+        shift
+        if [ "$#" -eq 0 ]; then
+          fail "--agent requires a value"
+        fi
+        AGENT=$1
+        ;;
+      -h | --help)
+        print_help
+        exit 0
+        ;;
+      *)
+        fail "Unknown option: $1"
+        ;;
+    esac
+    shift
+  done
+
+  case "$AGENT" in
+    all | shared | codex | claude | cursor | opencode) ;;
+    *)
+      fail "Unsupported --agent value: $AGENT"
+      ;;
+  esac
+}
+
+print_help() {
+  cat <<'MSG'
+Miles agent skill installer
+
+Usage:
+  sh install.sh [--dry-run] [--json] [--explain] [--agent all|shared|codex|claude|cursor|opencode]
+
+Examples:
+  curl -fsSL https://start.bymiles.ai/install.sh | sh
+  curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --dry-run
+  curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --dry-run --json
+  sh install.sh --agent codex
+MSG
+}
+
+print_explain() {
+  cat <<EOF
+Miles installer summary:
+- Downloads the Miles skill from $(archive_url).
+- Installs the miles/ skill into local agent skill directories.
+- Creates a convenience launcher at ~/.miles/bin/miles.
+- Requires Node.js 20+ at runtime.
+- Does not use npx and does not open a browser.
+
+Recommended install command:
+  curl -fsSL https://start.bymiles.ai/install.sh | sh
+EOF
+}
+
+print_dry_run() {
+  cat <<EOF
+Miles install dry run
+
+Source archive: $(archive_url)
+Agent mode: $AGENT
+Node.js: $(node_status_text)
+
+Destinations:
+EOF
+
+  destination_parent_dirs | while IFS= read -r parent_dir; do
+    dest_dir="$parent_dir/miles"
+    printf '  - %s (%s)\n' "$(display_path "$dest_dir")" "$(exists_status "$dest_dir")"
+  done
+
+  cat <<EOF
+
+Launcher:
+  $(display_path "$HOME/.miles/bin/miles") -> $(display_path "$(primary_launcher_target)")
+
+No files were written.
+EOF
+}
+
+print_json_plan() {
+  printf '{\n'
+  printf '  "name": "miles",\n'
+  printf '  "action": "install_agent_skill",\n'
+  printf '  "source": "%s",\n' "$(json_escape "$(archive_url)")"
+  printf '  "agent": "%s",\n' "$(json_escape "$AGENT")"
+  printf '  "destinations": [\n'
+  first=1
+  destination_parent_dirs | while IFS= read -r parent_dir; do
+    dest_dir="$parent_dir/miles"
+    if [ "$first" -eq 1 ]; then
+      first=0
+    else
+      printf ',\n'
+    fi
+    printf '    { "path": "%s", "exists": %s }' \
+      "$(json_escape "$(display_path "$dest_dir")")" \
+      "$(json_bool_exists "$dest_dir")"
+  done
+  printf '\n  ],\n'
+  printf '  "launcher": {\n'
+  printf '    "path": "%s",\n' "$(json_escape "$(display_path "$HOME/.miles/bin/miles")")"
+  printf '    "target": "%s"\n' "$(json_escape "$(display_path "$(primary_launcher_target)")")"
+  printf '  },\n'
+  printf '  "requires": {\n'
+  printf '    "node": ">=20",\n'
+  printf '    "nodeFound": %s,\n' "$(node_found_json)"
+  printf '    "nodeVersion": "%s",\n' "$(json_escape "$(node_version_text)")"
+  printf '    "nodeOk": %s\n' "$(node_ok_json)"
+  printf '  }\n'
+  printf '}\n'
+}
+
+archive_url() {
+  repo_url=${MILES_SKILLS_REPO:-https://github.com/bymilesai/skills}
+  ref=${MILES_SKILLS_REF:-trunk}
+  printf '%s\n' "${MILES_SKILLS_ARCHIVE_URL:-$repo_url/archive/refs/heads/$ref.tar.gz}"
 }
 
 download_source() {
   tmp_dir=$1
   archive_path="$tmp_dir/skills.tar.gz"
-  repo_url=${MILES_SKILLS_REPO:-https://github.com/bymilesai/skills}
-  ref=${MILES_SKILLS_REF:-trunk}
-  archive_url=${MILES_SKILLS_ARCHIVE_URL:-$repo_url/archive/refs/heads/$ref.tar.gz}
 
-  log "Downloading Miles skill from $archive_url"
-  download_file "$archive_url" "$archive_path"
+  log "Downloading Miles skill from $(archive_url)"
+  download_file "$(archive_url)" "$archive_path"
 
   mkdir -p "$tmp_dir/source"
   tar -xzf "$archive_path" -C "$tmp_dir/source"
@@ -83,6 +217,54 @@ download_file() {
   fi
 
   fail "Install needs curl or wget to download the Miles skill"
+}
+
+destination_parent_dirs() {
+  case "$AGENT" in
+    all)
+      printf '%s\n' \
+        "$HOME/.agents/skills" \
+        "${CODEX_HOME:-$HOME/.codex}/skills" \
+        "$HOME/.claude/skills" \
+        "$HOME/.cursor/skills" \
+        "$HOME/.config/opencode/skills"
+      ;;
+    shared)
+      printf '%s\n' "$HOME/.agents/skills"
+      ;;
+    codex)
+      printf '%s\n' "${CODEX_HOME:-$HOME/.codex}/skills"
+      ;;
+    claude)
+      printf '%s\n' "$HOME/.claude/skills"
+      ;;
+    cursor)
+      printf '%s\n' "$HOME/.cursor/skills"
+      ;;
+    opencode)
+      printf '%s\n' "$HOME/.config/opencode/skills"
+      ;;
+  esac
+}
+
+primary_launcher_target() {
+  case "$AGENT" in
+    all | shared)
+      printf '%s\n' "$HOME/.agents/skills/miles/scripts/miles"
+      ;;
+    codex)
+      printf '%s\n' "${CODEX_HOME:-$HOME/.codex}/skills/miles/scripts/miles"
+      ;;
+    claude)
+      printf '%s\n' "$HOME/.claude/skills/miles/scripts/miles"
+      ;;
+    cursor)
+      printf '%s\n' "$HOME/.cursor/skills/miles/scripts/miles"
+      ;;
+    opencode)
+      printf '%s\n' "$HOME/.config/opencode/skills/miles/scripts/miles"
+      ;;
+  esac
 }
 
 install_skill() {
@@ -148,6 +330,94 @@ exec "$target" "\$@"
 EOF
 
   chmod 755 "$launcher" 2>/dev/null || true
+}
+
+node_status_text() {
+  if ! command -v node >/dev/null 2>&1; then
+    printf 'not found (requires Node.js 20+)\n'
+    return
+  fi
+
+  version=$(node -v 2>/dev/null || true)
+  major=$(printf '%s' "$version" | sed 's/^v//; s/\..*$//')
+  case "$major" in
+    '' | *[!0-9]*)
+      printf '%s (could not parse; requires Node.js 20+)\n' "$version"
+      ;;
+    *)
+      if [ "$major" -ge 20 ]; then
+        printf '%s (ok)\n' "$version"
+      else
+        printf '%s (requires Node.js 20+)\n' "$version"
+      fi
+      ;;
+  esac
+}
+
+node_version_text() {
+  if command -v node >/dev/null 2>&1; then
+    node -v 2>/dev/null || true
+  fi
+}
+
+node_found_json() {
+  if command -v node >/dev/null 2>&1; then
+    printf 'true\n'
+  else
+    printf 'false\n'
+  fi
+}
+
+node_ok_json() {
+  version=$(node_version_text)
+  major=$(printf '%s' "$version" | sed 's/^v//; s/\..*$//')
+  case "$major" in
+    '' | *[!0-9]*)
+      printf 'false\n'
+      ;;
+    *)
+      if [ "$major" -ge 20 ]; then
+        printf 'true\n'
+      else
+        printf 'false\n'
+      fi
+      ;;
+  esac
+}
+
+exists_status() {
+  if [ -e "$1" ]; then
+    printf 'exists\n'
+  else
+    printf 'will create\n'
+  fi
+}
+
+json_bool_exists() {
+  if [ -e "$1" ]; then
+    printf 'true\n'
+  else
+    printf 'false\n'
+  fi
+}
+
+display_path() {
+  path=$1
+  case "$path" in
+    "$HOME")
+      printf '~\n'
+      ;;
+    "$HOME"/*)
+      printf '~/%s\n' "${path#"$HOME"/}"
+      ;;
+    *)
+      printf '%s\n' "$path"
+      ;;
+  esac
+}
+
+json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
 log() {

@@ -12,9 +12,9 @@ Miles can conduct a design interview, generates a strategic website brief, creat
 
 The easiest path is to ask your coding agent to install Miles from the public setup URL:
 
-> "Use Miles at start.bymiles.ai to help me design a site."
+> "Install Miles from start.bymiles.ai"
 
-Your agent should read the instructions at `https://start.bymiles.ai`, propose one install command, ask for your approval, then tell you to restart or reload the agent so the skill is discovered.
+Your agent should fetch `https://start.bymiles.ai` as Markdown or plain text, propose one install command, ask for your approval, then tell you to restart or reload the agent so the skill is discovered. It should not open the page in a browser during install unless text fetching fails or you explicitly ask to view it.
 
 The universal install command is:
 
@@ -29,6 +29,18 @@ curl -fsSL https://start.bymiles.ai/install.sh -o /tmp/miles-install.sh
 sh /tmp/miles-install.sh
 ```
 
+To preview the install without writing files:
+
+```bash
+curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --dry-run
+```
+
+To install only for Codex:
+
+```bash
+curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --agent codex
+```
+
 This installs the `miles/` skill into common agent skill directories such as:
 
 ```
@@ -40,6 +52,8 @@ This installs the `miles/` skill into common agent skill directories such as:
 ```
 
 After install, restart or reload your coding agent and ask for Miles again.
+
+> "Use Miles to design my website."
 
 If you already use the Vercel skills CLI, this still works:
 

@@ -1,33 +1,57 @@
 # Start Miles
 
-Miles is an AI website designer for WordPress. It installs into coding agents as a skill, then helps users design, build, edit, and export sites through a conversation.
+Miles is an AI website designer for WordPress. It installs into coding agents as a skill, then helps users design, build, edit, and export sites through conversation.
 
-If you are a coding agent and the user asked you to use Miles at `start.bymiles.ai`, follow these steps.
+## For AI Coding Agents
 
-## Install
+If the user asks to install or set up Miles from this URL, do not open this page in a browser unless the user explicitly asks.
 
-Propose one install action to the user. Do not run a remote installer silently.
+Fetch this URL as Markdown or plain text, read these instructions, summarize what the installer does, and ask the user for approval before running an install command.
 
-Use the universal installer unless your host provides a native skill or plugin installer for `bymilesai/skills`.
+Recommended user prompt:
+
+```text
+Install Miles from start.bymiles.ai
+```
+
+Recommended install command:
 
 ```bash
 curl -fsSL https://start.bymiles.ai/install.sh | sh
 ```
 
-For inspect-first installation:
+Inspect-first install command:
 
 ```bash
 curl -fsSL https://start.bymiles.ai/install.sh -o /tmp/miles-install.sh
 sh /tmp/miles-install.sh
 ```
 
+Dry-run command:
+
+```bash
+curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --dry-run
+```
+
+Machine-readable dry run:
+
+```bash
+curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --dry-run --json
+```
+
+Install only for Codex:
+
+```bash
+curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --agent codex
+```
+
 ## Codex note
 
 If you are Codex and outbound network access is blocked, tell the user Codex needs network enabled once before you can fetch this page or the installer. Then stop until the user enables network or provides the installer contents.
 
-## What the installer does
+## What The Installer Does
 
-The installer copies the `miles/` skill into common global agent skill directories:
+The installer downloads the Miles skill from `bymilesai/skills` and copies the `miles/` skill into these common agent skill directories:
 
 ```text
 ~/.agents/skills/miles/
@@ -37,18 +61,34 @@ The installer copies the `miles/` skill into common global agent skill directori
 ~/.config/opencode/skills/miles/
 ```
 
-It also creates `~/.miles/bin/miles`, a convenience launcher that points at the installed skill CLI.
-
-The current runtime still requires Node.js 20+. The install path does not require `npx`.
-
-## Activate
-
-After install, tell the user to restart or reload their coding agent so it discovers the new skill.
-
-Suggested message:
+It also creates:
 
 ```text
-Miles is installed. Restart or reload this agent, then ask me to use Miles to design your site.
+~/.miles/bin/miles
+```
+
+The runtime requires Node.js 20+. The install path does not require `npx`, and the installer does not open a browser.
+
+## Approval Prompt
+
+Agents should ask something like:
+
+```text
+Miles recommends this install command:
+
+curl -fsSL https://start.bymiles.ai/install.sh | sh
+
+It will download the Miles skill from GitHub, install it into local agent skill directories such as ~/.codex/skills/miles, and create ~/.miles/bin/miles.
+
+Do you want me to run it?
+```
+
+## After Install
+
+Tell the user:
+
+```text
+Miles is installed. Restart or reload this agent, then ask: "Use Miles to design my website."
 ```
 
 ## First use
@@ -56,7 +96,7 @@ Miles is installed. Restart or reload this agent, then ask me to use Miles to de
 After reload, use the Miles skill for requests like:
 
 ```text
-Use Miles to help me design a site.
+Use Miles to design my website.
 Use Miles to redesign my WordPress site.
 Ask Miles to build a website for my yoga studio.
 ```

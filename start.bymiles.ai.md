@@ -89,17 +89,17 @@ Do you want me to run it?
 Tell the user:
 
 ```text
-Miles is installed. Restart or reload this agent, then ask: "Use Miles to design my website."
+Miles is installed. What site should we design? Tell me the business or project, the style you want, the main visitor goal, and any existing WordPress URL.
 ```
 
 ## First use
 
-After reload, use the Miles skill for requests like:
+After install, use the Miles skill for requests like:
 
 ```text
-Use Miles to design my website.
-Use Miles to redesign my WordPress site.
-Ask Miles to build a website for my yoga studio.
+Use Miles to design a warm, modern website for my yoga studio in Portland that helps visitors book intro classes.
+Use Miles to redesign https://example.com so it feels more premium and turns more visitors into consultation requests.
+Ask Miles to build a playful portfolio site for my illustration work, with a shop-ready structure for prints.
 ```
 
 Check setup and authentication:

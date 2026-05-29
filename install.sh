@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-INSTALLER_VERSION=2026.05.29.2
+INSTALLER_VERSION=2026.05.29.3
 DEFAULT_UPDATE_CHECK_INTERVAL_SECONDS=86400
 
 DRY_RUN=0
@@ -147,8 +147,10 @@ run_install() {
 
 Miles is installed.
 
-Restart or reload your coding agent so it discovers the new skill.
-Then ask: "Use Miles to design my website."
+Tell your agent what site you want to create. A useful prompt is:
+"Use Miles to design a website for [business/project]. It should feel [style] and help visitors [goal]."
+If you already have a WordPress site, include its URL and what you want changed.
+If your agent does not see the new skill, start a new chat or reload the agent window.
 
 MSG
 }
@@ -176,7 +178,8 @@ run_update() {
 
 Miles is updated.
 
-Restart or reload your coding agent so it discovers the updated skill.
+Continue with Miles now.
+If your agent does not see the updated skill, start a new chat or reload the agent window.
 
 MSG
 }

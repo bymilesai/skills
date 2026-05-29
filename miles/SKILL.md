@@ -74,7 +74,7 @@ If an update is available, summarize that it updates local Miles skill files and
 ~/.miles/bin/miles-skill update
 ```
 
-After an update, tell the user to restart or reload the agent so it discovers the updated skill. If the user declines, continue with the current installed skill and do not ask again in the same turn. If `~/.miles/bin/miles-skill` is missing because Miles was installed through a native agent UI, skip this check and use the host UI's update mechanism if one is available.
+After an update, continue with Miles. If the host does not see the updated skill, start a new chat or reload the agent window. If the user declines, continue with the current installed skill and do not ask again in the same turn. If `~/.miles/bin/miles-skill` is missing because Miles was installed through a native agent UI, skip this check and use the host UI's update mechanism if one is available.
 
 Then check setup explicitly:
 

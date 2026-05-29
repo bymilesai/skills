@@ -1,13 +1,17 @@
 #!/usr/bin/env node
 
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'fs';
+import { createHash } from 'crypto';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { spawnSync } from 'child_process';
@@ -23,16 +27,21 @@ function makeTempDir(prefix = 'miles-install-lifecycle-') {
 }
 
 function run(args, options = {}) {
+  const env = {
+    ...process.env,
+    HOME: options.home,
+    MILES_SKILL_MANIFEST_URL: options.manifest || join(repoRoot, 'version.json'),
+    MILES_UPDATE_CHECK_INTERVAL_SECONDS: options.interval || '86400',
+  };
+
+  if (options.sourceDir !== null) {
+    env.MILES_INSTALL_SOURCE_DIR = options.sourceDir || repoRoot;
+  }
+
   const result = spawnSync('sh', [installer, ...args], {
     cwd: repoRoot,
     encoding: 'utf8',
-    env: {
-      ...process.env,
-      HOME: options.home,
-      MILES_INSTALL_SOURCE_DIR: repoRoot,
-      MILES_SKILL_MANIFEST_URL: options.manifest || join(repoRoot, 'version.json'),
-      MILES_UPDATE_CHECK_INTERVAL_SECONDS: options.interval || '86400',
-    },
+    env,
     timeout: 15000,
   });
 
@@ -53,16 +62,21 @@ function run(args, options = {}) {
 
 function runManager(home, args, options = {}) {
   const manager = join(home, '.miles/bin/miles-skill');
+  const env = {
+    ...process.env,
+    HOME: home,
+    MILES_SKILL_MANIFEST_URL: options.manifest || join(repoRoot, 'version.json'),
+    MILES_UPDATE_CHECK_INTERVAL_SECONDS: options.interval || '86400',
+  };
+
+  if (options.sourceDir !== null) {
+    env.MILES_INSTALL_SOURCE_DIR = options.sourceDir || repoRoot;
+  }
+
   const result = spawnSync(manager, args, {
     cwd: repoRoot,
     encoding: 'utf8',
-    env: {
-      ...process.env,
-      HOME: home,
-      MILES_INSTALL_SOURCE_DIR: repoRoot,
-      MILES_SKILL_MANIFEST_URL: options.manifest || join(repoRoot, 'version.json'),
-      MILES_UPDATE_CHECK_INTERVAL_SECONDS: options.interval || '86400',
-    },
+    env,
     timeout: 15000,
   });
 
@@ -108,6 +122,78 @@ function writeManifest(dir, version, urgent = false) {
   return path;
 }
 
+function writeSourceManifest(dir, version, source, sourceSha256) {
+  const path = join(dir, `source-version-${version}.json`);
+  writeFileSync(
+    path,
+    JSON.stringify(
+      {
+        name: 'miles',
+        version,
+        source,
+        sourceSha256,
+        urgent: false,
+      },
+      null,
+      2,
+    ),
+  );
+  return path;
+}
+
+function createSourceArchive(dir) {
+  const packageDir = join(dir, 'skills-source');
+  mkdirSync(packageDir, { recursive: true });
+  for (const entry of [
+    'install.sh',
+    'version.json',
+    'payload-manifest.json',
+    'INSTALL_FOR_AGENTS.md',
+    'start.bymiles.ai.md',
+    'miles',
+  ]) {
+    cpSync(join(repoRoot, entry), join(packageDir, entry), { recursive: true });
+  }
+
+  const archive = join(dir, 'skills-source.tar.gz');
+  const tar = spawnSync('tar', ['-czf', archive, '-C', dir, 'skills-source'], {
+    encoding: 'utf8',
+  });
+  if (tar.status !== 0) {
+    throw new Error(`Could not create source archive\nstdout:\n${tar.stdout}\nstderr:\n${tar.stderr}`);
+  }
+  return archive;
+}
+
+function sha256File(path) {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+function currentPayloadFiles() {
+  const files = [];
+
+  function walk(relativeDir) {
+    const absoluteDir = join(repoRoot, relativeDir);
+    for (const name of readdirSync(absoluteDir).sort()) {
+      const relativePath = join(relativeDir, name);
+      const absolutePath = join(repoRoot, relativePath);
+      const stats = statSync(absolutePath);
+      if (stats.isDirectory()) {
+        walk(relativePath);
+        continue;
+      }
+      files.push({
+        path: relativePath,
+        size: stats.size,
+        sha256: sha256File(absolutePath),
+      });
+    }
+  }
+
+  walk('miles');
+  return files;
+}
+
 function writeLastCheck(home, value) {
   writeFileSync(join(home, '.miles/install/last-update-check'), `${value}\n`);
 }
@@ -122,6 +208,49 @@ try {
   assert(
     installerVersion === manifestVersion,
     'install.sh INSTALLER_VERSION should match version.json',
+  );
+  const payloadManifest = JSON.parse(
+    readFileSync(join(repoRoot, 'payload-manifest.json'), 'utf8'),
+  );
+  assert(
+    payloadManifest.version === manifestVersion,
+    'payload-manifest.json version should match version.json',
+  );
+  const actualPayloadFiles = currentPayloadFiles();
+  assert(
+    payloadManifest.fileCount === actualPayloadFiles.length,
+    'payload-manifest.json fileCount should match miles/ contents',
+  );
+  assert(
+    payloadManifest.totalBytes === actualPayloadFiles.reduce((sum, file) => sum + file.size, 0),
+    'payload-manifest.json totalBytes should match miles/ contents',
+  );
+  assert(
+    JSON.stringify(payloadManifest.files) === JSON.stringify(actualPayloadFiles),
+    'payload-manifest.json files should match miles/ contents',
+  );
+  const payloadCheck = spawnSync(
+    process.execPath,
+    [join(repoRoot, 'scripts/generate-payload-manifest.mjs'), '--check'],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    },
+  );
+  assert(
+    payloadCheck.status === 0,
+    `payload manifest generator check should pass\nstdout:\n${payloadCheck.stdout}\nstderr:\n${payloadCheck.stderr}`,
+  );
+
+  const dryRun = run(['--dry-run'], { home: makeTempDir() });
+  assert(
+    dryRun.stdout.includes('Payload:') && dryRun.stdout.includes('miles/SKILL.md'),
+    'dry run should show payload contents',
+  );
+  const dryRunJson = runJson(['--dry-run', '--json'], { home: makeTempDir() });
+  assert(
+    dryRunJson.payload?.files?.some((file) => file.path === 'miles/SKILL.md'),
+    'JSON dry run should include payload files',
   );
 
   const missingHome = makeTempDir();
@@ -140,6 +269,44 @@ try {
   const status = runManagerJson(home, ['status', '--json']);
   assert(status.installed === true, 'status should report installed after install');
   assert(status.destinations.length === 5, 'all-agent install should record destinations');
+
+  const archiveDir = makeTempDir('miles-install-archive-');
+  const archive = createSourceArchive(archiveDir);
+  const archiveHash = sha256File(archive);
+  const sourceManifest = writeSourceManifest(
+    archiveDir,
+    manifestVersion,
+    `file://${archive}`,
+    archiveHash,
+  );
+  const archiveHome = makeTempDir();
+  run(['--agent', 'codex'], {
+    home: archiveHome,
+    manifest: sourceManifest,
+    sourceDir: null,
+  });
+  assert(
+    existsSync(join(archiveHome, '.codex/skills/miles/SKILL.md')),
+    'install should support checksum-verified archive manifests',
+  );
+
+  const badSourceManifest = writeSourceManifest(
+    archiveDir,
+    '2099.03.01',
+    `file://${archive}`,
+    '0000000000000000000000000000000000000000000000000000000000000000',
+  );
+  const badArchiveHome = makeTempDir();
+  const badArchive = run(['--agent', 'codex'], {
+    home: badArchiveHome,
+    manifest: badSourceManifest,
+    sourceDir: null,
+    expectStatus: 1,
+  });
+  assert(
+    badArchive.stderr.includes('checksum mismatch'),
+    'install should fail when sourceSha256 does not match',
+  );
 
   const current = runManagerJson(home, ['check-update', '--json', '--force']);
   assert(current.updateAvailable === false, 'current manifest should not prompt');

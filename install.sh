@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-INSTALLER_VERSION=2026.05.29.3
+INSTALLER_VERSION=2026.05.29.4
 DEFAULT_UPDATE_CHECK_INTERVAL_SECONDS=86400
 
 DRY_RUN=0
@@ -227,13 +227,18 @@ run_uninstall() {
 print_explain() {
   cat <<EOF
 Miles installer summary:
-- Downloads the Miles skill from $(archive_url).
+- Reads the install manifest from $(manifest_url).
+- Downloads the Miles skill source archive named by that manifest.
+- Verifies the source archive SHA-256 when the manifest publishes sourceSha256.
 - Installs the miles/ skill into local agent skill directories.
 - Creates convenience launchers at ~/.miles/bin/miles and ~/.miles/bin/miles-skill.
 - Writes an install receipt at ~/.miles/install/receipt.json.
 - Checks for skill updates at most once every 24 hours when agents ask it to.
 - Requires Node.js 20+ at runtime.
-- Does not use npx and does not open a browser.
+- Does not use sudo, npx, eval, base64 payloads, or browser automation.
+
+Canonical security summary:
+  https://start.bymiles.ai/install-security.md
 
 Recommended install command:
   curl -fsSL https://start.bymiles.ai/install.sh | sh
@@ -241,11 +246,26 @@ EOF
 }
 
 print_dry_run() {
+  tmp_dir=$(make_tmp_dir)
+  trap 'rm -rf "$tmp_dir"' EXIT INT TERM
+  manifest_file=''
+  source_url=$(archive_url)
+  source_sha256=''
+  payload_manifest=$(payload_manifest_url)
+
+  if manifest_file=$(manifest_file_for_read "$tmp_dir"); then
+    source_url=$(manifest_source_url "$manifest_file")
+    source_sha256=$(manifest_source_sha256 "$manifest_file")
+    payload_manifest=$(manifest_payload_manifest_url "$manifest_file")
+  fi
+
   cat <<EOF
 Miles install dry run
 
-Source archive: $(archive_url)
+Source archive: $source_url
+Source SHA-256: $(sha256_status_text "$source_sha256")
 Manifest: $(manifest_url)
+Payload manifest: $payload_manifest
 Agent mode: $AGENT
 Node.js: $(node_status_text)
 Update check gate: 24 hours
@@ -267,15 +287,35 @@ Launchers:
 Receipt:
   $(display_path "$(receipt_file)")
 
+Payload:
+EOF
+
+  print_payload_summary "$tmp_dir" "$payload_manifest"
+  rm -rf "$tmp_dir"
+
+  cat <<EOF
+
 No files were written.
 EOF
 }
 
 print_update_dry_run() {
+  tmp_dir=$(make_tmp_dir)
+  trap 'rm -rf "$tmp_dir"' EXIT INT TERM
+  manifest_file=''
+  source_url=$(archive_url)
+  source_sha256=''
+
+  if manifest_file=$(manifest_file_for_read "$tmp_dir"); then
+    source_url=$(manifest_source_url "$manifest_file")
+    source_sha256=$(manifest_source_sha256 "$manifest_file")
+  fi
+
   cat <<EOF
 Miles update dry run
 
-Source archive: $(archive_url)
+Source archive: $source_url
+Source SHA-256: $(sha256_status_text "$source_sha256")
 Installed version: $(receipt_value version unknown)
 Latest manifest: $(manifest_url)
 
@@ -291,6 +331,8 @@ EOF
 
 No files were written.
 EOF
+
+  rm -rf "$tmp_dir"
 }
 
 print_uninstall_plan() {
@@ -341,11 +383,30 @@ EOF
 }
 
 print_json_plan() {
+  tmp_dir=$(make_tmp_dir)
+  trap 'rm -rf "$tmp_dir"' EXIT INT TERM
+  manifest_file=''
+  source_url=$(archive_url)
+  source_sha256=''
+  payload_manifest=$(payload_manifest_url)
+
+  if manifest_file=$(manifest_file_for_read "$tmp_dir"); then
+    source_url=$(manifest_source_url "$manifest_file")
+    source_sha256=$(manifest_source_sha256 "$manifest_file")
+    payload_manifest=$(manifest_payload_manifest_url "$manifest_file")
+  fi
+
   printf '{\n'
   printf '  "name": "miles",\n'
   printf '  "action": "install_agent_skill",\n'
-  printf '  "source": "%s",\n' "$(json_escape "$(archive_url)")"
+  printf '  "source": "%s",\n' "$(json_escape "$source_url")"
+  if [ -n "$source_sha256" ]; then
+    printf '  "sourceSha256": "%s",\n' "$(json_escape "$source_sha256")"
+  else
+    printf '  "sourceSha256": null,\n'
+  fi
   printf '  "manifest": "%s",\n' "$(json_escape "$(manifest_url)")"
+  printf '  "payloadManifest": "%s",\n' "$(json_escape "$payload_manifest")"
   printf '  "installerVersion": "%s",\n' "$(json_escape "$INSTALLER_VERSION")"
   printf '  "agent": "%s",\n' "$(json_escape "$AGENT")"
   printf '  "updateCheckIntervalSeconds": %s,\n' "$(update_check_interval_seconds)"
@@ -368,8 +429,13 @@ print_json_plan() {
   printf '    "nodeFound": %s,\n' "$(node_found_json)"
   printf '    "nodeVersion": "%s",\n' "$(json_escape "$(node_version_text)")"
   printf '    "nodeOk": %s\n' "$(node_ok_json)"
-  printf '  }\n'
+  printf '  },\n'
+  printf '  "payload": '
+  print_payload_json "$tmp_dir" "$payload_manifest"
+  printf '\n'
   printf '}\n'
+
+  rm -rf "$tmp_dir"
 }
 
 print_status() {
@@ -658,7 +724,13 @@ write_receipt() {
     printf '  "version": "%s",\n' "$(json_escape "$version")"
     printf '  "agent": "%s",\n' "$(json_escape "$agent")"
     printf '  "installerVersion": "%s",\n' "$(json_escape "$INSTALLER_VERSION")"
-    printf '  "source": "%s",\n' "$(json_escape "$(archive_url)")"
+    printf '  "source": "%s",\n' "$(json_escape "$(source_archive_url "$source_dir")")"
+    source_sha256=$(source_archive_sha256 "$source_dir")
+    if [ -n "$source_sha256" ]; then
+      printf '  "sourceSha256": "%s",\n' "$(json_escape "$source_sha256")"
+    else
+      printf '  "sourceSha256": null,\n'
+    fi
     printf '  "manifest": "%s",\n' "$(json_escape "$(manifest_url)")"
     printf '  "installedAt": "%s",\n' "$(json_escape "$(now_iso)")"
     printf '  "updateCheckIntervalSeconds": %s,\n' "$(update_check_interval_seconds)"
@@ -723,9 +795,20 @@ resolve_source_dir() {
 download_source() {
   tmp_dir=$1
   archive_path="$tmp_dir/skills.tar.gz"
+  manifest_file="$tmp_dir/version.json"
+  source_url=$(archive_url)
+  source_sha256=''
 
-  log "Downloading Miles skill from $(archive_url)"
-  download_file "$(archive_url)" "$archive_path"
+  if ! try_download_file "$(manifest_url)" "$manifest_file"; then
+    fail "Could not fetch Miles install manifest from $(manifest_url)"
+  fi
+
+  source_url=$(manifest_source_url "$manifest_file")
+  source_sha256=$(manifest_source_sha256 "$manifest_file")
+
+  log "Downloading Miles skill from $source_url"
+  download_file "$source_url" "$archive_path"
+  verify_file_sha256 "$archive_path" "$source_sha256"
 
   mkdir -p "$tmp_dir/source"
   tar -xzf "$archive_path" -C "$tmp_dir/source"
@@ -746,6 +829,48 @@ download_file() {
   fi
 
   fail "Install needs curl or wget to download the Miles skill"
+}
+
+verify_file_sha256() {
+  file=$1
+  expected=$2
+
+  if [ -z "$expected" ]; then
+    log "Miles install manifest did not include sourceSha256; archive checksum verification skipped"
+    return
+  fi
+
+  actual=$(file_sha256 "$file" 2>/dev/null || true)
+  if [ -z "$actual" ]; then
+    fail "Install needs shasum, sha256sum, or openssl to verify the Miles source archive"
+  fi
+
+  if [ "$actual" != "$expected" ]; then
+    fail "Source archive checksum mismatch. Expected $expected but got $actual"
+  fi
+
+  log "Verified Miles source archive SHA-256: $actual"
+}
+
+file_sha256() {
+  file=$1
+
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file" | awk '{print $1}'
+    return
+  fi
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | awk '{print $1}'
+    return
+  fi
+
+  if command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$file" | awk '{print $NF}'
+    return
+  fi
+
+  return 1
 }
 
 try_download_file() {
@@ -817,6 +942,115 @@ archive_url() {
 
 manifest_url() {
   printf '%s\n' "${MILES_SKILL_MANIFEST_URL:-https://raw.githubusercontent.com/bymilesai/skills/trunk/version.json}"
+}
+
+payload_manifest_url() {
+  printf '%s\n' "${MILES_SKILL_PAYLOAD_MANIFEST_URL:-https://raw.githubusercontent.com/bymilesai/skills/trunk/payload-manifest.json}"
+}
+
+manifest_file_for_read() {
+  tmp_dir=$1
+  source_dir=${MILES_INSTALL_SOURCE_DIR:-}
+
+  if [ -n "$source_dir" ] && [ -f "$source_dir/version.json" ]; then
+    printf '%s\n' "$source_dir/version.json"
+    return 0
+  fi
+
+  output="$tmp_dir/version.json"
+  if try_download_file "$(manifest_url)" "$output"; then
+    printf '%s\n' "$output"
+    return 0
+  fi
+
+  return 1
+}
+
+payload_manifest_file_for_read() {
+  tmp_dir=$1
+  url=$2
+  source_dir=${MILES_INSTALL_SOURCE_DIR:-}
+
+  if [ -n "$source_dir" ] && [ -f "$source_dir/payload-manifest.json" ]; then
+    printf '%s\n' "$source_dir/payload-manifest.json"
+    return 0
+  fi
+
+  output="$tmp_dir/payload-manifest.json"
+  if try_download_file "$url" "$output"; then
+    printf '%s\n' "$output"
+    return 0
+  fi
+
+  return 1
+}
+
+manifest_source_url() {
+  manifest_file=$1
+  if [ -n "${MILES_SKILLS_ARCHIVE_URL:-}" ]; then
+    archive_url
+    return
+  fi
+
+  value=$(json_value_file "$manifest_file" source)
+  if [ -n "$value" ]; then
+    printf '%s\n' "$value"
+    return
+  fi
+
+  archive_url
+}
+
+manifest_source_sha256() {
+  manifest_file=$1
+  if [ -n "${MILES_SKILLS_SOURCE_SHA256:-}" ]; then
+    printf '%s\n' "$MILES_SKILLS_SOURCE_SHA256"
+    return
+  fi
+
+  if [ -n "${MILES_SKILLS_ARCHIVE_URL:-}" ]; then
+    return
+  fi
+
+  json_value_file "$manifest_file" sourceSha256
+}
+
+manifest_payload_manifest_url() {
+  manifest_file=$1
+  value=$(json_value_file "$manifest_file" payloadManifest)
+  if [ -n "$value" ]; then
+    printf '%s\n' "$value"
+    return
+  fi
+
+  payload_manifest_url
+}
+
+source_archive_url() {
+  source_dir=$1
+  manifest_file="$source_dir/version.json"
+  if [ -f "$manifest_file" ]; then
+    manifest_source_url "$manifest_file"
+    return
+  fi
+  archive_url
+}
+
+source_archive_sha256() {
+  source_dir=$1
+  manifest_file="$source_dir/version.json"
+  if [ -f "$manifest_file" ]; then
+    manifest_source_sha256 "$manifest_file"
+  fi
+}
+
+sha256_status_text() {
+  expected=$1
+  if [ -n "$expected" ]; then
+    printf '%s\n' "$expected"
+  else
+    printf 'not pinned by manifest\n'
+  fi
 }
 
 install_dir() {
@@ -1046,6 +1280,38 @@ print_uninstall_destinations_json_from_stream() {
       "$owned" \
       "$will_remove"
   done
+}
+
+print_payload_summary() {
+  tmp_dir=$1
+  manifest=$2
+
+  if payload_file=$(payload_manifest_file_for_read "$tmp_dir" "$manifest"); then
+    root=$(json_value_file "$payload_file" root)
+    file_count=$(json_raw_file "$payload_file" fileCount)
+    total_bytes=$(json_raw_file "$payload_file" totalBytes)
+
+    printf '  Root: %s\n' "${root:-unknown}"
+    printf '  Files: %s\n' "${file_count:-unknown}"
+    printf '  Total bytes: %s\n' "${total_bytes:-unknown}"
+    printf '  Included files:\n'
+    sed -n 's/.*"path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/    - \1/p' "$payload_file"
+    return
+  fi
+
+  printf '  Manifest unavailable; payload contents were not inspected.\n'
+}
+
+print_payload_json() {
+  tmp_dir=$1
+  manifest=$2
+
+  if payload_file=$(payload_manifest_file_for_read "$tmp_dir" "$manifest"); then
+    cat "$payload_file"
+    return
+  fi
+
+  printf 'null'
 }
 
 is_miles_owned_skill_dir() {

@@ -1,8 +1,11 @@
 {
   "name": "miles",
-  "version": "2026.05.29.3",
+  "version": "2026.05.29.4",
+  "schemaVersion": 1,
   "channel": "trunk",
   "source": "https://github.com/bymilesai/skills/archive/refs/heads/trunk.tar.gz",
+  "sourceSha256": null,
+  "payloadManifest": "https://raw.githubusercontent.com/bymilesai/skills/trunk/payload-manifest.json",
   "installScript": "https://start.bymiles.ai/install.sh",
   "updateCheckIntervalHours": 24,
   "urgent": false

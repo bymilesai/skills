@@ -2,13 +2,15 @@
 
 Miles installs into a coding agent as an Agent Skill. If the user says something like:
 
-> Use Miles at start.bymiles.ai to help me design a site.
+> Install Miles from start.bymiles.ai
 
 follow this procedure. Do not ask the user which agent they are using; decide from your own runtime when possible.
 
 ## 1. Read the setup URL
 
-Fetch `https://start.bymiles.ai`. It should serve the same instructions as [start.bymiles.ai.md](start.bymiles.ai.md), with clean Markdown for agents.
+Fetch `https://start.bymiles.ai` as Markdown or plain text. Do not open the page in a browser unless the user explicitly asks, text fetching fails and browser inspection is the only available fallback, or Miles is already installed and the user is doing login, dashboard, preview, or design-review work.
+
+The URL should serve the same instructions as [start.bymiles.ai.md](start.bymiles.ai.md), with clean Markdown for agents.
 
 If you are Codex and network access is blocked, tell the user that Codex needs network enabled once before it can fetch the setup page or installer. Then stop and wait for the user to enable network or provide the file contents.
 
@@ -24,7 +26,7 @@ After native install, restart or reload the agent so new skills are discovered.
 
 ### Path B: universal bootstrap
 
-For Codex, Cursor, OpenCode, Claude Code without a native plugin path, and other agents that support `SKILL.md`, propose this command:
+For Codex, Cursor, OpenCode, Claude Code without a native plugin path, and other agents that support `SKILL.md`, summarize the side effects and propose this command:
 
 ```bash
 curl -fsSL https://start.bymiles.ai/install.sh | sh
@@ -37,7 +39,29 @@ curl -fsSL https://start.bymiles.ai/install.sh -o /tmp/miles-install.sh
 sh /tmp/miles-install.sh
 ```
 
-The installer copies the `miles/` skill into common global skill directories:
+To inspect planned actions without writing files:
+
+```bash
+curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --dry-run
+```
+
+To get a machine-readable plan:
+
+```bash
+curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --dry-run --json
+```
+
+To install only for a specific host:
+
+```bash
+curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --agent codex
+```
+
+Supported explicit agents are `codex`, `claude`, `cursor`, `opencode`, and `shared`. The default `all` mode installs into all common skill directories.
+
+The installer downloads the Miles skill from `bymilesai/skills`, copies the `miles/` skill into common global skill directories, and creates a convenience launcher at `~/.miles/bin/miles`. The runtime requires Node.js 20+. It does not use `npx` and does not open a browser.
+
+Default destinations:
 
 ```text
 ~/.agents/skills/miles/
@@ -47,7 +71,19 @@ The installer copies the `miles/` skill into common global skill directories:
 ~/.config/opencode/skills/miles/
 ```
 
-It also creates a convenience launcher at `~/.miles/bin/miles`.
+Ask for approval before running any installer.
+
+Suggested approval prompt:
+
+```text
+Miles recommends this install command:
+
+curl -fsSL https://start.bymiles.ai/install.sh | sh
+
+It will download the Miles skill from GitHub, install it into local agent skill directories such as ~/.codex/skills/miles, and create ~/.miles/bin/miles.
+
+Do you want me to run it?
+```
 
 ## 3. Reload
 
@@ -55,7 +91,7 @@ Tell the user to restart or reload their coding agent. New skills are usually sc
 
 Suggested wording:
 
-> Miles is installed. Please restart or reload this agent, then ask me: "Use Miles to design a site."
+> Miles is installed. Restart or reload this agent, then ask: "Use Miles to design my website."
 
 ## 4. First use
 
@@ -81,7 +117,7 @@ If unauthenticated, run:
 Keep it short and concrete:
 
 ```text
-Miles is installed. Restart or reload this agent, then ask me to use Miles to design your site. On first use I may ask you to log in at bymiles.ai.
+Miles is installed. Restart or reload this agent, then ask: "Use Miles to design my website." On first use I may ask you to log in at bymiles.ai.
 ```
 
 ## 6. Uninstall

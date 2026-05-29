@@ -33,6 +33,8 @@ Dry-run command:
 curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --dry-run
 ```
 
+This prints the source archive, checksum status, destination directories, launcher paths, Node.js status, and payload file list. It writes no files.
+
 Machine-readable dry run:
 
 ```bash
@@ -51,7 +53,7 @@ If you are Codex and outbound network access is blocked, tell the user Codex nee
 
 ## What The Installer Does
 
-The installer downloads the Miles skill from `bymilesai/skills` and copies the `miles/` skill into these common agent skill directories:
+The installer reads `https://start.bymiles.ai/version.json`, downloads the source archive named by that manifest, verifies the archive SHA-256 when the manifest publishes `sourceSha256`, and copies the `miles/` skill into these common agent skill directories:
 
 ```text
 ~/.agents/skills/miles/
@@ -69,6 +71,12 @@ It also creates:
 ```
 
 The installer writes an install receipt at `~/.miles/install/receipt.json`. The runtime requires Node.js 20+. The install path does not require `npx`, and the installer does not open a browser.
+
+Canonical security summary:
+
+```text
+https://start.bymiles.ai/install-security.md
+```
 
 ## Approval Prompt
 

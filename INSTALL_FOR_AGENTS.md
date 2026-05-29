@@ -45,6 +45,8 @@ To inspect planned actions without writing files:
 curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --dry-run
 ```
 
+The dry run prints the source archive, checksum status, destination directories, launcher paths, Node.js status, and payload file list. It writes no files.
+
 To get a machine-readable plan:
 
 ```bash
@@ -59,7 +61,13 @@ curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --agent codex
 
 Supported explicit agents are `codex`, `claude`, `cursor`, `opencode`, and `shared`. The default `all` mode installs into all common skill directories.
 
-The installer downloads the Miles skill from `bymilesai/skills`, copies the `miles/` skill into common global skill directories, and creates a convenience launcher at `~/.miles/bin/miles`. The runtime requires Node.js 20+. It does not use `npx` and does not open a browser.
+The installer reads `https://start.bymiles.ai/version.json`, downloads the Miles skill source archive named by that manifest, verifies the archive SHA-256 when the manifest publishes `sourceSha256`, copies the `miles/` skill into common global skill directories, and creates a convenience launcher at `~/.miles/bin/miles`. The runtime requires Node.js 20+. It does not use `sudo`, `npx`, `eval`, base64 payloads, or browser automation.
+
+Use this canonical summary for security explanations instead of inventing one from scratch:
+
+```text
+https://start.bymiles.ai/install-security.md
+```
 
 It also creates a local lifecycle helper:
 

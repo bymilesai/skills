@@ -35,6 +35,8 @@ To preview the install without writing files:
 curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --dry-run
 ```
 
+The dry run shows the source archive, checksum status, destination directories, launcher paths, Node.js status, and payload file list.
+
 To install only for Codex:
 
 ```bash
@@ -51,7 +53,9 @@ This installs the `miles/` skill into common agent skill directories such as:
 ~/.config/opencode/skills/miles/
 ```
 
-It also creates `~/.miles/bin/miles-skill`, a local helper for status, update checks, updates, and uninstall.
+It also creates `~/.miles/bin/miles-skill`, a local helper for status, update checks, updates, and uninstall. The installer reads `https://start.bymiles.ai/version.json` and verifies the source archive SHA-256 when the manifest publishes `sourceSha256`.
+
+Security summary: [INSTALL_SECURITY.md](INSTALL_SECURITY.md)
 
 After install, tell your agent what you want to build. A useful prompt includes the business or project, desired style, primary visitor goal, and any existing WordPress URL.
 

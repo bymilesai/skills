@@ -22,7 +22,7 @@ Use the native agent installer only when it is available in your runtime and can
 
 If your host agent has a native plugin or skill installer that can install `bymilesai/skills`, prefer that path. Explain the exact command or slash command before running it, and ask for approval when your host requires approval.
 
-After native install, restart or reload the agent so new skills are discovered.
+After native install, continue in the current chat if your host discovers new skills live. If the skill is not visible, start a new chat or use the host's lightweight reload command.
 
 ### Path B: universal bootstrap
 
@@ -100,17 +100,17 @@ It will download the Miles skill from GitHub, install it into local agent skill 
 Do you want me to run it?
 ```
 
-## 3. Reload
+## 3. Activate
 
-Tell the user to restart or reload their coding agent. New skills are usually scanned at startup, so this is the reliable activation step.
+Tell the user they can try Miles now. Codex and Claude Code commonly pick up new or updated skills without a restart. For OpenCode, try the current session first. For Cursor, try the current session first; if the skill is not visible, start a new chat or use `Developer: Reload Window` before trying a full restart.
 
 Suggested wording:
 
-> Miles is installed. Restart or reload this agent, then ask: "Use Miles to design my website."
+> Miles is installed. Ask: "Use Miles to design my website." If this agent does not see the new skill, start a new chat or reload the agent window.
 
 ## 4. First use
 
-After reload, use the Miles skill when the user asks to design, build, redesign, edit, or export a WordPress website with Miles.
+After install, use the Miles skill when the user asks to design, build, redesign, edit, or export a WordPress website with Miles.
 
 First run the gated update check:
 
@@ -124,7 +124,7 @@ The update check is locally cached for 24 hours. If it returns `"shouldPrompt": 
 ~/.miles/bin/miles-skill update
 ```
 
-If the user approves the update, tell them to restart or reload the agent before continuing. If they decline, continue with the current installed skill and do not ask again in the same turn.
+If the user approves the update, continue with Miles. If the host does not see the updated skill, start a new chat or reload the agent window. If they decline, continue with the current installed skill and do not ask again in the same turn.
 
 Run:
 
@@ -146,7 +146,7 @@ If unauthenticated, run:
 Keep it short and concrete:
 
 ```text
-Miles is installed. Restart or reload this agent, then ask: "Use Miles to design my website." On first use I may ask you to log in at bymiles.ai.
+Miles is installed. Ask: "Use Miles to design my website." On first use I may ask you to log in at bymiles.ai. If this agent does not see the new skill, start a new chat or reload the agent window.
 ```
 
 ## 6. Uninstall
@@ -183,4 +183,4 @@ If an update is available, ask approval before running:
 ~/.miles/bin/miles-skill update
 ```
 
-Tell the user to restart or reload their coding agent after the update.
+After update, continue with Miles. If the host does not see the updated skill, start a new chat or reload the agent window.

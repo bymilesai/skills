@@ -14,7 +14,7 @@ The easiest path is to ask your coding agent to install Miles from the public se
 
 > "Install Miles from start.bymiles.ai"
 
-Your agent should fetch `https://start.bymiles.ai` as Markdown or plain text, propose one install command, ask for your approval, then tell you to restart or reload the agent so the skill is discovered. It should not open the page in a browser during install unless text fetching fails or you explicitly ask to view it.
+Your agent should fetch `https://start.bymiles.ai` as Markdown or plain text, propose one install command, ask for your approval, then tell you to ask for Miles. It should not open the page in a browser during install unless text fetching fails or you explicitly ask to view it.
 
 The universal install command is:
 
@@ -53,9 +53,11 @@ This installs the `miles/` skill into common agent skill directories such as:
 
 It also creates `~/.miles/bin/miles-skill`, a local helper for status, update checks, updates, and uninstall.
 
-After install, restart or reload your coding agent and ask for Miles again.
+After install, ask for Miles:
 
 > "Use Miles to design my website."
+
+If your agent does not see the new skill, start a new chat or reload the agent window.
 
 If you already use the Vercel skills CLI, this still works:
 

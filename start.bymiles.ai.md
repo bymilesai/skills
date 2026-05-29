@@ -89,12 +89,12 @@ Do you want me to run it?
 Tell the user:
 
 ```text
-Miles is installed. Restart or reload this agent, then ask: "Use Miles to design my website."
+Miles is installed. Ask: "Use Miles to design my website." If this agent does not see the new skill, start a new chat or reload the agent window.
 ```
 
 ## First use
 
-After reload, use the Miles skill for requests like:
+After install, use the Miles skill for requests like:
 
 ```text
 Use Miles to design my website.

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-INSTALLER_VERSION=2026.05.29.2
+INSTALLER_VERSION=2026.05.29.3
 DEFAULT_UPDATE_CHECK_INTERVAL_SECONDS=86400
 
 DRY_RUN=0
@@ -147,8 +147,8 @@ run_install() {
 
 Miles is installed.
 
-Restart or reload your coding agent so it discovers the new skill.
-Then ask: "Use Miles to design my website."
+Ask now: "Use Miles to design my website."
+If your agent does not see the new skill, start a new chat or reload the agent window.
 
 MSG
 }
@@ -176,7 +176,8 @@ run_update() {
 
 Miles is updated.
 
-Restart or reload your coding agent so it discovers the updated skill.
+Continue with Miles now.
+If your agent does not see the updated skill, start a new chat or reload the agent window.
 
 MSG
 }

@@ -61,6 +61,21 @@ Supported explicit agents are `codex`, `claude`, `cursor`, `opencode`, and `shar
 
 The installer downloads the Miles skill from `bymilesai/skills`, copies the `miles/` skill into common global skill directories, and creates a convenience launcher at `~/.miles/bin/miles`. The runtime requires Node.js 20+. It does not use `npx` and does not open a browser.
 
+It also creates a local lifecycle helper:
+
+```bash
+~/.miles/bin/miles-skill
+```
+
+That helper supports:
+
+```bash
+~/.miles/bin/miles-skill status --json
+~/.miles/bin/miles-skill check-update --json
+~/.miles/bin/miles-skill update
+~/.miles/bin/miles-skill uninstall
+```
+
 Default destinations:
 
 ```text
@@ -97,6 +112,20 @@ Suggested wording:
 
 After reload, use the Miles skill when the user asks to design, build, redesign, edit, or export a WordPress website with Miles.
 
+First run the gated update check:
+
+```bash
+~/.miles/bin/miles-skill check-update --json
+```
+
+The update check is locally cached for 24 hours. If it returns `"shouldPrompt": true`, tell the user an update is available, summarize that it updates the local Miles skill files and launcher, and ask approval before running. Urgent updates may keep returning `"shouldPrompt": true` from the cached result until the user updates.
+
+```bash
+~/.miles/bin/miles-skill update
+```
+
+If the user approves the update, tell them to restart or reload the agent before continuing. If they decline, continue with the current installed skill and do not ask again in the same turn.
+
 Run:
 
 ```bash
@@ -122,15 +151,36 @@ Miles is installed. Restart or reload this agent, then ask: "Use Miles to design
 
 ## 6. Uninstall
 
-Delete the installed skill directories and optional launcher:
+If the user says "Uninstall Miles" or "Remove Miles from this agent", do not send them back to `start.bymiles.ai`. Prefer the host agent's native skill/plugin UI when Miles was installed that way. Otherwise inspect the local uninstall plan:
 
 ```bash
-rm -rf ~/.agents/skills/miles \
-  ~/.codex/skills/miles \
-  ~/.claude/skills/miles \
-  ~/.cursor/skills/miles \
-  ~/.config/opencode/skills/miles \
-  ~/.miles/bin/miles
+~/.miles/bin/miles-skill uninstall --dry-run --json
 ```
 
-Do not delete `~/.miles/credentials.json` unless the user explicitly wants to remove local Miles login state.
+Summarize the directories and launchers that will be removed, then ask approval before running:
+
+```bash
+~/.miles/bin/miles-skill uninstall
+```
+
+Do not delete `~/.miles/credentials.json` unless the user explicitly wants to remove local Miles login state. If the user asks to remove all Miles local data, use:
+
+```bash
+~/.miles/bin/miles-skill uninstall --purge
+```
+
+## 7. Update
+
+If the user says "Update Miles" or "Check Miles for updates", use the local lifecycle helper rather than asking them to reference the setup URL:
+
+```bash
+~/.miles/bin/miles-skill check-update --json --force
+```
+
+If an update is available, ask approval before running:
+
+```bash
+~/.miles/bin/miles-skill update
+```
+
+Tell the user to restart or reload their coding agent after the update.

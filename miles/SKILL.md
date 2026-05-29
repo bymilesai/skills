@@ -1,6 +1,6 @@
 ---
 name: miles
-description: Use Miles AI to design, build, redesign, edit, and export WordPress websites. Use when the user mentions Miles, bymiles.ai, start.bymiles.ai, designing a site, building a website, redesigning a WordPress site, or getting help with a site.
+description: Use Miles AI to design, build, redesign, edit, and export WordPress websites, or to update/uninstall the local Miles agent skill. Use when the user mentions Miles, bymiles.ai, start.bymiles.ai, designing a site, building a website, redesigning a WordPress site, updating Miles, uninstalling Miles, or getting help with a site.
 hooks:
   SessionStart:
     - hooks:
@@ -60,7 +60,23 @@ Set the Bash timeout to 10 minutes (600000ms) for all miles commands — site bu
 
 ## First Run and Authentication
 
-On a fresh session, after install, or when you are unsure whether host-specific hooks ran, check setup explicitly:
+On a fresh session, after install, or when you are unsure whether host-specific hooks ran, check the local skill lifecycle first:
+
+```bash
+~/.miles/bin/miles-skill check-update --json
+```
+
+This command has a local 24-hour gate. It should not fetch update metadata on every Miles use, and it should only ask the user about updates when JSON returns `"shouldPrompt": true`. Urgent updates may keep returning `"shouldPrompt": true` from the cached result until the user updates.
+
+If an update is available, summarize that it updates local Miles skill files and launchers, then ask approval before running:
+
+```bash
+~/.miles/bin/miles-skill update
+```
+
+After an update, tell the user to restart or reload the agent so it discovers the updated skill. If the user declines, continue with the current installed skill and do not ask again in the same turn. If `~/.miles/bin/miles-skill` is missing because Miles was installed through a native agent UI, skip this check and use the host UI's update mechanism if one is available.
+
+Then check setup explicitly:
 
 ```bash
 "$MILES_CLI" doctor --json
@@ -74,6 +90,47 @@ If Miles is not authenticated, run:
 ```
 
 Do not assume the Claude Code `hooks:` frontmatter ran. Non-Claude agents may ignore those hooks, so normal skill instructions must still take the user through `doctor`, `whoami`, and `login` when needed.
+
+## Updating or Uninstalling Miles
+
+Users should not need to mention `start.bymiles.ai` after install. Treat these natural prompts as lifecycle requests:
+
+```text
+Update Miles
+Check Miles for updates
+Uninstall Miles
+Remove Miles from this agent
+```
+
+For update requests, run a forced check and summarize the result:
+
+```bash
+~/.miles/bin/miles-skill check-update --json --force
+```
+
+Ask for approval before running:
+
+```bash
+~/.miles/bin/miles-skill update
+```
+
+For uninstall requests, prefer the host agent's native plugin or skill UI if Miles was installed that way. Otherwise inspect the local uninstall plan:
+
+```bash
+~/.miles/bin/miles-skill uninstall --dry-run --json
+```
+
+Summarize the skill directories and launchers that will be removed, then ask approval before running:
+
+```bash
+~/.miles/bin/miles-skill uninstall
+```
+
+Do not remove `~/.miles/credentials.json` unless the user explicitly asks to purge all local Miles data. If they do, use:
+
+```bash
+~/.miles/bin/miles-skill uninstall --purge
+```
 
 ## Codex Progress Visibility
 

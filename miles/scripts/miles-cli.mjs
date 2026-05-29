@@ -22,8 +22,6 @@ import { execFileSync } from 'child_process';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import {
-  buildDevicePollingRateLimitMessage,
-  buildDevicePollingTimeoutMessage,
   getDeviceAuthPollingPlan,
   getSlowedDeviceAuthPollIntervalMs,
   parseRetryAfterSeconds,
@@ -179,7 +177,9 @@ function getCommandFlagValue(args, flag) {
   const index = args.indexOf(flag);
   if (index === -1) return null;
   const value = args[index + 1];
-  if (!value || value.startsWith('--')) return null;
+  if (!value || value.startsWith('--')) {
+    exitWithError(`Usage: ${flag} requires a value.`, 2);
+  }
   return value;
 }
 
@@ -530,7 +530,7 @@ function normalizePositiveSeconds(value, fallback) {
 }
 
 function buildCompleteVerificationUrl(verificationUrl, userCode) {
-  if (!verificationUrl || !userCode) return verificationUrl;
+  if (!verificationUrl || !userCode) return null;
   try {
     const parsed = new URL(verificationUrl);
     if (parsed.searchParams.get('code') !== userCode) {
@@ -538,8 +538,9 @@ function buildCompleteVerificationUrl(verificationUrl, userCode) {
     }
     return parsed.toString();
   } catch {
-    const separator = verificationUrl.includes('?') ? '&' : '?';
-    return `${verificationUrl}${separator}code=${encodeURIComponent(userCode)}`;
+    throw new ApiError('Invalid login verification URL from Miles.', 502, {
+      verificationUrl,
+    });
   }
 }
 
@@ -548,7 +549,7 @@ function verificationUrlHasCode(verificationUrl, userCode) {
   try {
     return new URL(verificationUrl).searchParams.get('code') === userCode;
   } catch {
-    return verificationUrl.includes(`code=${encodeURIComponent(userCode)}`);
+    return false;
   }
 }
 
@@ -576,7 +577,7 @@ function normalizeDeviceCodeResponse(data) {
       data.expires_in_seconds ??
       data.expiresIn ??
       data.expires_in,
-    600,
+    null,
   );
 
   return {
@@ -584,10 +585,12 @@ function normalizeDeviceCodeResponse(data) {
     deviceCode,
     userCode,
     verificationUrl,
-    verificationUrlComplete: verificationUrlHasCode(verificationUrl, userCode),
+    verificationUrlHasCode: verificationUrlHasCode(verificationUrl, userCode),
     intervalSeconds,
     expiresInSeconds,
-    expiresAt: new Date(Date.now() + expiresInSeconds * 1000).toISOString(),
+    expiresAt: expiresInSeconds
+      ? new Date(Date.now() + expiresInSeconds * 1000).toISOString()
+      : null,
   };
 }
 
@@ -596,12 +599,18 @@ async function requestLoginDeviceCode(serverUrl) {
     serverUrl,
   });
   const deviceAuth = normalizeDeviceCodeResponse(data);
-  if (!deviceAuth.deviceCode || !deviceAuth.userCode || !deviceAuth.verificationUrl) {
+  if (
+    !deviceAuth.deviceCode ||
+    !deviceAuth.userCode ||
+    !deviceAuth.verificationUrl ||
+    !deviceAuth.expiresInSeconds
+  ) {
     throw new ApiError('Invalid login response from Miles.', 502, {
       missing: {
         deviceCode: !deviceAuth.deviceCode,
         userCode: !deviceAuth.userCode,
         verificationUrl: !deviceAuth.verificationUrl,
+        expiresInSeconds: !deviceAuth.expiresInSeconds,
       },
     });
   }
@@ -614,10 +623,9 @@ function printLoginRequest(deviceAuth) {
     return;
   }
 
-  console.log(`Your code: ${deviceAuth.userCode}`);
-  console.log(`Login URL: ${deviceAuth.verificationUrl}`);
-  console.log(
-    'This request command exits without polling. Use `miles login --poll <deviceCode> --json` from the same agent session to finish.',
+  exitWithError(
+    'Use `miles login --request --json` for agent login requests, or `miles login` for interactive login.',
+    2,
   );
 }
 
@@ -638,11 +646,18 @@ function printLoginPollResult(result, exitStatus = 0) {
 
   const messages = {
     pending: 'Authorization is still pending.',
+    authorized_but_unsaved: `Authorization succeeded, but Miles could not save credentials to ${result.credentialsPath}.`,
     expired: 'Authorization expired. Start a fresh Miles login.',
     denied: 'Authorization was denied. Start a fresh Miles login to retry.',
+    invalid_request: 'Miles could not poll this device code. Start a fresh Miles login.',
+    rate_limited: result.retryAfterSeconds
+      ? `Miles login polling was rate limited. Wait about ${result.retryAfterSeconds}s before polling again.`
+      : 'Miles login polling was rate limited. Wait before polling again.',
+    transport_error: 'Miles could not reach the login server. Retry polling this same device code.',
     timeout: 'Authorization timed out. Start a fresh Miles login.',
   };
-  const message = messages[result.status] ?? `Login status: ${result.status}`;
+  const detail = result.error ? ` ${result.error}` : '';
+  const message = `${messages[result.status] ?? `Login status: ${result.status}`}${detail}`;
   if (exitStatus === 0) {
     console.log(message);
   } else {
@@ -662,13 +677,51 @@ function buildAuthorizedLoginResult(tokenData) {
   };
 }
 
-function loginPollStatusFromApiError(err) {
+function sanitizeLoginErrorMessage(err, deviceCode) {
+  const message = err?.message ? String(err.message) : 'Unknown login error';
+  return deviceCode ? message.split(deviceCode).join('[deviceCode]') : message;
+}
+
+function loginPollResultFromApiError(err, deviceCode) {
   if (!(err instanceof ApiError)) return null;
-  if (err.data?.error === 'authorization_pending') return 'pending';
-  if (err.data?.error === 'slow_down') return 'pending';
-  if (err.data?.error === 'access_denied') return 'denied';
-  if (err.data?.error === 'expired_token') return 'expired';
-  if (err.status === 429) return 'timeout';
+  const error = err.data?.error;
+  if (error === 'authorization_pending') return { ok: false, status: 'pending' };
+  if (error === 'slow_down') {
+    return {
+      ok: false,
+      status: 'pending',
+      retryAfterSeconds: err.retryAfterSeconds,
+    };
+  }
+  if (error === 'access_denied') return { ok: false, status: 'denied' };
+  if (error === 'expired_token' || error === 'invalid_grant') {
+    return { ok: false, status: 'expired' };
+  }
+  if (
+    error === 'invalid_request' ||
+    error === 'invalid_client' ||
+    error === 'unauthorized_client'
+  ) {
+    return {
+      ok: false,
+      status: 'invalid_request',
+      error: sanitizeLoginErrorMessage(err, deviceCode),
+    };
+  }
+  if (err.status === 429) {
+    return {
+      ok: false,
+      status: 'rate_limited',
+      retryAfterSeconds: err.retryAfterSeconds,
+    };
+  }
+  if (err.status >= 500) {
+    return {
+      ok: false,
+      status: 'transport_error',
+      error: sanitizeLoginErrorMessage(err, deviceCode),
+    };
+  }
   return null;
 }
 
@@ -676,16 +729,22 @@ async function pollLoginDeviceCode({
   deviceCode,
   serverUrl,
   intervalSeconds,
+  expiresInSeconds,
   timeoutSeconds,
   once,
 }) {
   const { pollIntervalMs, maxWaitMs } = getDeviceAuthPollingPlan({
     intervalSeconds,
-    expiresInSeconds: timeoutSeconds,
+    expiresInSeconds,
   });
-  const deadlineMs = Date.now() + (timeoutSeconds ? timeoutSeconds * 1000 : maxWaitMs);
+  const timeoutMs = timeoutSeconds ? timeoutSeconds * 1000 : maxWaitMs;
+  const deadlineMs = Date.now() + Math.min(timeoutMs, maxWaitMs);
   let nextPollIntervalMs = pollIntervalMs;
+  // Poll once immediately; agents often call --poll only after the user authorizes.
   let shouldWait = false;
+  let transportFailureCount = 0;
+  let lastTransportError = null;
+  const maxTransportFailures = once ? 1 : 3;
 
   while (Date.now() < deadlineMs) {
     if (shouldWait) {
@@ -708,12 +767,36 @@ async function pollLoginDeviceCode({
       );
 
       if (tokenData.apiKey) {
-        saveCredentials({ apiKey: tokenData.apiKey });
-        return buildAuthorizedLoginResult(tokenData);
+        const result = buildAuthorizedLoginResult(tokenData);
+        try {
+          saveCredentials({ apiKey: tokenData.apiKey });
+        } catch (err) {
+          return {
+            ok: false,
+            status: 'authorized_but_unsaved',
+            apiKeyPrefix: result.apiKeyPrefix,
+            credentialsPath: CREDENTIALS_FILE,
+            error: sanitizeLoginErrorMessage(err, deviceCode),
+          };
+        }
+        return result;
       }
     } catch (err) {
-      const status = loginPollStatusFromApiError(err);
-      if (!status) throw err;
+      const result = loginPollResultFromApiError(err, deviceCode);
+      if (!result) {
+        transportFailureCount += 1;
+        lastTransportError = err;
+        if (transportFailureCount >= maxTransportFailures) {
+          return {
+            ok: false,
+            status: 'transport_error',
+            error: sanitizeLoginErrorMessage(err, deviceCode),
+          };
+        }
+        continue;
+      }
+      transportFailureCount = 0;
+      lastTransportError = null;
 
       if (err instanceof ApiError && err.data?.error === 'slow_down') {
         nextPollIntervalMs = getSlowedDeviceAuthPollIntervalMs(
@@ -722,16 +805,26 @@ async function pollLoginDeviceCode({
         );
       }
 
-      if (status === 'pending') {
-        if (once) return { ok: false, status };
+      if (result.status === 'pending') {
+        if (once) {
+          if (err instanceof ApiError && err.data?.error === 'slow_down') {
+            result.nextPollIntervalSeconds = Math.ceil(nextPollIntervalMs / 1000);
+          }
+          return result;
+        }
         continue;
       }
 
-      return {
-        ok: false,
-        status,
-      };
+      return result;
     }
+  }
+
+  if (lastTransportError) {
+    return {
+      ok: false,
+      status: 'transport_error',
+      error: sanitizeLoginErrorMessage(lastTransportError, deviceCode),
+    };
   }
 
   return {
@@ -751,6 +844,12 @@ async function cmdLogin(args = []) {
   }
 
   if (wantsRequest) {
+    if (!cliOptions.json) {
+      exitWithError(
+        'Use `miles login --request --json` for agent login requests, or `miles login` for interactive login.',
+        2,
+      );
+    }
     const deviceAuth = await requestLoginDeviceCode(serverUrl);
     printLoginRequest(deviceAuth);
     return;
@@ -759,12 +858,13 @@ async function cmdLogin(args = []) {
   if (wantsPoll) {
     const deviceCode = getCommandFlagValue(args, '--poll');
     if (!deviceCode) {
-      exitWithError('Usage: miles login --poll <deviceCode> [--json] [--timeout <seconds>] [--once]', 2);
+      exitWithError('Usage: miles login --poll <deviceCode> [--json] [--interval <seconds>] [--expires-in <seconds>] [--timeout <seconds>] [--once]', 2);
     }
     const result = await pollLoginDeviceCode({
       deviceCode,
       serverUrl,
-      intervalSeconds: 5,
+      intervalSeconds: parsePositiveSecondsFlag(args, '--interval') ?? 5,
+      expiresInSeconds: parsePositiveSecondsFlag(args, '--expires-in') ?? 600,
       timeoutSeconds: parsePositiveSecondsFlag(args, '--timeout'),
       once: hasCommandFlag(args, '--once'),
     });
@@ -805,74 +905,22 @@ async function cmdLogin(args = []) {
 
   console.log('Waiting for authorization...');
 
-  const { pollIntervalMs, maxAttempts, maxWaitMs } =
-    getDeviceAuthPollingPlan({
-      intervalSeconds,
-      expiresInSeconds,
-    });
+  const result = await pollLoginDeviceCode({
+    deviceCode,
+    serverUrl,
+    intervalSeconds,
+    expiresInSeconds,
+  });
 
-  let nextPollIntervalMs = pollIntervalMs;
-  const pollDeadlineMs = Date.now() + maxWaitMs;
-  for (let i = 0; i < maxAttempts; i++) {
-    const remainingMs = pollDeadlineMs - Date.now();
-    if (remainingMs <= 0) break;
-
-    await new Promise((r) =>
-      setTimeout(r, Math.min(nextPollIntervalMs, remainingMs)),
-    );
-
-    try {
-      const tokenData = await apiRequest(
-        'POST',
-        '/api/v2/auth/device/device-token',
-        {
-          body: { deviceCode },
-          serverUrl,
-        },
-      );
-
-      if (tokenData.apiKey) {
-        // Start fresh - clear stale site data from previous sessions
-        const creds = { apiKey: tokenData.apiKey };
-        saveCredentials(creds);
-        console.log(`\nLogged in successfully!`);
-        console.log(`API key: ${tokenData.keyPrefix}...`);
-        return;
-      }
-    } catch (err) {
-      if (
-        err instanceof ApiError &&
-        err.data?.error === 'authorization_pending'
-      ) {
-        continue;
-      }
-      if (err instanceof ApiError && err.data?.error === 'slow_down') {
-        nextPollIntervalMs = getSlowedDeviceAuthPollIntervalMs(
-          nextPollIntervalMs,
-          err.retryAfterSeconds,
-        );
-        continue;
-      }
-      if (err instanceof ApiError && err.data?.error === 'access_denied') {
-        console.error('\nAuthorization was denied. Please try again.');
-        process.exit(1);
-      }
-      if (err instanceof ApiError && err.data?.error === 'expired_token') {
-        console.error('\nAuthorization expired. Please try again.');
-        process.exit(1);
-      }
-      if (err instanceof ApiError && err.status === 429) {
-        console.error(
-          `\n${buildDevicePollingRateLimitMessage(err.retryAfterSeconds)}`,
-        );
-        process.exit(1);
-      }
-      throw err;
+  if (result.status === 'authorized') {
+    console.log(`\nLogged in successfully!`);
+    if (result.apiKeyPrefix) {
+      console.log(`API key: ${result.apiKeyPrefix}`);
     }
+    return;
   }
 
-  console.error(`\n${buildDevicePollingTimeoutMessage(maxWaitMs)}`);
-  process.exit(1);
+  printLoginPollResult(result, 1);
 }
 
 async function cmdLogout() {
@@ -895,7 +943,9 @@ async function cmdWhoami() {
       });
       return;
     }
-    console.log('Not logged in. Use `miles login`.');
+    console.log(
+      'Not logged in. Run `miles login --request --json` for agent login, or `miles login` for interactive login.',
+    );
     return;
   }
 
@@ -977,7 +1027,7 @@ async function cmdDoctor() {
       ok: summary.auth.authenticated,
       detail: summary.auth.authenticated
         ? 'Miles credentials are present'
-        : 'Not logged in. Run `miles login`.',
+        : 'Not logged in. Run `miles login --request --json` for agent login, or `miles login` for interactive login.',
     },
   ];
 
@@ -1060,7 +1110,9 @@ async function cmdCheckAuth() {
 async function cmdCreateSite(args) {
   const creds = loadCredentials();
   if (!creds.apiKey) {
-    exitWithError('Not logged in. Use `miles login` first.');
+    exitWithError(
+      'Not logged in. Run `miles login --request --json` for agent login, or `miles login` for interactive login.',
+    );
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -2685,7 +2737,7 @@ handler(args).catch((err) => {
     }
     // Self-correcting guidance
     if (err.status === 401) {
-      console.error('Try: miles login');
+      console.error('Try: miles login --request --json');
     } else if (err.status === 400 && err.data?.phase) {
       console.error(`Current phase: ${err.data.phase}`);
     }

@@ -33,7 +33,7 @@ Dry-run command:
 curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --dry-run
 ```
 
-This prints the source archive, checksum status, destination directories, launcher paths, Node.js status, and payload file list. It writes no files.
+This prints the source archive, checksum status, destination directories, launcher paths, bundled runtime status, JavaScript fallback status, and payload file list. It writes no files.
 It performs read-only GETs for the install and payload manifests. If those fetches fail, it still prints the local plan and says the payload could not be inspected.
 
 Machine-readable dry run:
@@ -70,7 +70,7 @@ It also creates:
 ~/.miles/bin/miles-skill
 ```
 
-The installer writes an install receipt at `~/.miles/install/receipt.json`. The runtime requires Node.js 20+. The install path does not require `npx`, and the installer does not open a browser.
+The installer writes an install receipt at `~/.miles/install/receipt.json`. On supported platforms it installs a bundled Miles CLI runtime so users do not need Node.js. The JavaScript fallback requires Node.js 20+. The install path does not require `npx`, and the installer does not open a browser.
 
 Canonical security summary:
 
@@ -87,17 +87,39 @@ Miles recommends this install command:
 
 curl -fsSL https://start.bymiles.ai/install.sh | sh
 
-It will download the Miles skill from GitHub, install it into local agent skill directories such as ~/.agents/skills/miles, and create ~/.miles/bin/miles.
+It will download the Miles skill from GitHub, verify release checksums when published, install it into local agent skill directories such as ~/.agents/skills/miles, and create ~/.miles/bin/miles.
 
 Do you want me to run it?
 ```
 
 ## After Install
 
-Tell the user:
+Do not stop after install with a manual login command. Verify Miles and complete login in the same setup flow unless the user explicitly asks to pause:
+
+```bash
+~/.miles/bin/miles-skill check-update --json
+~/.miles/bin/miles doctor --json
+~/.miles/bin/miles whoami
+```
+
+If `whoami` says the user is not logged in, start device login yourself:
+
+```bash
+~/.miles/bin/miles login --json
+```
+
+Show the returned code and complete URL to the user. The page should show the same code; if it matches, the user can click Authorize. Immediately run the listener so the user does not need to come back and say they are done:
+
+```bash
+~/.miles/bin/miles login --poll --json
+```
+
+If JSON reports `"pendingState": "unsaved"`, keep the returned `deviceCode` private and pass it explicitly to `login --poll`.
+
+After Miles is installed and logged in, ask:
 
 ```text
-Miles is installed. What site should we design? Tell me the business or project, the style you want, the main visitor goal, and any existing WordPress URL.
+Miles is ready. What site should we design? Tell me the business or project, the style you want, the main visitor goal, and any existing WordPress URL.
 ```
 
 ## First use
@@ -110,27 +132,7 @@ Use Miles to redesign https://example.com so it feels more premium and turns mor
 Ask Miles to build a playful portfolio site for my illustration work, with a shop-ready structure for prints.
 ```
 
-Check setup and authentication:
-
-```bash
-~/.miles/bin/miles-skill check-update --json
-~/.miles/bin/miles doctor --json
-~/.miles/bin/miles whoami
-```
-
 The update check is locally gated and should fetch update metadata at most once every 24 hours. If it returns `"shouldPrompt": true`, summarize the update and ask approval before running. Urgent updates may keep returning `"shouldPrompt": true` from the cached result until the user updates.
-
-```bash
-~/.miles/bin/miles-skill update
-```
-
-If the user is not logged in, run:
-
-```bash
-~/.miles/bin/miles login --json
-```
-
-Show the returned code and complete URL to the user. The page should show the same code; if it matches, the user can click Authorize. Immediately run `~/.miles/bin/miles login --poll --json` to listen while the user authorizes, then continue when it returns `authorized`. If JSON reports `"pendingState": "unsaved"`, keep the returned `deviceCode` private and pass it explicitly to `login --poll`.
 
 ## Updating and uninstalling
 

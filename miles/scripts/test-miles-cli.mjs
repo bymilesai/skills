@@ -306,7 +306,11 @@ try {
   assert(doctorResult.status === 1, 'doctor should fail when setup is incomplete');
   assert(doctor.paths.milesHome === doctorHome, 'doctor should honor MILES_HOME');
   assert(doctor.paths.cli === launcherPath, 'doctor should report the launcher path');
-  assert(doctor.runtime.node, 'doctor should report Node version');
+  assert(doctor.runtime.name && doctor.runtime.version, 'doctor should report runtime details');
+  assert(
+    doctor.checks.some((check) => check.name === 'runtime' && check.ok),
+    'doctor should verify the CLI runtime',
+  );
   assert(
     doctor.checks.some((check) => check.name === 'milesHome' && check.ok),
     'doctor should verify MILES_HOME writability',

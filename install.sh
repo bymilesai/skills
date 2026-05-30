@@ -141,13 +141,23 @@ run_install() {
   parents_file="$tmp_dir/destinations.txt"
   destination_parent_dirs >"$parents_file"
 
-  install_from_source "$source_dir" "$parents_file" "$AGENT"
+  install_from_source "$source_dir" "$parents_file" "$AGENT" "$tmp_dir"
 
   cat <<'MSG'
 
 Miles is installed.
 
-Tell your agent what site you want to create. A useful prompt is:
+Your agent should now verify Miles and complete login if needed:
+  ~/.miles/bin/miles-skill check-update --json
+  ~/.miles/bin/miles doctor --json
+  ~/.miles/bin/miles whoami
+  ~/.miles/bin/miles login --json
+  ~/.miles/bin/miles login --poll --json
+
+Do not ask the user to run login manually. If login is needed, show the device
+code and link, keep listening while the user authorizes, then continue.
+
+After login, ask what site to create. A useful prompt is:
 "Use Miles to design a website for [business/project]. It should feel [style] and help visitors [goal]."
 If you already have a WordPress site, include its URL and what you want changed.
 If your agent does not see the new skill, start a new chat or reload the agent window.
@@ -171,7 +181,7 @@ run_update() {
   source_dir=$(resolve_source_dir "$tmp_dir")
   require_skill_source "$source_dir"
 
-  install_from_source "$source_dir" "$(destinations_file)" "$(receipt_value agent all)"
+  install_from_source "$source_dir" "$(destinations_file)" "$(receipt_value agent all)" "$tmp_dir"
   write_update_cache "$(source_version "$source_dir")" "$(source_version "$source_dir")" false false
 
   cat <<'MSG'
@@ -198,7 +208,7 @@ run_uninstall() {
     fi
   done
 
-  rm -f "$HOME/.miles/bin/miles" "$HOME/.miles/bin/miles-skill"
+  rm -f "$HOME/.miles/bin/miles" "$HOME/.miles/bin/miles-skill" "$(runtime_binary_path)"
   rm -f "$(receipt_file)" "$(destinations_file)" "$(update_cache_file)" "$(update_last_check_file)" "$(installer_copy)"
   rmdir "$(install_dir)" 2>/dev/null || true
 
@@ -230,11 +240,12 @@ Miles installer summary:
 - Reads the install manifest from $(manifest_url).
 - Downloads the Miles skill source archive named by that manifest.
 - Verifies the source archive SHA-256 when the manifest publishes sourceSha256.
+- Downloads and verifies a bundled Miles CLI runtime when the manifest publishes one for this platform.
 - Installs the miles/ skill into local agent skill directories.
 - Creates convenience launchers at ~/.miles/bin/miles and ~/.miles/bin/miles-skill.
 - Writes an install receipt at ~/.miles/install/receipt.json.
 - Checks for skill updates at most once every 24 hours when agents ask it to.
-- Requires Node.js 20+ at runtime.
+- Uses the bundled Miles CLI runtime when available; the JavaScript fallback requires Node.js 20+.
 - Does not use sudo, npx, eval, base64 payloads, or browser automation.
 
 Canonical security summary:
@@ -267,7 +278,8 @@ Source SHA-256: $(sha256_status_text "$source_sha256")
 Manifest: $(manifest_url)
 Payload manifest: $payload_manifest
 Agent mode: $AGENT
-Node.js: $(node_status_text)
+Bundled CLI runtime: $(runtime_status_text "$manifest_file")
+Node.js fallback: $(node_status_text)
 Update check gate: 24 hours
 
 Destinations:
@@ -283,6 +295,7 @@ EOF
 Launchers:
   $(display_path "$HOME/.miles/bin/miles") -> $(display_path "$(primary_launcher_target)")
   $(display_path "$HOME/.miles/bin/miles-skill") -> $(display_path "$(installer_copy)")
+  $(display_path "$(runtime_binary_path)") (bundled runtime when available)
 
 Receipt:
   $(display_path "$(receipt_file)")
@@ -346,7 +359,8 @@ print_uninstall_plan() {
     printf '\n  ],\n'
     printf '  "launchers": [\n'
     printf '    "%s",\n' "$(json_escape "$(display_path "$HOME/.miles/bin/miles")")"
-    printf '    "%s"\n' "$(json_escape "$(display_path "$HOME/.miles/bin/miles-skill")")"
+    printf '    "%s",\n' "$(json_escape "$(display_path "$HOME/.miles/bin/miles-skill")")"
+    printf '    "%s"\n' "$(json_escape "$(display_path "$(runtime_binary_path)")")"
     printf '  ]\n'
     printf '}\n'
     return
@@ -374,6 +388,7 @@ EOF
 Launchers:
   $(display_path "$HOME/.miles/bin/miles")
   $(display_path "$HOME/.miles/bin/miles-skill")
+  $(display_path "$(runtime_binary_path)")
 
 Login state:
   $(display_path "$HOME/.miles/credentials.json") $(purge_status_text)
@@ -421,14 +436,22 @@ print_json_plan() {
   printf '    "milesSkill": {\n'
   printf '      "path": "%s",\n' "$(json_escape "$(display_path "$HOME/.miles/bin/miles-skill")")"
   printf '      "target": "%s"\n' "$(json_escape "$(display_path "$(installer_copy)")")"
+  printf '    },\n'
+  printf '    "runtime": {\n'
+  printf '      "path": "%s"\n' "$(json_escape "$(display_path "$(runtime_binary_path)")")"
   printf '    }\n'
   printf '  },\n'
   printf '  "receipt": "%s",\n' "$(json_escape "$(display_path "$(receipt_file)")")"
   printf '  "requires": {\n'
-  printf '    "node": ">=20",\n'
-  printf '    "nodeFound": %s,\n' "$(node_found_json)"
-  printf '    "nodeVersion": "%s",\n' "$(json_escape "$(node_version_text)")"
-  printf '    "nodeOk": %s\n' "$(node_ok_json)"
+  printf '    "bundledRuntime": '
+  print_runtime_plan_json "$manifest_file"
+  printf ',\n'
+  printf '    "nodeFallback": {\n'
+  printf '      "node": ">=20",\n'
+  printf '      "nodeFound": %s,\n' "$(node_found_json)"
+  printf '      "nodeVersion": "%s",\n' "$(json_escape "$(node_version_text)")"
+  printf '      "nodeOk": %s\n' "$(node_ok_json)"
+  printf '    }\n'
   printf '  },\n'
   printf '  "payload": '
   print_payload_json "$tmp_dir" "$payload_manifest"
@@ -459,7 +482,8 @@ print_status() {
     printf '\n  ],\n'
     printf '  "launchers": {\n'
     printf '    "miles": %s,\n' "$(json_bool_exists "$HOME/.miles/bin/miles")"
-    printf '    "milesSkill": %s\n' "$(json_bool_exists "$HOME/.miles/bin/miles-skill")"
+    printf '    "milesSkill": %s,\n' "$(json_bool_exists "$HOME/.miles/bin/miles-skill")"
+    printf '    "runtime": %s\n' "$(json_bool_exists "$(runtime_binary_path)")"
     printf '  }\n'
     printf '}\n'
     return
@@ -586,17 +610,23 @@ install_from_source() {
   source_dir=$1
   parents_file=$2
   agent=$3
+  tmp_dir=$4
   version=$(source_version "$source_dir")
+  launcher_target=$(primary_launcher_target_from_file "$parents_file")
+  runtime_target=$(install_runtime_binary "$source_dir" "$tmp_dir")
+
+  if [ -z "$runtime_target" ] && ! node_ok; then
+    fail "No bundled Miles CLI runtime is available for this platform, and Node.js 20+ was not found for the JavaScript fallback"
+  fi
 
   while IFS= read -r parent_dir; do
     [ -n "$parent_dir" ] || continue
     install_skill "$source_dir/miles" "$parent_dir" "$version" "$agent"
   done <"$parents_file"
 
-  launcher_target=$(primary_launcher_target_from_file "$parents_file")
-  install_launcher "$launcher_target"
+  install_launcher "$runtime_target" "$launcher_target"
   install_manager "$source_dir/install.sh"
-  write_receipt "$parents_file" "$launcher_target" "$source_dir" "$agent"
+  write_receipt "$parents_file" "$launcher_target" "$runtime_target" "$source_dir" "$agent"
   write_update_cache "$version" "$version" false false
   printf '%s\n' "$(now_epoch)" >"$(update_last_check_file)"
 }
@@ -638,18 +668,65 @@ install_skill() {
 }
 
 install_launcher() {
-  target=$1
+  runtime_target=$1
+  fallback_target=$2
   bin_dir="$HOME/.miles/bin"
   launcher="$bin_dir/miles"
+  skill_dir=$(dirname "$(dirname "$fallback_target")")
 
   mkdir -p "$bin_dir"
 
   cat >"$launcher" <<EOF
 #!/bin/sh
-exec "$target" "\$@"
+set -eu
+
+RUNTIME="$runtime_target"
+FALLBACK="$fallback_target"
+SKILL_DIR="$skill_dir"
+
+if [ -n "\$RUNTIME" ] && [ -x "\$RUNTIME" ]; then
+  MILES_SKILL_DIR="\${MILES_SKILL_DIR:-\$SKILL_DIR}" \\
+  MILES_CLI="\${MILES_CLI:-$launcher}" \\
+  exec "\$RUNTIME" "\$@"
+fi
+
+MILES_SKILL_DIR="\${MILES_SKILL_DIR:-\$SKILL_DIR}" \\
+MILES_CLI="\${MILES_CLI:-$launcher}" \\
+exec "\$FALLBACK" "\$@"
 EOF
 
   chmod 755 "$launcher" 2>/dev/null || true
+}
+
+install_runtime_binary() {
+  source_dir=$1
+  tmp_dir=$2
+  manifest_file=$(runtime_manifest_file "$source_dir" "$tmp_dir")
+  platform=$(runtime_platform_key || true)
+
+  if [ -z "$platform" ]; then
+    return
+  fi
+
+  url=$(manifest_cli_binary_url "$manifest_file" "$platform")
+  sha256=$(manifest_cli_binary_sha256 "$manifest_file" "$platform")
+
+  if [ -z "$url" ] || [ -z "$sha256" ]; then
+    return
+  fi
+
+  tmp_runtime="$tmp_dir/miles-runtime"
+  log "Downloading bundled Miles CLI runtime for $platform"
+  download_file "$url" "$tmp_runtime"
+  verify_file_sha256 "$tmp_runtime" "$sha256"
+
+  mkdir -p "$HOME/.miles/bin"
+  runtime_target=$(runtime_binary_path)
+  cp "$tmp_runtime" "$runtime_target.$$"
+  chmod 755 "$runtime_target.$$" 2>/dev/null || true
+  mv "$runtime_target.$$" "$runtime_target"
+  log "Installed bundled Miles CLI runtime at $runtime_target"
+  printf '%s\n' "$runtime_target"
 }
 
 install_manager() {
@@ -708,8 +785,9 @@ EOF
 write_receipt() {
   parents_file=$1
   launcher_target=$2
-  source_dir=$3
-  agent=$4
+  runtime_target=$3
+  source_dir=$4
+  agent=$5
   version=$(source_version "$source_dir")
 
   mkdir -p "$(install_dir)"
@@ -740,7 +818,12 @@ write_receipt() {
     printf '  "launchers": {\n'
     printf '    "miles": "%s",\n' "$(json_escape "$(display_path "$HOME/.miles/bin/miles")")"
     printf '    "milesTarget": "%s",\n' "$(json_escape "$(display_path "$launcher_target")")"
-    printf '    "milesSkill": "%s"\n' "$(json_escape "$(display_path "$HOME/.miles/bin/miles-skill")")"
+    printf '    "milesSkill": "%s",\n' "$(json_escape "$(display_path "$HOME/.miles/bin/miles-skill")")"
+    if [ -n "$runtime_target" ]; then
+      printf '    "runtime": "%s"\n' "$(json_escape "$(display_path "$runtime_target")")"
+    else
+      printf '    "runtime": null\n'
+    fi
     printf '  }\n'
     printf '}\n'
   } >"$tmp_receipt"
@@ -836,7 +919,6 @@ verify_file_sha256() {
   expected=$2
 
   if [ -z "$expected" ]; then
-    log "Miles install manifest did not include sourceSha256; archive checksum verification skipped"
     return
   fi
 
@@ -1026,6 +1108,151 @@ manifest_payload_manifest_url() {
   payload_manifest_url
 }
 
+runtime_manifest_file() {
+  source_dir=$1
+  tmp_dir=$2
+
+  if [ -f "$tmp_dir/version.json" ]; then
+    printf '%s\n' "$tmp_dir/version.json"
+    return
+  fi
+
+  if [ -f "$source_dir/version.json" ]; then
+    printf '%s\n' "$source_dir/version.json"
+    return
+  fi
+
+  printf '\n'
+}
+
+runtime_platform_key() {
+  system=$(uname -s 2>/dev/null || printf unknown)
+  machine=$(uname -m 2>/dev/null || printf unknown)
+
+  case "$system" in
+    Darwin)
+      os=darwin
+      ;;
+    Linux)
+      os=linux
+      ;;
+    MINGW* | MSYS* | CYGWIN*)
+      os=windows
+      ;;
+    *)
+      return
+      ;;
+  esac
+
+  case "$machine" in
+    arm64 | aarch64)
+      arch=arm64
+      ;;
+    x86_64 | amd64)
+      arch=x64
+      ;;
+    *)
+      return
+      ;;
+  esac
+
+  printf '%s-%s\n' "$os" "$arch"
+}
+
+runtime_binary_path() {
+  printf '%s\n' "$HOME/.miles/bin/miles-runtime"
+}
+
+runtime_status_text() {
+  manifest_file=$1
+  platform=$(runtime_platform_key || true)
+
+  if [ -z "$platform" ]; then
+    printf 'not available for this platform; JavaScript fallback will be used\n'
+    return
+  fi
+
+  url=$(manifest_cli_binary_url "$manifest_file" "$platform")
+  sha256=$(manifest_cli_binary_sha256 "$manifest_file" "$platform")
+
+  if [ -n "$url" ] && [ -n "$sha256" ]; then
+    printf 'available for %s with SHA-256 verification\n' "$platform"
+  elif [ -n "$url" ]; then
+    printf 'listed for %s but not checksum-pinned yet; JavaScript fallback will be used\n' "$platform"
+  else
+    printf 'not listed for %s; JavaScript fallback will be used\n' "$platform"
+  fi
+}
+
+manifest_cli_binary_url() {
+  manifest_file=$1
+  platform=$2
+
+  if [ -n "${MILES_CLI_BINARY_URL:-}" ]; then
+    printf '%s\n' "$MILES_CLI_BINARY_URL"
+    return
+  fi
+
+  if [ -z "$manifest_file" ] || [ ! -f "$manifest_file" ]; then
+    return
+  fi
+
+  sed -n "/\"$platform\"[[:space:]]*:/,/^[[:space:]]*}[,]*[[:space:]]*$/p" "$manifest_file" |
+    sed -n 's/.*"url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' |
+    sed -n '1p'
+}
+
+manifest_cli_binary_sha256() {
+  manifest_file=$1
+  platform=$2
+
+  if [ -n "${MILES_CLI_BINARY_SHA256:-}" ]; then
+    printf '%s\n' "$MILES_CLI_BINARY_SHA256"
+    return
+  fi
+
+  if [ -z "$manifest_file" ] || [ ! -f "$manifest_file" ]; then
+    return
+  fi
+
+  sed -n "/\"$platform\"[[:space:]]*:/,/^[[:space:]]*}[,]*[[:space:]]*$/p" "$manifest_file" |
+    sed -n 's/.*"sha256"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' |
+    sed -n '1p'
+}
+
+print_runtime_plan_json() {
+  manifest_file=$1
+  platform=$(runtime_platform_key || true)
+  url=''
+  sha256=''
+
+  if [ -n "$platform" ]; then
+    url=$(manifest_cli_binary_url "$manifest_file" "$platform")
+    sha256=$(manifest_cli_binary_sha256 "$manifest_file" "$platform")
+  fi
+
+  printf '{\n'
+  if [ -n "$platform" ]; then
+    printf '      "platform": "%s",\n' "$(json_escape "$platform")"
+  else
+    printf '      "platform": null,\n'
+  fi
+  printf '      "path": "%s",\n' "$(json_escape "$(display_path "$(runtime_binary_path)")")"
+  if [ -n "$url" ]; then
+    printf '      "url": "%s",\n' "$(json_escape "$url")"
+  else
+    printf '      "url": null,\n'
+  fi
+  if [ -n "$sha256" ]; then
+    printf '      "sha256": "%s",\n' "$(json_escape "$sha256")"
+    printf '      "willInstall": true\n'
+  else
+    printf '      "sha256": null,\n'
+    printf '      "willInstall": false\n'
+  fi
+  printf '    }'
+}
+
 source_archive_url() {
   source_dir=$1
   manifest_file="$source_dir/version.json"
@@ -1049,7 +1276,7 @@ sha256_status_text() {
   if [ -n "$expected" ]; then
     printf '%s\n' "$expected"
   else
-    printf 'not pinned by manifest\n'
+    printf 'not published in this manifest\n'
   fi
 }
 
@@ -1358,6 +1585,10 @@ node_ok_json() {
       fi
       ;;
   esac
+}
+
+node_ok() {
+  [ "$(node_ok_json)" = true ]
 }
 
 last_update_check_epoch_json() {

@@ -18,13 +18,21 @@ The installer reads:
 https://start.bymiles.ai/version.json
 ```
 
-The manifest names the Miles source archive, optional `sourceSha256`, and payload manifest. Released versions use immutable GitHub Release assets such as:
+The manifest names the Miles source archive, optional `sourceSha256`, bundled CLI runtime assets, and payload manifest. Released versions use immutable GitHub Release assets such as:
 
 ```text
 https://github.com/bymilesai/skills/releases/download/skill-v2026.05.29.5/miles-skill-2026.05.29.5.tar.gz
 ```
 
 When `sourceSha256` is present, the installer verifies the downloaded archive before extracting it. Development manifests may temporarily use `sourceSha256: null`, but production releases should publish a checksum before users are asked to update.
+
+On supported platforms, the installer also downloads a Bun-compiled Miles CLI runtime from the same release and verifies that binary with its published SHA-256 before placing it at:
+
+```text
+~/.miles/bin/miles-runtime
+```
+
+If no verified binary is available, the launcher falls back to the auditable JavaScript CLI source and requires Node.js 20+.
 
 The payload manifest is versioned with the release. During local development and pre-release inspection it may also be served from:
 
@@ -50,6 +58,7 @@ It also creates:
 
 ```text
 ~/.miles/bin/miles
+~/.miles/bin/miles-runtime
 ~/.miles/bin/miles-skill
 ~/.miles/install/receipt.json
 ```

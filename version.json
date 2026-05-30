@@ -5,6 +5,28 @@
   "channel": "trunk",
   "source": "https://github.com/bymilesai/skills/archive/refs/heads/trunk.tar.gz",
   "sourceSha256": null,
+  "cliBinaries": {
+    "darwin-arm64": {
+      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.05.29.4/miles-cli-2026.05.29.4-darwin-arm64",
+      "sha256": null
+    },
+    "darwin-x64": {
+      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.05.29.4/miles-cli-2026.05.29.4-darwin-x64",
+      "sha256": null
+    },
+    "linux-arm64": {
+      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.05.29.4/miles-cli-2026.05.29.4-linux-arm64",
+      "sha256": null
+    },
+    "linux-x64": {
+      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.05.29.4/miles-cli-2026.05.29.4-linux-x64",
+      "sha256": null
+    },
+    "windows-x64": {
+      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.05.29.4/miles-cli-2026.05.29.4-windows-x64.exe",
+      "sha256": null
+    }
+  },
   "payloadManifest": "https://raw.githubusercontent.com/bymilesai/skills/trunk/payload-manifest.json",
   "installScript": "https://start.bymiles.ai/install.sh",
   "updateCheckIntervalHours": 24,

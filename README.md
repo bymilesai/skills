@@ -35,7 +35,7 @@ To preview the install without writing files:
 curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --dry-run
 ```
 
-The dry run shows the source archive, checksum status, destination directories, launcher paths, Node.js status, and payload file list.
+The dry run shows the source archive, checksum status, destination directories, launcher paths, bundled runtime status, JavaScript fallback status, and payload file list.
 It performs read-only GETs for the install and payload manifests unless a local source override is provided; if those fetches fail, it still prints the local plan and says the payload could not be inspected.
 
 To install only for Codex:
@@ -57,7 +57,7 @@ It also creates `~/.miles/bin/miles-skill`, a local helper for status, update ch
 
 Security summary: [INSTALL_SECURITY.md](INSTALL_SECURITY.md)
 
-After install, tell your agent what you want to build. A useful prompt includes the business or project, desired style, primary visitor goal, and any existing WordPress URL.
+After install, your agent should verify Miles and complete login if needed. It should not ask you to run `miles login` manually. Once Miles is authenticated, tell your agent what you want to build. A useful prompt includes the business or project, desired style, primary visitor goal, and any existing WordPress URL.
 
 > "Use Miles to design a warm, modern website for my yoga studio in Portland that helps visitors book intro classes."
 
@@ -79,10 +79,11 @@ See [INSTALL_FOR_AGENTS.md](INSTALL_FOR_AGENTS.md) for the agent-facing install 
 
 ## Requirements
 
-- Node.js 20+
+- A supported macOS, Linux, or Windows platform for the bundled Miles CLI runtime
+- Node.js 20+ only when using the JavaScript fallback, local source overrides, or unsupported platforms
 - A Miles AI account — sign up at [bymiles.ai](https://bymiles.ai)
 
-The current skill ships a zero-dependency Node CLI. The installer removes `npx` from the primary install path, but the runtime still needs Node 20+ until prebuilt binaries are published.
+The skill source includes an auditable zero-dependency JavaScript CLI. Versioned releases publish prebuilt Miles CLI executables so normal installs do not require users to have Node installed.
 
 ## Usage
 
@@ -124,7 +125,7 @@ Skill updates should ship as versioned releases, not moving branch archives. The
 1. Run the release script from a clean `trunk` checkout.
 2. The script bumps `version.json`, `install.sh`, and `payload-manifest.json`.
 3. The script opens and merges a release PR, then pushes a `skill-v<version>` tag.
-4. GitHub Actions packages an immutable `miles-skill-<version>.tar.gz` release asset, computes its SHA-256, and writes that checksum back to `trunk`'s `version.json`.
+4. GitHub Actions packages an immutable `miles-skill-<version>.tar.gz` release asset plus Bun-compiled CLI binaries, computes SHA-256 values, and writes those checksums back to `trunk`'s `version.json`.
 5. Installed helpers compare their receipt version with `https://start.bymiles.ai/version.json` and prompt users when a newer release is available.
 
 Default patch release:
@@ -147,7 +148,7 @@ Preview the next version without changing files:
 
 The workflow looks like:
 
-1. **Authentication** — agents use `miles login --json`, show the device code, then finish the same login after you authorize
+1. **Authentication** — agents use `miles login --json`, show the device code, then immediately run `miles login --poll --json` while you authorize
 2. **Create site** — `miles create-site "description"` starts a conversation with Miles
 3. **Discovery** — Miles asks questions, your agent relays them to you, sends your answers back
 4. **Brief review** — Miles presents a design brief for your approval

@@ -3,7 +3,7 @@
 /**
  * Miles CLI - Conversation transport for external AI agents.
  *
- * Zero-dependency Node.js ES module (uses built-in fetch, fs, child_process).
+ * Zero-dependency JavaScript CLI (uses built-in fetch, fs, child_process).
  * Wraps the Miles headless REST API for agent-to-agent workflows.
  */
 
@@ -83,6 +83,29 @@ let cliOptions = { json: false };
 // Track hero preview statuses across data parts for aggregate progress display
 const heroProgressTracker = new Map();
 const MAX_PROGRESS_TEXT_CHARS = 110;
+
+function runtimeName() {
+  if (process.versions?.bun) return 'bun';
+  return 'node';
+}
+
+function runtimeVersion() {
+  if (process.versions?.bun) return process.versions.bun;
+  return process.version;
+}
+
+function runtimeDetail() {
+  if (runtimeName() === 'bun') {
+    return `Bun ${runtimeVersion()} runtime`;
+  }
+  return `Node ${process.version}`;
+}
+
+function runtimeIsSupported() {
+  if (runtimeName() === 'bun') return true;
+  const nodeMajor = Number(process.versions.node?.split('.')[0]);
+  return Number.isFinite(nodeMajor) && nodeMajor >= 20;
+}
 
 // ============================================================================
 // Credential management
@@ -441,7 +464,10 @@ function getLocalRuntimeSummary(creds = loadCredentials()) {
       cli: MILES_CLI,
     },
     runtime: {
+      name: runtimeName(),
+      version: runtimeVersion(),
       node: process.version,
+      nodeCompatibility: process.versions.node || null,
       platform: process.platform,
       websocket: typeof globalThis.WebSocket !== 'undefined',
     },
@@ -1077,7 +1103,6 @@ async function cmdDoctor() {
     credentialsError = err;
   }
   const summary = getLocalRuntimeSummary(creds);
-  const nodeMajor = Number(process.versions.node.split('.')[0]);
   let milesHomeDetail = MILES_HOME;
   let milesHomeWritable = true;
   try {
@@ -1099,9 +1124,9 @@ async function cmdDoctor() {
   }
   const checks = [
     {
-      name: 'node',
-      ok: nodeMajor >= 20,
-      detail: `Node ${process.version}`,
+      name: 'runtime',
+      ok: runtimeIsSupported(),
+      detail: runtimeDetail(),
     },
     {
       name: 'websocket',

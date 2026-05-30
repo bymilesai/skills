@@ -45,8 +45,8 @@ Creates a versioned Miles skill release:
   1. Bumps version.json, install.sh, and payload-manifest.json
   2. Opens and merges a release PR into trunk
   3. Tags the trunk commit as skill-v<version>
-  4. The release-skill GitHub Action publishes immutable assets and writes
-     sourceSha256 back to trunk's version.json`);
+  4. The release-skill GitHub Action publishes immutable source and CLI assets
+     and writes sourceSha256 plus binary checksums back to trunk's version.json`);
 }
 
 function run(command, args, options = {}) {
@@ -115,6 +115,32 @@ function releaseAssetBase(version) {
   return `https://github.com/${repo}/releases/download/skill-v${version}`;
 }
 
+function cliBinaryMap(version) {
+  const assetBase = releaseAssetBase(version);
+  return {
+    'darwin-arm64': {
+      url: `${assetBase}/miles-cli-${version}-darwin-arm64`,
+      sha256: null,
+    },
+    'darwin-x64': {
+      url: `${assetBase}/miles-cli-${version}-darwin-x64`,
+      sha256: null,
+    },
+    'linux-arm64': {
+      url: `${assetBase}/miles-cli-${version}-linux-arm64`,
+      sha256: null,
+    },
+    'linux-x64': {
+      url: `${assetBase}/miles-cli-${version}-linux-x64`,
+      sha256: null,
+    },
+    'windows-x64': {
+      url: `${assetBase}/miles-cli-${version}-windows-x64.exe`,
+      sha256: null,
+    },
+  };
+}
+
 function updateReleaseFiles(version, urgent) {
   const versionPath = join(repoRoot, 'version.json');
   const installPath = join(repoRoot, 'install.sh');
@@ -125,6 +151,7 @@ function updateReleaseFiles(version, urgent) {
   manifest.channel = 'stable';
   manifest.source = `${assetBase}/miles-skill-${version}.tar.gz`;
   manifest.sourceSha256 = null;
+  manifest.cliBinaries = cliBinaryMap(version);
   manifest.payloadManifest = `${assetBase}/payload-manifest-${version}.json`;
   manifest.urgent = urgent;
   writeJson(versionPath, manifest);
@@ -145,7 +172,9 @@ function updateReleaseFiles(version, urgent) {
 function runValidation() {
   run(process.execPath, ['--check', 'miles/scripts/miles-cli.mjs']);
   run(process.execPath, ['--check', 'miles/scripts/test-miles-cli.mjs']);
+  run(process.execPath, ['--check', 'scripts/package-cli-binaries.mjs']);
   run(process.execPath, ['scripts/generate-payload-manifest.mjs', '--check']);
+  run(process.execPath, ['scripts/package-cli-binaries.mjs', '--check']);
   run(process.execPath, ['test-install-lifecycle.mjs']);
   run(process.execPath, ['miles/scripts/test-miles-cli.mjs']);
   run(process.execPath, ['scripts/package-skill-release.mjs', '--json']);
@@ -240,7 +269,7 @@ async function main() {
   run('git', ['push', 'origin', tagName]);
 
   console.log(`Skill release tag pushed: ${tagName}`);
-  console.log('GitHub Actions will publish the immutable release asset and update sourceSha256.');
+  console.log('GitHub Actions will publish immutable release assets and update source/binary checksums.');
 }
 
 main().catch((error) => {

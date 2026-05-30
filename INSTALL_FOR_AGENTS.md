@@ -45,7 +45,7 @@ To inspect planned actions without writing files:
 curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --dry-run
 ```
 
-The dry run prints the source archive, checksum status, destination directories, launcher paths, Node.js status, and payload file list. It writes no files.
+The dry run prints the source archive, checksum status, destination directories, launcher paths, bundled runtime status, JavaScript fallback status, and payload file list. It writes no files.
 It performs read-only GETs for the install and payload manifests unless a local source override is provided. If those fetches fail, it still prints the local plan and says the payload could not be inspected.
 
 To get a machine-readable plan:
@@ -62,7 +62,7 @@ curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --agent codex
 
 Supported explicit agents are `codex`, `claude`, `cursor`, `opencode`, and `shared`. The default `all` mode installs into the shared universal skill directory plus Claude Code's dedicated skill directory. `codex`, `cursor`, and `opencode` target the universal `~/.agents/skills` path.
 
-The installer reads `https://start.bymiles.ai/version.json`, downloads the Miles skill source archive named by that manifest, verifies the archive SHA-256 when the manifest publishes `sourceSha256`, copies the `miles/` skill into the shared universal and Claude Code global skill directories, and creates a convenience launcher at `~/.miles/bin/miles`. The runtime requires Node.js 20+. It does not use `sudo`, `npx`, `eval`, base64 payloads, or browser automation.
+The installer reads `https://start.bymiles.ai/version.json`, downloads the Miles skill source archive named by that manifest, verifies the archive SHA-256 when the manifest publishes `sourceSha256`, copies the `miles/` skill into the shared universal and Claude Code global skill directories, and creates convenience launchers at `~/.miles/bin/miles` and `~/.miles/bin/miles-skill`. On supported platforms the launcher uses a bundled Miles CLI runtime; the JavaScript fallback requires Node.js 20+. It does not use `sudo`, `npx`, `eval`, base64 payloads, or browser automation.
 
 Use this canonical summary for security explanations instead of inventing one from scratch:
 
@@ -103,22 +103,14 @@ Miles recommends this install command:
 
 curl -fsSL https://start.bymiles.ai/install.sh | sh
 
-It will download the Miles skill from GitHub, install it into local agent skill directories such as ~/.agents/skills/miles, and create ~/.miles/bin/miles.
+It will download the Miles skill from GitHub, verify release checksums when published, install it into local agent skill directories such as ~/.agents/skills/miles, and create ~/.miles/bin/miles.
 
 Do you want me to run it?
 ```
 
-## 3. Activate
+## 3. Verify and log in
 
-Tell the user they can try Miles now. Codex and Claude Code commonly pick up new or updated skills without a restart. For OpenCode, try the current session first. For Cursor, try the current session first; if the skill is not visible, start a new chat or use `Developer: Reload Window` before trying a full restart.
-
-Suggested wording:
-
-> Miles is installed. What site should we design? Tell me the business or project, the style you want, the main visitor goal, and any existing WordPress URL. For example: "Use Miles to design a warm, modern website for my yoga studio in Portland that helps visitors book intro classes." If this agent does not see the new skill, start a new chat or reload the agent window.
-
-## 4. First use
-
-After install, use the Miles skill when the user asks to design, build, redesign, edit, or export a WordPress website with Miles.
+After the installer returns, do not stop with a manual login instruction. Finish setup in the same flow unless the user explicitly asks to pause.
 
 First run the gated update check:
 
@@ -134,8 +126,6 @@ The update check is locally cached for 24 hours. If it returns `"shouldPrompt": 
 
 If the user approves the update, continue with Miles. If the host does not see the updated skill, start a new chat or reload the agent window. If they decline, continue with the current installed skill and do not ask again in the same turn.
 
-Run:
-
 ```bash
 ~/.miles/bin/miles doctor --json
 ~/.miles/bin/miles whoami
@@ -149,12 +139,24 @@ If unauthenticated, run:
 
 Show the returned `userCode` and complete `verificationUrl` to the user. The page should show the same code; if it matches, the user can click Authorize. The CLI stores a private pending-login receipt locally; immediately run `~/.miles/bin/miles login --poll --json` to listen while the user authorizes, then continue when it returns `authorized`. If JSON reports `"pendingState": "unsaved"`, keep the returned `deviceCode` private and pass it explicitly to `login --poll`.
 
+Do not ask the user whether they want to run login themselves. Installing Miles is not complete until Miles is either already authenticated or the agent has started this login handoff and listener.
+
+## 4. First use
+
+After install and login, use the Miles skill when the user asks to design, build, redesign, edit, or export a WordPress website with Miles. Codex and Claude Code commonly pick up new or updated skills without a restart. For OpenCode, try the current session first. For Cursor, try the current session first; if the skill is not visible, start a new chat or use `Developer: Reload Window` before trying a full restart.
+
+Suggested wording after Miles is installed and authenticated:
+
+> Miles is installed and logged in. What site should we design? Tell me the business or project, the style you want, the main visitor goal, and any existing WordPress URL. For example: "Use Miles to design a warm, modern website for my yoga studio in Portland that helps visitors book intro classes."
+
+If this agent does not see the new skill, start a new chat or reload the agent window.
+
 ## 5. What to tell the user
 
 Keep it short and concrete:
 
 ```text
-Miles is installed. What site should we design? Tell me the business or project, the style you want, the main visitor goal, and any existing WordPress URL. On first use I may ask you to log in at bymiles.ai.
+Miles is ready. What site should we design? Tell me the business or project, the style you want, the main visitor goal, and any existing WordPress URL.
 ```
 
 ## 6. Uninstall

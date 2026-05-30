@@ -89,7 +89,7 @@ If Miles is not authenticated, start a non-blocking device login:
 "$MILES_CLI" login --json
 ```
 
-Parse `userCode`, `verificationUrl`, `intervalSeconds`, and `expiresInSeconds` from JSON. The CLI also saves a local pending-login receipt containing the private `deviceCode`, so the next poll can finish the same login without pasting that secret into shell history. Show the user the code and complete URL in a visible assistant message, then immediately start the login listener command below. Do not wait for the user to say "done".
+Parse `userCode`, `verificationUrl`, `intervalSeconds`, `expiresInSeconds`, and `pendingState` from JSON. The CLI also saves a local pending-login receipt containing the private `deviceCode`, so the next poll can finish the same login without pasting that secret into shell history. If `pendingState` is `unsaved`, keep the returned `deviceCode` private and pass it explicitly to the poll command. Show the user the code and complete URL in a visible assistant message, then immediately start the login listener command below. Do not wait for the user to say "done".
 
 The visible message must include:
 
@@ -100,11 +100,15 @@ Open: <verificationUrl>
 Open the URL. The page should show this same code; if it matches, click Authorize. You do not need to type the code. I will keep listening for authorization.
 ```
 
-Then immediately run:
+Then immediately run this when `pendingState` is `saved`:
 
 ```bash
 "$MILES_CLI" login --poll --json
 ```
+
+If `pendingState` is `unsaved`, run `"$MILES_CLI" login --poll <deviceCode> --json` instead, using the private `deviceCode` from the JSON response.
+
+Run the listener with the host command timeout set to at least 10 minutes (600000ms). It polls immediately, then at the server interval while the user authorizes.
 
 If `status` is `authorized`, confirm with `"$MILES_CLI" whoami`, then continue. If `status` is `authorized_but_unsaved`, tell the user authorization succeeded but credentials could not be saved at `credentialsPath`, and include the error. If `status` is `pending`, keep polling the same `deviceCode`; when `nextPollIntervalSeconds` or `retryAfterSeconds` is present, wait at least that long before the next poll. If `status` is `rate_limited`, wait `retryAfterSeconds` before polling the same `deviceCode` again; do not request a fresh code. If `status` is `expired` or `timeout`, request a fresh code with `login --json` and show that new code to the user. If `status` is `denied`, tell the user authorization was declined and offer to retry with a fresh code. If `status` is `transport_error`, retry polling the same `deviceCode` unless the code has expired. If `status` is `invalid_request`, start a fresh login and report the error if it repeats.
 
@@ -259,7 +263,7 @@ If not logged in, start a non-blocking login. `miles login` must request a code 
 "$MILES_CLI" login --json
 ```
 
-Parse the JSON, including `userCode`, complete `verificationUrl`, `intervalSeconds`, and `expiresInSeconds`. The CLI stores the private `deviceCode` locally for the polling step. Display the agent-side `userCode` and complete `verificationUrl` to the user in a visible assistant message, then immediately run `"$MILES_CLI" login --poll --json` to listen for authorization. The user must compare the browser code with the agent code before authorizing; this is a security requirement. Prefer the complete URL over opening the OS/default browser because the host browser may differ from the user's active browser profile.
+Parse the JSON, including `userCode`, complete `verificationUrl`, `intervalSeconds`, `expiresInSeconds`, and `pendingState`. The CLI stores the private `deviceCode` locally for the polling step when `pendingState` is `saved`. If `pendingState` is `unsaved`, keep the returned `deviceCode` private and pass it explicitly to the poll command. Display the agent-side `userCode` and complete `verificationUrl` to the user in a visible assistant message, then immediately run the poll command to listen for authorization. The user must compare the browser code with the agent code before authorizing; this is a security requirement. Prefer the complete URL over opening the OS/default browser because the host browser may differ from the user's active browser profile.
 
 Hard rules:
 
@@ -277,6 +281,8 @@ Listen for authorization:
 ```bash
 "$MILES_CLI" login --poll --json
 ```
+
+Run the listener with the host command timeout set to at least 10 minutes (600000ms).
 
 When `status` is `authorized`, run `"$MILES_CLI" whoami` to confirm before continuing.
 

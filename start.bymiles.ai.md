@@ -130,7 +130,7 @@ If the user is not logged in, run:
 ~/.miles/bin/miles login --json
 ```
 
-Show the returned code and complete URL to the user. The page should show the same code; if it matches, the user can click Authorize. Immediately run `~/.miles/bin/miles login --poll --json` to listen while the user authorizes, then continue when it returns `authorized`.
+Show the returned code and complete URL to the user. The page should show the same code; if it matches, the user can click Authorize. Immediately run `~/.miles/bin/miles login --poll --json` to listen while the user authorizes, then continue when it returns `authorized`. If JSON reports `"pendingState": "unsaved"`, keep the returned `deviceCode` private and pass it explicitly to `login --poll`.
 
 ## Updating and uninstalling
 

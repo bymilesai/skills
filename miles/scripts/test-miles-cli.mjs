@@ -2,6 +2,7 @@
 
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -149,6 +150,31 @@ function runHook(command, milesHome) {
     milesHome,
     input: hookPayload(command),
   });
+}
+
+function loginStateFile(milesHome) {
+  return join(milesHome, 'login-state.json');
+}
+
+function writePendingLogin(milesHome, overrides = {}) {
+  writeFileSync(
+    loginStateFile(milesHome),
+    JSON.stringify(
+      {
+        deviceCode: 'pending-device-123',
+        userCode: 'PEND-1234',
+        verificationUrl: 'https://beta.bymiles.ai/device?code=PEND-1234',
+        intervalSeconds: 5,
+        expiresInSeconds: 600,
+        expiresAt: new Date(Date.now() + 600000).toISOString(),
+        requestedAt: new Date().toISOString(),
+        ...overrides,
+      },
+      null,
+      2,
+    ),
+    { mode: 0o600 },
+  );
 }
 
 function startMockServer(handler) {
@@ -314,6 +340,14 @@ try {
     'missing pending login should fail fast',
   );
 
+  const loginEmptyPollCode = runJson(['login', '--poll', '', '--json']);
+  assert(loginEmptyPollCode.result.status === 2, 'login --poll should reject an explicit empty device code');
+  assertIncludes(
+    loginEmptyPollCode.json.error,
+    '--poll value cannot be empty',
+    'empty explicit device code should not fall back to pending state',
+  );
+
   const loginBadTimeout = runJson([
     'login',
     '--poll',
@@ -360,6 +394,11 @@ try {
   assert(loginRequestResult.status === 0, 'login request should exit immediately');
   assert(loginRequest.ok === true, 'login request should return ok true');
   assert(
+    loginRequest.pendingState === 'saved' &&
+      loginRequest.pendingStatePath === loginStateFile(loginJsonHome),
+    'login request should report saved pending state',
+  );
+  assert(
     loginRequest.deviceCode === 'device-secret-123',
     'login request should expose deviceCode for the polling command',
   );
@@ -394,6 +433,41 @@ try {
       loginJsonState.userCode === 'YXQS-SHNK',
     'login request should save pending login state for a later poll',
   );
+  const duplicateLoginStart = await runJsonAsync(['login', '--json'], {
+    milesHome: loginJsonHome,
+    env: { MILES_SERVER_URL: loginRequestMock.url },
+  });
+  assert(
+    duplicateLoginStart.result.status === 2,
+    'login should refuse to overwrite an active pending login',
+  );
+  assert(
+    loginRequestCalls.length === 1,
+    'active pending login refusal should happen before minting another device code',
+  );
+  assertIncludes(
+    duplicateLoginStart.json.error,
+    'already pending',
+    'active pending login refusal should explain how to recover',
+  );
+  const unsavedStateHomeRoot = makeTempDir();
+  const unsavedStateHome = join(unsavedStateHomeRoot, 'not-a-directory');
+  writeFileSync(unsavedStateHome, 'not a directory');
+  const { result: unsavedStateResult, json: unsavedStateLogin } =
+    await runJsonAsync(['login', '--json'], {
+      milesHome: unsavedStateHome,
+      env: { MILES_SERVER_URL: loginRequestMock.url },
+    });
+  assert(
+    unsavedStateResult.status === 0,
+    'login should still print the code when pending state cannot be saved',
+  );
+  assert(
+    unsavedStateLogin.pendingState === 'unsaved' &&
+      unsavedStateLogin.deviceCode === 'device-secret-123' &&
+      unsavedStateLogin.pendingStateError,
+    'unsaved pending state should be reported while preserving the device code',
+  );
   const loginTextHome = makeTempDir();
   const loginTextResult = await runAsync(['login'], {
     milesHome: loginTextHome,
@@ -416,7 +490,7 @@ try {
     'text login should explain that the code is for confirmation',
   );
   assert(
-    loginRequestCalls.length === 2 &&
+    loginRequestCalls.length === 3 &&
       loginRequestCalls.every((call) => call.url === '/api/v2/auth/device/device-code'),
     'text login should not poll before the user authorizes',
   );
@@ -470,6 +544,34 @@ try {
   assert(
     !existsSync(join(loginTextHome, 'login-state.json')),
     'successful saved-state login poll should clear pending login state',
+  );
+  const corruptStateHome = makeTempDir();
+  writeFileSync(loginStateFile(corruptStateHome), '{');
+  const corruptStatePoll = runJson(['login', '--poll', '--json'], {
+    milesHome: corruptStateHome,
+  });
+  assert(
+    corruptStatePoll.result.status === 2,
+    'corrupt pending login state should be treated as no pending login',
+  );
+  assert(
+    !existsSync(loginStateFile(corruptStateHome)),
+    'corrupt pending login state should be self-healed',
+  );
+  const expiredStateHome = makeTempDir();
+  writePendingLogin(expiredStateHome, {
+    expiresAt: new Date(Date.now() - 1000).toISOString(),
+  });
+  const expiredStatePoll = runJson(['login', '--poll', '--json'], {
+    milesHome: expiredStateHome,
+  });
+  assert(
+    expiredStatePoll.result.status === 2,
+    'expired pending login state should be treated as no pending login',
+  );
+  assert(
+    !existsSync(loginStateFile(expiredStateHome)),
+    'expired pending login state should be cleared before polling',
   );
 
   const loginSnakeCaseMock = await startMockServer((req, res) => {
@@ -665,6 +767,27 @@ try {
     !JSON.stringify(loginUnsaved).includes('mk_live_unsaved_1234567890'),
     'save failure should not leak the full API key',
   );
+  const unsavedStatePollHome = makeTempDir();
+  writePendingLogin(unsavedStatePollHome, {
+    deviceCode: 'unsaved-state-device',
+  });
+  writeFileSync(join(unsavedStatePollHome, 'credentials.json'), '{}', {
+    mode: 0o400,
+  });
+  const { result: loginUnsavedStateResult, json: loginUnsavedState } =
+    await runJsonAsync(['login', '--poll', '--json', '--once'], {
+      milesHome: unsavedStatePollHome,
+      env: { MILES_SERVER_URL: loginUnsavedMock.url },
+    });
+  assert(
+    loginUnsavedStateResult.status === 1 &&
+      loginUnsavedState.status === 'authorized_but_unsaved',
+    'authorized-but-unsaved saved-state poll should fail with structured status',
+  );
+  assert(
+    existsSync(loginStateFile(unsavedStatePollHome)),
+    'authorized-but-unsaved saved-state poll should preserve pending state for diagnosis',
+  );
 
   const loginExpiredMock = await startMockServer((req, res) => {
     req.on('data', () => {});
@@ -681,6 +804,23 @@ try {
   assert(
     loginExpired.ok === false && loginExpired.status === 'expired',
     'expired login poll should return a recoverable expired status',
+  );
+  const loginExpiredStateHome = makeTempDir();
+  writePendingLogin(loginExpiredStateHome, {
+    deviceCode: 'expired-state-device',
+  });
+  const { result: loginExpiredStateResult, json: loginExpiredState } =
+    await runJsonAsync(['login', '--poll', '--json', '--once'], {
+      milesHome: loginExpiredStateHome,
+      env: { MILES_SERVER_URL: loginExpiredMock.url },
+    });
+  assert(
+    loginExpiredStateResult.status === 1 && loginExpiredState.status === 'expired',
+    'expired saved-state poll should return expired',
+  );
+  assert(
+    !existsSync(loginStateFile(loginExpiredStateHome)),
+    'expired saved-state poll should clear pending login state',
   );
 
   const loginDeniedMock = await startMockServer((req, res) => {
@@ -721,6 +861,24 @@ try {
       loginRateLimited.retryAfterSeconds === 120,
     'rate-limited login poll should preserve retry-after guidance',
   );
+  const loginRateLimitedStateHome = makeTempDir();
+  writePendingLogin(loginRateLimitedStateHome, {
+    deviceCode: 'rate-limited-state-device',
+  });
+  const { result: loginRateLimitedStateResult, json: loginRateLimitedState } =
+    await runJsonAsync(['login', '--poll', '--json', '--once'], {
+      milesHome: loginRateLimitedStateHome,
+      env: { MILES_SERVER_URL: loginRateLimitedMock.url },
+    });
+  assert(
+    loginRateLimitedStateResult.status === 1 &&
+      loginRateLimitedState.status === 'rate_limited',
+    'rate-limited saved-state poll should return rate_limited',
+  );
+  assert(
+    existsSync(loginStateFile(loginRateLimitedStateHome)),
+    'rate-limited saved-state poll should preserve pending login state',
+  );
 
   const loginTransportMock = await startMockServer((req) => {
     req.socket.destroy();
@@ -735,8 +893,27 @@ try {
     loginTransport.status === 'transport_error',
     'transport error login poll should return a structured status',
   );
+  const loginTransportStateHome = makeTempDir();
+  writePendingLogin(loginTransportStateHome, {
+    deviceCode: 'transport-state-device',
+  });
+  const { result: loginTransportStateResult, json: loginTransportState } =
+    await runJsonAsync(['login', '--poll', '--json', '--once'], {
+      milesHome: loginTransportStateHome,
+      env: { MILES_SERVER_URL: loginTransportMock.url },
+    });
+  assert(
+    loginTransportStateResult.status === 1 &&
+      loginTransportState.status === 'transport_error',
+    'transport-error saved-state poll should return transport_error',
+  );
+  assert(
+    existsSync(loginStateFile(loginTransportStateHome)),
+    'transport-error saved-state poll should preserve pending login state',
+  );
 
   const secureCredsHome = makeTempDir();
+  writePendingLogin(secureCredsHome);
   writeFileSync(
     join(secureCredsHome, 'credentials.json'),
     JSON.stringify({ apiKey: 'existing-key' }),
@@ -753,6 +930,24 @@ try {
   assert(
     (statSync(join(secureCredsHome, 'credentials.json')).mode & 0o777) === 0o600,
     'credentials should be restricted to the current user',
+  );
+  assert(
+    !existsSync(loginStateFile(secureCredsHome)),
+    'logout should remove pending login state',
+  );
+  const logoutCleanupWarningHome = makeTempDir();
+  mkdirSync(loginStateFile(logoutCleanupWarningHome));
+  const { result: logoutCleanupWarningResult, json: logoutCleanupWarning } =
+    runJson(['logout', '--json'], {
+      milesHome: logoutCleanupWarningHome,
+    });
+  assert(
+    logoutCleanupWarningResult.status === 0,
+    'logout should succeed even when pending-state cleanup fails',
+  );
+  assert(
+    logoutCleanupWarning.cleanupWarning,
+    'logout should surface a cleanup warning without failing',
   );
 
   const { result: statusResult, json: status } = runJson(['status', '--json']);

@@ -89,7 +89,7 @@ If Miles is not authenticated, start a non-blocking device login:
 "$MILES_CLI" login --json
 ```
 
-Parse `userCode`, `verificationUrl`, `deviceCode`, `intervalSeconds`, and `expiresInSeconds` from JSON. Show the user the code and complete URL as the final assistant message of the turn, then stop and wait for the user to authorize. Do not run another command after displaying the code in that turn.
+Parse `userCode`, `verificationUrl`, `intervalSeconds`, and `expiresInSeconds` from JSON. The CLI also saves a local pending-login receipt containing the private `deviceCode`, so the next poll can finish the same login without pasting that secret into shell history. Show the user the code and complete URL as the final assistant message of the turn, then stop and wait for the user to authorize. Do not run another command after displaying the code in that turn.
 
 Your final message for that turn must include:
 
@@ -103,7 +103,7 @@ Open the URL. The page should show this same code; if it matches, click Authoriz
 After the user confirms authorization, run:
 
 ```bash
-"$MILES_CLI" login --poll <deviceCode> --json --interval <intervalSeconds> --expires-in <expiresInSeconds>
+"$MILES_CLI" login --poll --json
 ```
 
 If `status` is `authorized`, confirm with `"$MILES_CLI" whoami`, then continue. If `status` is `authorized_but_unsaved`, tell the user authorization succeeded but credentials could not be saved at `credentialsPath`, and include the error. If `status` is `pending`, keep polling the same `deviceCode`; when `nextPollIntervalSeconds` or `retryAfterSeconds` is present, wait at least that long before the next poll. If `status` is `rate_limited`, wait `retryAfterSeconds` before polling the same `deviceCode` again; do not request a fresh code. If `status` is `expired` or `timeout`, request a fresh code with `login --json` and show that new code to the user. If `status` is `denied`, tell the user authorization was declined and offer to retry with a fresh code. If `status` is `transport_error`, retry polling the same `deviceCode` unless the code has expired. If `status` is `invalid_request`, start a fresh login and report the error if it repeats.
@@ -259,7 +259,7 @@ If not logged in, start a non-blocking login. `miles login` must request a code 
 "$MILES_CLI" login --json
 ```
 
-Parse the JSON, including `deviceCode`, `userCode`, complete `verificationUrl`, `intervalSeconds`, and `expiresInSeconds`. Display the agent-side `userCode` and complete `verificationUrl` to the user as the final assistant message of the turn. The user must compare the browser code with the agent code before authorizing; this is a security requirement. Prefer the complete URL over opening the OS/default browser because the host browser may differ from the user's active browser profile.
+Parse the JSON, including `userCode`, complete `verificationUrl`, `intervalSeconds`, and `expiresInSeconds`. The CLI stores the private `deviceCode` locally for the polling step. Display the agent-side `userCode` and complete `verificationUrl` to the user as the final assistant message of the turn. The user must compare the browser code with the agent code before authorizing; this is a security requirement. Prefer the complete URL over opening the OS/default browser because the host browser may differ from the user's active browser profile.
 
 Hard rules:
 
@@ -275,7 +275,7 @@ Hard rules:
 When the user says they have authorized, finish the login:
 
 ```bash
-"$MILES_CLI" login --poll <deviceCode> --json --interval <intervalSeconds> --expires-in <expiresInSeconds>
+"$MILES_CLI" login --poll --json
 ```
 
 When `status` is `authorized`, run `"$MILES_CLI" whoami` to confirm before continuing.

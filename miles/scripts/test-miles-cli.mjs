@@ -302,16 +302,16 @@ try {
   assert(loginMutex.result.status === 2, 'login request/poll modes should be exclusive');
   assertIncludes(
     loginMutex.json.error,
-    'either `miles login` to request a code or `miles login --poll <deviceCode>`',
+    'either `miles login` to request a code or `miles login --poll [deviceCode]`',
     'login request/poll mutex should explain the conflict',
   );
 
   const loginMissingPollCode = runJson(['login', '--poll', '--json']);
-  assert(loginMissingPollCode.result.status === 2, 'login --poll should require a device code');
+  assert(loginMissingPollCode.result.status === 2, 'login --poll should require a pending login or device code');
   assertIncludes(
     loginMissingPollCode.json.error,
-    '--poll requires a value',
-    'missing device code should fail fast',
+    'No pending Miles login found',
+    'missing pending login should fail fast',
   );
 
   const loginBadTimeout = runJson([
@@ -349,9 +349,13 @@ try {
     res.writeHead(404, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: 'not_found' }));
   });
+  const loginJsonHome = makeTempDir();
   const { result: loginRequestResult, json: loginRequest } = await runJsonAsync(
     ['login', '--json'],
-    { env: { MILES_SERVER_URL: loginRequestMock.url } },
+    {
+      milesHome: loginJsonHome,
+      env: { MILES_SERVER_URL: loginRequestMock.url },
+    },
   );
   assert(loginRequestResult.status === 0, 'login request should exit immediately');
   assert(loginRequest.ok === true, 'login request should return ok true');
@@ -382,7 +386,17 @@ try {
       loginRequestCalls[0].url === '/api/v2/auth/device/device-code',
     'login request should not poll before the agent shows the code',
   );
+  const loginJsonState = JSON.parse(
+    readFileSync(join(loginJsonHome, 'login-state.json'), 'utf8'),
+  );
+  assert(
+    loginJsonState.deviceCode === 'device-secret-123' &&
+      loginJsonState.userCode === 'YXQS-SHNK',
+    'login request should save pending login state for a later poll',
+  );
+  const loginTextHome = makeTempDir();
   const loginTextResult = await runAsync(['login'], {
+    milesHome: loginTextHome,
     env: { MILES_SERVER_URL: loginRequestMock.url },
   });
   assert(loginTextResult.status === 0, 'text login should exit immediately');
@@ -405,6 +419,57 @@ try {
     loginRequestCalls.length === 2 &&
       loginRequestCalls.every((call) => call.url === '/api/v2/auth/device/device-code'),
     'text login should not poll before the user authorizes',
+  );
+  const loginTextState = JSON.parse(
+    readFileSync(join(loginTextHome, 'login-state.json'), 'utf8'),
+  );
+  assert(
+    loginTextState.deviceCode === 'device-secret-123',
+    'text login should also save pending login state',
+  );
+  const loginSavedStatePollMock = await startMockServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => {
+      assert(
+        req.method === 'POST' && req.url === '/api/v2/auth/device/device-token',
+        'saved-state login poll should call the device token endpoint',
+      );
+      assert(
+        JSON.parse(body).deviceCode === 'device-secret-123',
+        'saved-state login poll should use the locally saved deviceCode',
+      );
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          apiKey: 'mk_live_saved_state_1234567890',
+          keyPrefix: 'mk_live_saved',
+        }),
+      );
+    });
+  });
+  const { result: loginSavedStatePollResult, json: loginSavedStatePoll } =
+    await runJsonAsync(['login', '--poll', '--json', '--once'], {
+      milesHome: loginTextHome,
+      env: { MILES_SERVER_URL: loginSavedStatePollMock.url },
+    });
+  assert(
+    loginSavedStatePollResult.status === 0,
+    'login --poll without a deviceCode should finish from saved pending state',
+  );
+  assert(
+    loginSavedStatePoll.status === 'authorized',
+    'saved-state login poll should return authorized',
+  );
+  assert(
+    existsSync(join(loginTextHome, 'credentials.json')),
+    'saved-state login poll should save credentials',
+  );
+  assert(
+    !existsSync(join(loginTextHome, 'login-state.json')),
+    'successful saved-state login poll should clear pending login state',
   );
 
   const loginSnakeCaseMock = await startMockServer((req, res) => {

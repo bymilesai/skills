@@ -14,6 +14,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  unlinkSync,
   writeFileSync,
 } from 'fs';
 import { homedir } from 'os';
@@ -50,6 +51,7 @@ const MILES_HOME = resolve(
 );
 const CREDENTIALS_DIR = MILES_HOME;
 const CREDENTIALS_FILE = join(CREDENTIALS_DIR, 'credentials.json');
+const LOGIN_STATE_FILE = join(CREDENTIALS_DIR, 'login-state.json');
 const LAST_RESPONSE_FILE = join(CREDENTIALS_DIR, 'last-response');
 const SCREENSHOTS_DIR = join(CREDENTIALS_DIR, 'screenshots');
 const DEFAULT_SERVER_URL = process.env.MILES_SERVER_URL || 'https://api.bymiles.ai';
@@ -118,6 +120,46 @@ function ensureCredentialsDir() {
   }
 }
 
+function savePendingLogin(deviceAuth) {
+  ensureCredentialsDir();
+  const pendingLogin = {
+    deviceCode: deviceAuth.deviceCode,
+    userCode: deviceAuth.userCode,
+    verificationUrl: deviceAuth.verificationUrl,
+    intervalSeconds: deviceAuth.intervalSeconds,
+    expiresInSeconds: deviceAuth.expiresInSeconds,
+    expiresAt: deviceAuth.expiresAt,
+    requestedAt: new Date().toISOString(),
+  };
+  writeFileSync(LOGIN_STATE_FILE, JSON.stringify(pendingLogin, null, 2), {
+    mode: 0o600,
+  });
+  try {
+    chmodSync(LOGIN_STATE_FILE, 0o600);
+  } catch {
+    // Best effort on filesystems that do not preserve POSIX modes.
+  }
+}
+
+function loadPendingLogin() {
+  if (!existsSync(LOGIN_STATE_FILE)) return null;
+  try {
+    return JSON.parse(readFileSync(LOGIN_STATE_FILE, 'utf-8'));
+  } catch (err) {
+    throw new Error(
+      `Could not read pending Miles login at ${LOGIN_STATE_FILE}: ${err.message}`,
+    );
+  }
+}
+
+function clearPendingLogin() {
+  try {
+    unlinkSync(LOGIN_STATE_FILE);
+  } catch (err) {
+    if (!['ENOENT', 'ENOTDIR'].includes(err.code)) throw err;
+  }
+}
+
 function getActiveSite(creds) {
   if (!creds.activeSite || !creds.sites?.[creds.activeSite]) return null;
   return { id: creds.activeSite, ...creds.sites[creds.activeSite] };
@@ -180,6 +222,14 @@ function getCommandFlagValue(args, flag) {
   if (!value || value.startsWith('--')) {
     exitWithError(`Usage: ${flag} requires a value.`, 2);
   }
+  return value;
+}
+
+function getOptionalCommandFlagValue(args, flag) {
+  const index = args.indexOf(flag);
+  if (index === -1) return null;
+  const value = args[index + 1];
+  if (!value || value.startsWith('--')) return null;
   return value;
 }
 
@@ -842,28 +892,42 @@ async function cmdLogin(args = []) {
   const wantsPoll = hasCommandFlag(args, '--poll');
 
   if (wantsRequest && wantsPoll) {
-    exitWithError('Use either `miles login` to request a code or `miles login --poll <deviceCode>` to finish an existing login, not both.', 2);
+    exitWithError('Use either `miles login` to request a code or `miles login --poll [deviceCode]` to finish an existing login, not both.', 2);
   }
 
   if (wantsRequest) {
     const deviceAuth = await requestLoginDeviceCode(serverUrl);
+    savePendingLogin(deviceAuth);
     printLoginRequest(deviceAuth);
     return;
   }
 
   if (wantsPoll) {
-    const deviceCode = getCommandFlagValue(args, '--poll');
+    const explicitDeviceCode = getOptionalCommandFlagValue(args, '--poll');
+    const pendingLogin = explicitDeviceCode ? null : loadPendingLogin();
+    const deviceCode = explicitDeviceCode ?? pendingLogin?.deviceCode;
     if (!deviceCode) {
-      exitWithError('Usage: miles login --poll <deviceCode> [--json] [--interval <seconds>] [--expires-in <seconds>] [--timeout <seconds>] [--once]', 2);
+      exitWithError('No pending Miles login found. Run `miles login` first, show the code to the user, then run `miles login --poll` after they authorize.', 2);
     }
     const result = await pollLoginDeviceCode({
       deviceCode,
       serverUrl,
-      intervalSeconds: parsePositiveSecondsFlag(args, '--interval') ?? 5,
-      expiresInSeconds: parsePositiveSecondsFlag(args, '--expires-in') ?? 600,
+      intervalSeconds:
+        parsePositiveSecondsFlag(args, '--interval') ??
+        pendingLogin?.intervalSeconds ??
+        5,
+      expiresInSeconds:
+        parsePositiveSecondsFlag(args, '--expires-in') ??
+        pendingLogin?.expiresInSeconds ??
+        600,
       timeoutSeconds: parsePositiveSecondsFlag(args, '--timeout'),
       once: hasCommandFlag(args, '--once'),
     });
+    if (
+      !['pending', 'rate_limited', 'transport_error'].includes(result.status)
+    ) {
+      clearPendingLogin();
+    }
     const exitStatus =
       result.status === 'authorized' || result.status === 'pending' ? 0 : 1;
     printLoginPollResult(result, exitStatus);
@@ -871,11 +935,13 @@ async function cmdLogin(args = []) {
   }
 
   const deviceAuth = await requestLoginDeviceCode(serverUrl);
+  savePendingLogin(deviceAuth);
   printLoginRequest(deviceAuth);
 }
 
 async function cmdLogout() {
   saveCredentials({});
+  clearPendingLogin();
   if (cliOptions.json) {
     emitJson({ ok: true, authenticated: false, milesHome: MILES_HOME });
   } else {

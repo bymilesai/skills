@@ -701,6 +701,11 @@ EOF
 install_runtime_binary() {
   source_dir=$1
   tmp_dir=$2
+
+  if [ -n "${MILES_INSTALL_SOURCE_DIR:-}" ] && [ -z "${MILES_CLI_BINARY_URL:-}" ]; then
+    return
+  fi
+
   manifest_file=$(runtime_manifest_file "$source_dir" "$tmp_dir")
   platform=$(runtime_platform_key || true)
 
@@ -718,7 +723,7 @@ install_runtime_binary() {
   tmp_runtime="$tmp_dir/miles-runtime"
   log "Downloading bundled Miles CLI runtime for $platform"
   download_file "$url" "$tmp_runtime"
-  verify_file_sha256 "$tmp_runtime" "$sha256"
+  verify_file_sha256 "$tmp_runtime" "$sha256" "Miles CLI runtime"
 
   mkdir -p "$HOME/.miles/bin"
   runtime_target=$(runtime_binary_path)
@@ -891,7 +896,7 @@ download_source() {
 
   log "Downloading Miles skill from $source_url"
   download_file "$source_url" "$archive_path"
-  verify_file_sha256 "$archive_path" "$source_sha256"
+  verify_file_sha256 "$archive_path" "$source_sha256" "Miles source archive"
 
   mkdir -p "$tmp_dir/source"
   tar -xzf "$archive_path" -C "$tmp_dir/source"
@@ -917,6 +922,7 @@ download_file() {
 verify_file_sha256() {
   file=$1
   expected=$2
+  label=${3:-file}
 
   if [ -z "$expected" ]; then
     return
@@ -928,10 +934,10 @@ verify_file_sha256() {
   fi
 
   if [ "$actual" != "$expected" ]; then
-    fail "Source archive checksum mismatch. Expected $expected but got $actual"
+    fail "$label checksum mismatch. Expected $expected but got $actual"
   fi
 
-  log "Verified Miles source archive SHA-256: $actual"
+  log "Verified $label SHA-256: $actual"
 }
 
 file_sha256() {

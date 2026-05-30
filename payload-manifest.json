@@ -3,17 +3,17 @@
   "version": "2026.05.30.4",
   "root": "miles",
   "fileCount": 8,
-  "totalBytes": 181885,
+  "totalBytes": 188615,
   "files": [
     {
       "path": "miles/SKILL.md",
-      "size": 33174,
-      "sha256": "bffa90cb46656a5a0da33dc5641792e259475814903bc8a9c5f7879efb9cb545"
+      "size": 38907,
+      "sha256": "0da28f0aae4272e53ed70c614c6ed4aeb19cf1d4e03cdd75392844e238f08101"
     },
     {
       "path": "miles/commands.md",
-      "size": 10714,
-      "sha256": "0315c24b721daeb64196b8e489f2f0aa3495a1fb508292814d7ff87e6e08f9f9"
+      "size": 11711,
+      "sha256": "4f0785b967dc108877cbf9290475bb2f4f84c4d4185d5280e6e21f3f717fd9c4"
     },
     {
       "path": "miles/examples.md",

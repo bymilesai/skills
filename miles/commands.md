@@ -168,7 +168,11 @@ tail -f "$log" | grep --line-buffered -E "Miles:|\[phase:|\[status:|\[question:|
 
 For Claude Code, use Bash `run_in_background: true` for the long command and Monitor for the filtered log stream. Cursor and OpenCode should use their native streaming job surface when available, or the same temp-log monitor/poll pattern when foreground output is hidden. Always collect the final Miles response from the command result or log before continuing the workflow.
 
-Browser-backed edits need the dashboard WebSocket, but agents do not need to pre-check before every `miles reply`. Let the CLI guard the operation. If it returns `dashboard_connection_required`, open the authenticated dashboard URL with `miles preview --json`, wait for `connected: true`, and retry once. Keep proactive checks for high-stakes operations such as design selection and theme conversion.
+Browser-backed visual work needs an active dashboard. Before approving the brief to start design-direction generation, selecting a design direction, starting theme conversion, or retrying after `dashboard_connection_required`, agents should open the authenticated dashboard URL from `miles preview --json`.
+
+Use the best available browser surface in this order: internal controlled browser or preview tool, configured browser MCP/custom tool, then `miles preview --open` for the user's external OS browser. Always open the authenticated `url` from JSON, not `dashboardUrl`, and rerun `miles preview --json` until `connected: true` before browser-backed work. If no internal browser is available, use `miles preview --open` as the external fallback and keep checking connection state. Continue CLI-only only after telling the user visual review is degraded.
+
+Agents do not need to pre-check before every routine `miles reply`. Let the CLI guard the operation. If it returns `dashboard_connection_required`, open the authenticated dashboard URL, wait for `connected: true`, and retry once.
 
 ## Sandboxed Agents
 

@@ -124,17 +124,21 @@ jobs:
         run: |
           set -euo pipefail
 
+          cat > build/release/notes.md <<EOF
+          Miles agent skill release ${{ steps.version.outputs.version }}.
+
+          Source SHA-256: \`${{ steps.package.outputs.archiveSha256 }}\`
+
+          Includes bundled Miles CLI runtime assets for macOS, Linux, and Windows.
+          EOF
+
           gh release create "${{ steps.version.outputs.tag }}" \
             "${{ steps.package.outputs.archive }}#${{ steps.package.outputs.archiveName }}" \
             "${{ steps.package.outputs.payloadManifest }}#${{ steps.package.outputs.payloadManifestName }}" \
             build/cli/miles-cli-* \
             --repo bymilesai/skills \
             --title "Miles Skill ${{ steps.version.outputs.version }}" \
-            --notes "Miles agent skill release ${{ steps.version.outputs.version }}.
-
-Source SHA-256: \`${{ steps.package.outputs.archiveSha256 }}\`
-
-Includes bundled Miles CLI runtime assets for macOS, Linux, and Windows."
+            --notes-file build/release/notes.md
 
       - name: Publish checksum to trunk manifest
         run: |

@@ -2680,7 +2680,7 @@ async function cmdHook() {
   // and returns additionalContext if so
   let input = '';
   try {
-    input = readFileSync('/dev/stdin', 'utf-8');
+    input = readFileSync(0, 'utf-8');
   } catch (err) {
     console.error(`Miles hook warning: could not read hook payload: ${err.message}`);
     process.exit(0);

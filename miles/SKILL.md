@@ -155,9 +155,25 @@ Do not remove `~/.miles/credentials.json` unless the user explicitly asks to pur
 ~/.miles/bin/miles-skill uninstall --purge
 ```
 
-## Codex Progress Visibility
+## Progress Visibility
 
-Miles can stream many useful milestones while it works, but in Codex agent mode the Miles dashboard chat may be hidden from the user. The CLI exposes public progress signals from Miles' live stream, including tool action descriptions, safe tool titles, observations, design/build progress data, and final responses. Keep the main Codex chat calm while still showing that Miles is alive.
+Miles can stream useful milestones while it works, but each coding agent surfaces long-running command output differently. The CLI exposes public progress signals from Miles' live stream, including tool action descriptions, safe tool titles, observations, design/build progress data, final responses, and lines that start with `Miles:`. Keep the main agent chat calm while still showing that Miles is alive.
+
+Use the host-specific transport below for long-running commands:
+
+```text
+create-site, reply, wait, select-design-direction, build-theme
+```
+
+Recognize these progress signals:
+
+- `Miles: <action>` - fine-grained milestone
+- `[status: idle|streaming|completed|aborted]` - streaming state
+- `[phase: discovery|brief_review|generating_design_directions|design_directions_ready|building|site_preview|site_generation|converting|complete]` - workflow phase
+- `[question: ask_user_question|request_confirmation|open_ended]` - relay this to the user
+- `[directions]` - design direction list follows
+- `[site_ready: true]` - generated site is ready
+- `[warning: ...]`, `[error: ...]`, or `No credits` - surface immediately
 
 Prefer host-rendered progress when available, such as a single updating activity block or chip fed by the latest meaningful Miles milestone.
 
@@ -203,9 +219,54 @@ Done:
 - Verified desktop and mobile layout
 ```
 
+### Long-Running Command Transport by Host
+
+If the host identity is unclear, choose the transport based on observed behavior: live stdout can use the simple path; buffered or silent foreground output needs the temp-log monitor/poll path.
+
+Codex: run the long command normally with a 10-minute command timeout. Codex shows live stdout in its activity surface, so use the streamed output as progress signal and relay only concise milestones in the format above.
+
+Claude Code: do not run long Miles commands as plain blocking foreground Bash calls. Claude Code buffers foreground stdout, which hides the code's progress from the user. Instead:
+
+1. Start the command with Bash `run_in_background: true`.
+2. Merge stderr into stdout and tee output to a unique temp log.
+3. Start a Monitor on that log with a selective line-buffered filter.
+4. Relay Monitor notifications as concise `Miles:` milestones.
+5. When the background command exits, read the final response from the command result or the log and continue the normal Miles flow.
+6. Clean up the temp log after the final response is handled.
+
+Example command:
+
+```bash
+log="${TMPDIR:-/tmp}/miles-$(date +%s)-create-site.log"
+"$MILES_CLI" create-site "<description>" 2>&1 | tee "$log"
+```
+
+Example Monitor stream:
+
+```bash
+tail -f "$log" | grep --line-buffered -E "Miles:|\[phase:|\[status:|\[question:|\[directions\]|\[site_ready: true\]|\[warning:|\[error:|No credits|Done|complete|failed"
+```
+
+Monitor rules for Claude Code:
+
+- Only stdout lines produce notifications, so always use `2>&1`.
+- Any pipe in the Monitor path must be line-buffered.
+- The filter must include error and completion signatures, not only happy-path milestones.
+- Keep the filter selective; do not stream raw logs into chat.
+- If the command exits before the Monitor is armed, still read the log/final output and continue.
+- If the log is silent for a long time, send at most one neutral `Miles: stream active...` line and rely on command exit or `miles status --json`.
+
+Cursor: use the host's streaming terminal or agent activity surface when it shows live stdout. If stdout is buffered or the user sees silence during long Miles work, use the same background plus temp-log pattern. If Cursor has no Monitor-equivalent tool, poll the temp log with short reads and relay only new matching milestone lines.
+
+OpenCode: use the host's native job/progress surface when it streams stdout. If long foreground commands hide output, run the command in the background, tee stdout/stderr to a temp log, and poll or monitor the log for the same signal set. Preserve the final Miles response from the command output or log before continuing.
+
+Host-independent fallback: if no background or monitor facility exists, run the command with a generous timeout and avoid inventing progress. Use `miles status --json` between user-visible steps for coarse phase only; it does not include fine-grained `Miles:` lines.
+
+Future CLI improvement: a rolling `$MILES_HOME/progress.json` file would let every host poll progress without capturing stdout. Until then, capture stdout from the long command itself.
+
 ## Opening the Active Dashboard
 
-During long visual phases, keep the active Miles dashboard visible so the user can see progress. Prefer the host agent's internal browser when one is available. In Codex, this means reading and using the Browser skill, which controls the in-app browser through `node_repl`; do not require a direct browser tool namespace. Only use the CLI's external browser fallback after that path has been attempted or is unavailable.
+During long visual phases, keep the active Miles dashboard visible so the user can see progress. Prefer the host agent's internal browser, preview, webview, or navigation tool when one is available. Only use the CLI's external browser fallback after the host browser path has been attempted, is unavailable, or is blocked by policy.
 
 Mandatory checkpoint: when Miles enters `phase: generating_design_directions`, do not just tell the user you are waiting. Immediately get the active progress URL and open that exact URL in a browser view.
 
@@ -223,9 +284,17 @@ Open the returned `url` with the host's browser/navigation tool. Use the exact U
 
 The CLI does not launch dashboard windows from action commands. If the host browser rejects the authenticated handoff URL because of browser security policy, treat that as a hard stop for in-app dashboard opening. Do not try to get the same result by opening `dashboardUrl`, using raw browser protocols, or switching to another browser surface. Tell the user the in-app dashboard could not be opened by policy and use `"$MILES_CLI" preview --open` only when an external browser fallback is acceptable. Do this before design-direction generation, design selection, and theme conversion. For normal edit replies, let the CLI connection guard below decide whether reconnecting is needed.
 
-### Codex In-App Browser Requirement
+### Browser Tool Mapping by Host
 
-When running in Codex and the Browser plugin is available, you must use the Browser skill to open the Miles dashboard in the Codex in-app browser.
+Use the authenticated `url` from `"$MILES_CLI" preview --json` with whichever browser/navigation surface the host provides. Always rerun `preview --json` until `connected` is true before browser-backed design generation, design selection, or theme conversion.
+
+Codex: when the Browser plugin is available, use the Browser skill to open the Miles dashboard in the Codex in-app browser.
+
+Claude Code: prefer `mcp__Claude_in_Chrome__navigate` when available. If not, use `mcp__Claude_Preview__preview_start`. If neither browser surface is available or policy blocks the authenticated handoff, use `"$MILES_CLI" preview --open` only when an external browser fallback is acceptable.
+
+Cursor: use Cursor's available browser, preview, or navigation surface when one is present. Open the exact authenticated `url`, make it visible when the host supports visibility, and repoll `preview --json` until `connected` is true. If no internal surface exists, use `"$MILES_CLI" preview --open` as the explicit external fallback.
+
+OpenCode: use an available browser/webview/preview tool if the host exposes one. Otherwise, use `"$MILES_CLI" preview --open` only when acceptable, or continue CLI-only and explain that dashboard-backed visual work may wait for a connection.
 
 Do not decide Browser is unavailable just because there is no direct browser tool namespace. In Codex, Browser is controlled through the `node_repl` JavaScript tool after reading the Browser skill. Follow that skill's bootstrap, then:
 
@@ -301,6 +370,8 @@ If the user provided a written brief, save it to a temp file and use `--brief`:
 ```bash
 "$MILES_CLI" create-site --brief /tmp/brief.md "<summary>"
 ```
+
+Run `create-site` through the host's long-running command transport from Progress Visibility. In Claude Code, Cursor, or OpenCode, do not let the user stare at a silent foreground command if the host buffers stdout; use the background plus log monitor/poll pattern.
 
 ## Step 3: Relay the Conversation
 
@@ -383,6 +454,8 @@ If the answer contains `$`, quotes, backticks, multiline text, Markdown, or long
 "$MILES_CLI" reply --file /tmp/miles-reply.md
 ```
 
+Run `reply` through the host's long-running command transport whenever it may wait for Miles. This is especially important for brief approval, design-direction generation, generated-site edits, and any reply that can trigger build work.
+
 If the user replies with a number, send the exact Miles option text for that number. If the user writes a custom answer, pass the user's words through unchanged. If the user says "Modern and clean", send "Modern and clean" — Miles knows how to work with brief answers. Go straight to the next action after each reply; skip commentary like "Great choice!".
 
 </relay_guidance>
@@ -390,16 +463,16 @@ If the user replies with a number, send the exact Miles option text for that num
 <example>
 User prompt: "Build a website for my yoga studio"
 
-1. Run: `"$MILES_CLI" create-site "Build a website for my yoga studio"`
+1. Run through the host long-running transport: `"$MILES_CLI" create-site "Build a website for my yoga studio"`
 2. Miles responds with: `[question: What's the name of your studio?]`
 3. Use the native structured question tool if it can represent the question cleanly; otherwise show a Markdown card: "What's the name of your studio?"
 4. User answers: "Breathe Portland Yoga"
-5. Run: `"$MILES_CLI" reply "Breathe Portland Yoga"`
+5. Run through the host long-running transport: `"$MILES_CLI" reply "Breathe Portland Yoga"`
 6. Miles responds with next question → repeat relay
 7. Miles presents brief (phase: brief_review) → show brief to user, ask approval
-8. User approves → open the authenticated dashboard handoff from `"$MILES_CLI" preview --json`, wait for `connected: true`, then run `"$MILES_CLI" reply "Looks good, approved"`
+8. User approves → open the authenticated dashboard handoff from `"$MILES_CLI" preview --json`, wait for `connected: true`, then run `"$MILES_CLI" reply "Looks good, approved"` through the host long-running transport
 9. Miles generates design directions with the dashboard visible → inspect them in the browser, recommend one, then present the choices to the user
-10. User picks design 2 → ensure `"$MILES_CLI" preview --json` shows `connected: true`, then run `"$MILES_CLI" select-design-direction 2`
+10. User picks design 2 → ensure `"$MILES_CLI" preview --json` shows `connected: true`, then run `"$MILES_CLI" select-design-direction 2` through the host long-running transport
 11. Miles builds the site → `[site_ready: true]`
 </example>
 
@@ -438,7 +511,7 @@ Self-check before sending: if the response does not include the actual brief con
 
 When Miles finishes generating design directions (phase: `design_directions_ready`), the context includes preview URLs and metadata for each design.
 
-Before design-direction generation begins, tell the user it can take several minutes. Before you send the approval reply that starts generation, run `"$MILES_CLI" preview --json`, open the returned authenticated `url` with the host's internal browser/navigation tool, and rerun `preview --json` until `connected` is true. Then send the approval reply, for example `"$MILES_CLI" reply "Looks good, approved"`. This is required even if Miles has not returned design preview URLs yet; the dashboard URL shows generation progress while the user waits. Do not substitute `dashboardUrl` for the authenticated `url`; a fresh browser may not be logged in. If the internal browser is unavailable or the host policy denies the authenticated handoff, run `"$MILES_CLI" preview --open` as the explicit external-browser fallback when acceptable. During generation, send progress updates only for meaningful milestones: generation started, first design complete, halfway complete, all directions complete, or no visible progress for more than 90 seconds. Use the Codex Progress Visibility action-log style above. Avoid repeated "still waiting" updates unless there is new information or a long silence.
+Before design-direction generation begins, tell the user it can take several minutes. Before you send the approval reply that starts generation, run `"$MILES_CLI" preview --json`, open the returned authenticated `url` with the host's internal browser/navigation tool, and rerun `preview --json` until `connected` is true. Then send the approval reply, for example `"$MILES_CLI" reply "Looks good, approved"`. This is required even if Miles has not returned design preview URLs yet; the dashboard URL shows generation progress while the user waits. Do not substitute `dashboardUrl` for the authenticated `url`; a fresh browser may not be logged in. If the internal browser is unavailable or the host policy denies the authenticated handoff, run `"$MILES_CLI" preview --open` as the explicit external-browser fallback when acceptable. During generation, send progress updates only for meaningful milestones: generation started, first design complete, halfway complete, all directions complete, or no visible progress for more than 90 seconds. Use the Progress Visibility action-log style and host transport above. Avoid repeated "still waiting" updates unless there is new information or a long silence.
 
 When `preview --json` reports `connected: true`, treat the in-app browser dashboard as the primary design review surface. Run `"$MILES_CLI" design-directions --json` to get direction numbers, names, and preview URLs. Inspect the visible dashboard canvas first; open individual preview URLs in the in-app browser only when the dashboard cards do not expose enough detail to make a useful judgment. Evaluate each option for visual hierarchy, tone match with the user's brief, layout quality, image quality, overall polish, and suitability for the business and audience.
 
@@ -491,7 +564,7 @@ Ask the user which design they prefer using the same native-or-Markdown-card rul
 "$MILES_CLI" select-design-direction <number>
 ```
 
-The select command already waits for the build, so there's no need to run `miles wait` after it.
+Run `select-design-direction` through the host's long-running command transport. The select command already waits for the build, so there's no need to run `miles wait` after it.
 
 ## Step 5: The Built HTML Site
 
@@ -515,6 +588,8 @@ Converting the HTML site into a WordPress block theme is a separate operation fr
 "$MILES_CLI" build-theme
 "$MILES_CLI" export-theme         # Get WordPress theme download URL
 ```
+
+Run `build-theme` through the host's long-running command transport and keep the dashboard visible when possible.
 
 ## How the Hook Works
 

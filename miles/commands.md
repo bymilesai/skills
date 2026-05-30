@@ -3,7 +3,7 @@
 ## Authentication
 
 ### `miles doctor [--json]`
-Checks the local CLI runtime, skill path, `MILES_HOME`, credentials file, hook relay file, screenshot directory, Node version, WebSocket support, and active site state.
+Checks the local CLI runtime, skill path, `MILES_HOME`, credentials file, hook relay file, screenshot directory, WebSocket support, and active site state.
 
 Use this first when validating an install or when an agent cannot find the Miles CLI.
 

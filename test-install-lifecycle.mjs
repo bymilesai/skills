@@ -122,7 +122,7 @@ function writeManifest(dir, version, urgent = false) {
   return path;
 }
 
-function writeSourceManifest(dir, version, source, sourceSha256) {
+function writeSourceManifest(dir, version, source, sourceSha256, cliBinaries = undefined) {
   const path = join(dir, `source-version-${version}.json`);
   writeFileSync(
     path,
@@ -132,6 +132,7 @@ function writeSourceManifest(dir, version, source, sourceSha256) {
         version,
         source,
         sourceSha256,
+        ...(cliBinaries ? { cliBinaries } : {}),
         urgent: false,
       },
       null,
@@ -167,6 +168,17 @@ function createSourceArchive(dir) {
 
 function sha256File(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+function runtimePlatformKey() {
+  const platform = process.platform;
+  const arch = process.arch;
+  if (platform === 'darwin' && arch === 'arm64') return 'darwin-arm64';
+  if (platform === 'darwin' && arch === 'x64') return 'darwin-x64';
+  if (platform === 'linux' && arch === 'arm64') return 'linux-arm64';
+  if (platform === 'linux' && arch === 'x64') return 'linux-x64';
+  if (platform === 'win32' && arch === 'x64') return 'windows-x64';
+  return null;
 }
 
 function currentPayloadFiles() {
@@ -293,11 +305,28 @@ try {
   const archiveDir = makeTempDir('miles-install-archive-');
   const archive = createSourceArchive(archiveDir);
   const archiveHash = sha256File(archive);
+  const runtimePlatform = runtimePlatformKey();
+  const fakeRuntime = join(archiveDir, 'miles-runtime');
+  writeFileSync(
+    fakeRuntime,
+    '#!/bin/sh\nprintf "fake-runtime skill=%s args=%s\\n" "$MILES_SKILL_DIR" "$*"\n',
+    { mode: 0o755 },
+  );
+  const fakeRuntimeHash = sha256File(fakeRuntime);
+  const cliBinaries = runtimePlatform
+    ? {
+        [runtimePlatform]: {
+          url: `file://${fakeRuntime}`,
+          sha256: fakeRuntimeHash,
+        },
+      }
+    : undefined;
   const sourceManifest = writeSourceManifest(
     archiveDir,
     manifestVersion,
     `file://${archive}`,
     archiveHash,
+    cliBinaries,
   );
   const archiveHome = makeTempDir();
   run(['--agent', 'codex'], {
@@ -309,6 +338,24 @@ try {
     existsSync(join(archiveHome, '.agents/skills/miles/SKILL.md')),
     'Codex install should use the universal skill destination',
   );
+  if (runtimePlatform) {
+    assert(
+      existsSync(join(archiveHome, '.miles/bin/miles-runtime')),
+      'install should download the bundled runtime when it is checksum-pinned',
+    );
+    const runtimeLauncher = spawnSync(join(archiveHome, '.miles/bin/miles'), ['sentinel'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: { ...process.env, HOME: archiveHome },
+    });
+    assert(runtimeLauncher.status === 0, 'launcher should execute bundled runtime');
+    assert(
+      runtimeLauncher.stdout.includes('fake-runtime') &&
+        runtimeLauncher.stdout.includes('.agents/skills/miles') &&
+        runtimeLauncher.stdout.includes('sentinel'),
+      'launcher should pass skill path and args to bundled runtime',
+    );
+  }
 
   const badSourceManifest = writeSourceManifest(
     archiveDir,

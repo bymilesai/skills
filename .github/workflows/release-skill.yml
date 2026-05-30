@@ -26,6 +26,11 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - name: Validate release manifest
         id: version
         run: |
@@ -52,6 +57,22 @@ jobs:
           if (manifest.sourceSha256 !== null) {
             throw new Error('version.json sourceSha256 must be null before the release asset is packaged');
           }
+
+          const expectedCliBinaries = {
+            'darwin-arm64': `${expectedBase}/miles-cli-${version}-darwin-arm64`,
+            'darwin-x64': `${expectedBase}/miles-cli-${version}-darwin-x64`,
+            'linux-arm64': `${expectedBase}/miles-cli-${version}-linux-arm64`,
+            'linux-x64': `${expectedBase}/miles-cli-${version}-linux-x64`,
+            'windows-x64': `${expectedBase}/miles-cli-${version}-windows-x64.exe`,
+          };
+          for (const [key, url] of Object.entries(expectedCliBinaries)) {
+            if (manifest.cliBinaries?.[key]?.url !== url) {
+              throw new Error(`version.json cliBinaries.${key}.url does not point at the ${version} release asset`);
+            }
+            if (manifest.cliBinaries[key].sha256 !== null) {
+              throw new Error(`version.json cliBinaries.${key}.sha256 must be null before release packaging`);
+            }
+          }
           NODE
 
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
@@ -62,7 +83,9 @@ jobs:
           set -euo pipefail
           node --check miles/scripts/miles-cli.mjs
           node --check miles/scripts/test-miles-cli.mjs
+          node --check scripts/package-cli-binaries.mjs
           node scripts/generate-payload-manifest.mjs --check
+          node scripts/package-cli-binaries.mjs --check
           node test-install-lifecycle.mjs
           node miles/scripts/test-miles-cli.mjs
 
@@ -86,6 +109,17 @@ jobs:
           }
           NODE
 
+      - name: Package CLI binaries
+        run: |
+          set -euo pipefail
+          mkdir -p build/cli
+          node scripts/package-cli-binaries.mjs \
+            --version "${{ steps.version.outputs.version }}" \
+            --output-dir build/cli \
+            --json > build/cli/metadata.json
+
+          cat build/cli/metadata.json
+
       - name: Create GitHub release
         run: |
           set -euo pipefail
@@ -93,11 +127,14 @@ jobs:
           gh release create "${{ steps.version.outputs.tag }}" \
             "${{ steps.package.outputs.archive }}#${{ steps.package.outputs.archiveName }}" \
             "${{ steps.package.outputs.payloadManifest }}#${{ steps.package.outputs.payloadManifestName }}" \
+            build/cli/miles-cli-* \
             --repo bymilesai/skills \
             --title "Miles Skill ${{ steps.version.outputs.version }}" \
             --notes "Miles agent skill release ${{ steps.version.outputs.version }}.
 
-Source SHA-256: \`${{ steps.package.outputs.archiveSha256 }}\`"
+Source SHA-256: \`${{ steps.package.outputs.archiveSha256 }}\`
+
+Includes bundled Miles CLI runtime assets for macOS, Linux, and Windows."
 
       - name: Publish checksum to trunk manifest
         run: |
@@ -109,17 +146,25 @@ Source SHA-256: \`${{ steps.package.outputs.archiveSha256 }}\`"
           git fetch origin trunk
           git checkout trunk
 
-          node - "${{ steps.version.outputs.version }}" "${{ steps.package.outputs.archiveSha256 }}" <<'NODE'
+          node - "${{ steps.version.outputs.version }}" "${{ steps.package.outputs.archiveSha256 }}" "build/cli/metadata.json" <<'NODE'
           const fs = require('fs');
           const version = process.argv[2];
           const sha = process.argv[3];
+          const cliMetadataPath = process.argv[4];
           const manifest = JSON.parse(fs.readFileSync('version.json', 'utf8'));
+          const cliMetadata = JSON.parse(fs.readFileSync(cliMetadataPath, 'utf8'));
 
           if (manifest.version !== version) {
             throw new Error(`trunk version.json has ${manifest.version}, expected ${version}`);
           }
 
           manifest.sourceSha256 = sha;
+          for (const binary of cliMetadata.binaries) {
+            if (!manifest.cliBinaries?.[binary.key]) {
+              throw new Error(`trunk version.json is missing cliBinaries.${binary.key}`);
+            }
+            manifest.cliBinaries[binary.key].sha256 = binary.sha256;
+          }
           fs.writeFileSync('version.json', `${JSON.stringify(manifest, null, 2)}\n`);
           NODE
 

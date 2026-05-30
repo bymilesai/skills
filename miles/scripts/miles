@@ -3,9 +3,23 @@
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SKILL_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+RUNTIME="${MILES_RUNTIME_BINARY:-$HOME/.miles/bin/miles-runtime}"
+
+if [ -x "$RUNTIME" ]; then
+  MILES_SKILL_DIR="${MILES_SKILL_DIR:-$SKILL_DIR}" \
+  MILES_CLI="${MILES_CLI:-$0}" \
+  exec "$RUNTIME" "$@"
+fi
 
 if [ ! -f "$SCRIPT_DIR/miles-cli.mjs" ]; then
   echo "Miles CLI script not found: $SCRIPT_DIR/miles-cli.mjs" >&2
+  exit 1
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "Miles CLI runtime not found: $RUNTIME" >&2
+  echo "Install from start.bymiles.ai to get the bundled runtime, or install Node.js 20+ for the JavaScript fallback." >&2
   exit 1
 fi
 
@@ -16,4 +30,6 @@ if [ ! -x "$SCRIPT_DIR/miles-cli.mjs" ]; then
   }
 fi
 
+MILES_SKILL_DIR="${MILES_SKILL_DIR:-$SKILL_DIR}" \
+MILES_CLI="${MILES_CLI:-$0}" \
 exec "$SCRIPT_DIR/miles-cli.mjs" "$@"

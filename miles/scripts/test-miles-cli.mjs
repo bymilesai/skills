@@ -211,7 +211,7 @@ try {
   );
   assertIncludes(
     buildDevicePollingTimeoutMessage(defaultPollingPlan.maxWaitMs),
-    'Run `miles login --request --json`',
+    'Run `miles login`',
     'login timeout message should tell users how to recover',
   );
   assert(
@@ -240,13 +240,13 @@ try {
   const rateLimitWithRetry = buildDevicePollingRateLimitMessage(120);
   assert(
     rateLimitWithRetry ===
-      'Miles login polling was rate limited before authorization completed. Wait about 2m before trying again. Run `miles login --request --json` for a fresh code.',
+      'Miles login polling was rate limited before authorization completed. Wait about 2m before trying again. Run `miles login` for a fresh code.',
     'login rate limit message should include retry guidance without extra spaces',
   );
   const rateLimitWithoutRetry = buildDevicePollingRateLimitMessage();
   assert(
     rateLimitWithoutRetry ===
-      'Miles login polling was rate limited before authorization completed. Run `miles login --request --json` for a fresh code.',
+      'Miles login polling was rate limited before authorization completed. Run `miles login` for a fresh code.',
     'login rate limit message should degrade cleanly without retry timing',
   );
 
@@ -254,13 +254,8 @@ try {
   assert(helpResult.status === 0, 'help should exit cleanly');
   assertIncludes(
     helpResult.stdout,
-    'miles login --request --json      Request a device login code',
-    'help should document split login code requests',
-  );
-  assertIncludes(
-    helpResult.stdout,
-    'miles login --poll <deviceCode>   Poll for device authorization',
-    'help should document split login polling',
+    'miles login [--json]              Request a device login code',
+    'help should document the non-blocking login request',
   );
   assertIncludes(
     helpResult.stdout,
@@ -303,33 +298,11 @@ try {
   assert(whoami.authenticated === false, 'whoami should report unauthenticated JSON');
   assert(whoami.milesHome === whoamiHome, 'whoami should honor MILES_HOME');
 
-  const loginJsonRefusal = runJson(['login', '--json']);
-  assert(
-    loginJsonRefusal.result.status === 2,
-    'login --json should reject the ambiguous legacy blocking flow',
-  );
-  assertIncludes(
-    loginJsonRefusal.json.error,
-    'login --request --json',
-    'login --json refusal should point agents at the split flow',
-  );
-
-  const loginRequestTextRefusal = run(['login', '--request']);
-  assert(
-    loginRequestTextRefusal.status === 2,
-    'login --request without JSON should fail before minting an unusable device code',
-  );
-  assertIncludes(
-    loginRequestTextRefusal.stderr,
-    'login --request --json',
-    'non-JSON request refusal should explain the agent command',
-  );
-
   const loginMutex = runJson(['login', '--request', '--poll', 'device', '--json']);
   assert(loginMutex.result.status === 2, 'login request/poll modes should be exclusive');
   assertIncludes(
     loginMutex.json.error,
-    'either `miles login --request` or `miles login --poll <deviceCode>`',
+    'either `miles login` to request a code or `miles login --poll <deviceCode>`',
     'login request/poll mutex should explain the conflict',
   );
 
@@ -377,7 +350,7 @@ try {
     res.end(JSON.stringify({ error: 'not_found' }));
   });
   const { result: loginRequestResult, json: loginRequest } = await runJsonAsync(
-    ['login', '--request', '--json'],
+    ['login', '--json'],
     { env: { MILES_SERVER_URL: loginRequestMock.url } },
   );
   assert(loginRequestResult.status === 0, 'login request should exit immediately');
@@ -409,6 +382,30 @@ try {
       loginRequestCalls[0].url === '/api/v2/auth/device/device-code',
     'login request should not poll before the agent shows the code',
   );
+  const loginTextResult = await runAsync(['login'], {
+    env: { MILES_SERVER_URL: loginRequestMock.url },
+  });
+  assert(loginTextResult.status === 0, 'text login should exit immediately');
+  assertIncludes(
+    loginTextResult.stdout,
+    'Code: YXQS-SHNK',
+    'text login should show the user-facing code',
+  );
+  assertIncludes(
+    loginTextResult.stdout,
+    'Open: https://beta.bymiles.ai/device?code=YXQS-SHNK',
+    'text login should show the complete verification URL',
+  );
+  assertIncludes(
+    loginTextResult.stdout,
+    'You do not need to type the code.',
+    'text login should explain that the code is for confirmation',
+  );
+  assert(
+    loginRequestCalls.length === 2 &&
+      loginRequestCalls.every((call) => call.url === '/api/v2/auth/device/device-code'),
+    'text login should not poll before the user authorizes',
+  );
 
   const loginSnakeCaseMock = await startMockServer((req, res) => {
     req.on('end', () => {
@@ -427,7 +424,7 @@ try {
     req.resume();
   });
   const { result: loginSnakeResult, json: loginSnake } = await runJsonAsync(
-    ['login', '--request', '--json'],
+    ['login', '--json'],
     { env: { MILES_SERVER_URL: loginSnakeCaseMock.url } },
   );
   assert(loginSnakeResult.status === 0, 'login request should accept snake_case fields');
@@ -456,7 +453,7 @@ try {
     req.resume();
   });
   const { result: loginMissingExpiryResult, json: loginMissingExpiry } =
-    await runJsonAsync(['login', '--request', '--json'], {
+    await runJsonAsync(['login', '--json'], {
       env: { MILES_SERVER_URL: loginMissingExpiryMock.url },
     });
   assert(

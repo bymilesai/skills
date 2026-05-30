@@ -623,10 +623,12 @@ function printLoginRequest(deviceAuth) {
     return;
   }
 
-  exitWithError(
-    'Use `miles login --request --json` for agent login requests, or `miles login` for interactive login.',
-    2,
-  );
+  console.log('Miles login requested.\n');
+  console.log(`Code: ${deviceAuth.userCode}`);
+  console.log(`Open: ${deviceAuth.verificationUrl}\n`);
+  console.log('The page should show the same code. If it matches, click Authorize.');
+  console.log('You do not need to type the code.');
+  console.log('After authorizing, tell your agent it is done.');
 }
 
 function printLoginPollResult(result, exitStatus = 0) {
@@ -840,16 +842,10 @@ async function cmdLogin(args = []) {
   const wantsPoll = hasCommandFlag(args, '--poll');
 
   if (wantsRequest && wantsPoll) {
-    exitWithError('Use either `miles login --request` or `miles login --poll <deviceCode>`, not both.', 2);
+    exitWithError('Use either `miles login` to request a code or `miles login --poll <deviceCode>` to finish an existing login, not both.', 2);
   }
 
   if (wantsRequest) {
-    if (!cliOptions.json) {
-      exitWithError(
-        'Use `miles login --request --json` for agent login requests, or `miles login` for interactive login.',
-        2,
-      );
-    }
     const deviceAuth = await requestLoginDeviceCode(serverUrl);
     printLoginRequest(deviceAuth);
     return;
@@ -874,53 +870,8 @@ async function cmdLogin(args = []) {
     return;
   }
 
-  if (cliOptions.json) {
-    exitWithError('Use `miles login --request --json` to get a code, then `miles login --poll <deviceCode> --json` after the user authorizes it.', 2);
-  }
-
-  const shouldOpen = !hasCommandFlag(args, '--no-open');
-  console.log(
-    shouldOpen ? 'Opening browser for Miles login...' : 'Starting Miles login...',
-  );
-
   const deviceAuth = await requestLoginDeviceCode(serverUrl);
-  const {
-    deviceCode,
-    userCode,
-    verificationUrl,
-    intervalSeconds,
-    expiresInSeconds,
-  } = deviceAuth;
-
-  console.log(`\nYour code: ${userCode}`);
-  console.log(`Login URL: ${verificationUrl}\n`);
-
-  if (shouldOpen) {
-    openUrl(verificationUrl);
-  } else {
-    console.log(
-      'Open this URL in a browser and confirm the code matches.',
-    );
-  }
-
-  console.log('Waiting for authorization...');
-
-  const result = await pollLoginDeviceCode({
-    deviceCode,
-    serverUrl,
-    intervalSeconds,
-    expiresInSeconds,
-  });
-
-  if (result.status === 'authorized') {
-    console.log(`\nLogged in successfully!`);
-    if (result.apiKeyPrefix) {
-      console.log(`API key: ${result.apiKeyPrefix}`);
-    }
-    return;
-  }
-
-  printLoginPollResult(result, 1);
+  printLoginRequest(deviceAuth);
 }
 
 async function cmdLogout() {
@@ -944,7 +895,7 @@ async function cmdWhoami() {
       return;
     }
     console.log(
-      'Not logged in. Run `miles login --request --json` for agent login, or `miles login` for interactive login.',
+      'Not logged in. Run `miles login` to get a device login code.',
     );
     return;
   }
@@ -1027,7 +978,7 @@ async function cmdDoctor() {
       ok: summary.auth.authenticated,
       detail: summary.auth.authenticated
         ? 'Miles credentials are present'
-        : 'Not logged in. Run `miles login --request --json` for agent login, or `miles login` for interactive login.',
+        : 'Not logged in. Run `miles login` to get a device login code.',
     },
   ];
 
@@ -1111,7 +1062,7 @@ async function cmdCreateSite(args) {
   const creds = loadCredentials();
   if (!creds.apiKey) {
     exitWithError(
-      'Not logged in. Run `miles login --request --json` for agent login, or `miles login` for interactive login.',
+      'Not logged in. Run `miles login` to get a device login code.',
     );
   }
 
@@ -2659,8 +2610,7 @@ if (!command || command === 'help' || command === '--help') {
 
 Authentication:
   miles doctor                      Check local CLI setup
-  miles login --request --json      Request a device login code
-  miles login --poll <deviceCode>   Poll for device authorization
+  miles login [--json]              Request a device login code
   miles logout                      Clear stored credentials
   miles whoami                      Show current auth + active site
 
@@ -2737,7 +2687,7 @@ handler(args).catch((err) => {
     }
     // Self-correcting guidance
     if (err.status === 401) {
-      console.error('Try: miles login --request --json');
+      console.error('Try: miles login');
     } else if (err.status === 400 && err.data?.phase) {
       console.error(`Current phase: ${err.data.phase}`);
     }

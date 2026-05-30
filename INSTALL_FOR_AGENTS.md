@@ -144,10 +144,10 @@ Run:
 If unauthenticated, run:
 
 ```bash
-~/.miles/bin/miles login
+~/.miles/bin/miles login --json
 ```
 
-`miles login` opens the external browser for device authorization. Keep it in the external browser because in-agent browsers may not support hardware security keys or identity-provider flows.
+Show the returned `userCode` and complete `verificationUrl` to the user. The page should show the same code; if it matches, the user can click Authorize. Do not run the login polling step until after the user has seen the code.
 
 ## 5. What to tell the user
 

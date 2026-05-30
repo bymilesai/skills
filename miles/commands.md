@@ -7,19 +7,24 @@ Checks the local CLI runtime, skill path, `MILES_HOME`, credentials file, hook r
 
 Use this first when validating an install or when an agent cannot find the Miles CLI.
 
-### `miles login --request --json`
+### `miles login [--json]`
 Requests a Miles device login code and exits immediately, without polling or opening a browser.
+
+Text output presents the code and prefilled URL:
+
+```text
+Code: YXQS-SHNK
+Open: https://beta.bymiles.ai/device?code=YXQS-SHNK
+```
 
 JSON output includes `deviceCode`, `userCode`, complete code-embedded `verificationUrl`, `verificationUrlHasCode`, `intervalSeconds`, `expiresInSeconds`, and `expiresAt`. Agents should show `userCode` and `verificationUrl` to the user, ask the user to confirm the browser page shows the same code, then stop until the user authorizes.
 
 `deviceCode` is a bearer secret for the polling step. Do not paste it into user-facing messages, logs, or shared telemetry.
 
-`miles login --request` without `--json` exits with a usage error. Use `miles login --request --json` for agent login requests, or `miles login` for interactive login.
-
 ### `miles login --poll <deviceCode> --json [--interval <seconds>] [--expires-in <seconds>] [--timeout <seconds>] [--once]`
-Polls Miles for the result of a device login request. On success, saves the API key to `$MILES_HOME/credentials.json`.
+Finishes a pending device login after the user authorizes the code. On success, saves the API key to `$MILES_HOME/credentials.json`.
 
-Agents should pass `--interval` and `--expires-in` from the preceding `login --request --json` response.
+Agents should pass `--interval` and `--expires-in` from the preceding `login --json` response.
 
 JSON output uses stable `status` values:
 
@@ -37,9 +42,6 @@ JSON output uses stable `status` values:
 ```
 
 Use `--once` for a single status check. It exits 0 for both `authorized` and `pending`; agents must inspect `status`, not only the exit code. If `pending` includes `nextPollIntervalSeconds` or `retryAfterSeconds`, wait at least that long before polling again. Without `--once`, the command waits until authorization succeeds, expires, is denied, is rate-limited, has repeated transport failures, or times out. Default server: `https://api.bymiles.ai`.
-
-### `miles login [--no-open]`
-Legacy human-oriented device auth flow. It prints the code, optionally opens the OS/default browser, then blocks while polling. Agents must use the split request/poll commands instead so they can show the device code before waiting.
 
 By default, `MILES_HOME` is `~/.miles`. Set `MILES_HOME=/path/to/isolated/state` for clean-machine smoke tests or separate agent environments.
 

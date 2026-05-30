@@ -147,7 +147,7 @@ Preview the next version without changing files:
 
 The workflow looks like:
 
-1. **Authentication** — agents use `miles login --request --json`, show the device code, then finish with `miles login --poll`
+1. **Authentication** — agents use `miles login --json`, show the device code, then finish the same login after you authorize
 2. **Create site** — `miles create-site "description"` starts a conversation with Miles
 3. **Discovery** — Miles asks questions, your agent relays them to you, sends your answers back
 4. **Brief review** — Miles presents a design brief for your approval

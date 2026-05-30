@@ -144,10 +144,10 @@ Run:
 If unauthenticated, run:
 
 ```bash
-~/.miles/bin/miles login
+~/.miles/bin/miles login --json
 ```
 
-`miles login` opens the external browser for device authorization. Keep it in the external browser because in-agent browsers may not support hardware security keys or identity-provider flows.
+Show the returned `userCode` and complete `verificationUrl` to the user. The page should show the same code; if it matches, the user can click Authorize. The CLI stores a private pending-login receipt locally; immediately run `~/.miles/bin/miles login --poll --json` to listen while the user authorizes, then continue when it returns `authorized`. If JSON reports `"pendingState": "unsaved"`, keep the returned `deviceCode` private and pass it explicitly to `login --poll`.
 
 ## 5. What to tell the user
 

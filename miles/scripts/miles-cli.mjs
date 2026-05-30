@@ -14,6 +14,8 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
+  unlinkSync,
   writeFileSync,
 } from 'fs';
 import { homedir } from 'os';
@@ -50,6 +52,7 @@ const MILES_HOME = resolve(
 );
 const CREDENTIALS_DIR = MILES_HOME;
 const CREDENTIALS_FILE = join(CREDENTIALS_DIR, 'credentials.json');
+const LOGIN_STATE_FILE = join(CREDENTIALS_DIR, 'login-state.json');
 const LAST_RESPONSE_FILE = join(CREDENTIALS_DIR, 'last-response');
 const SCREENSHOTS_DIR = join(CREDENTIALS_DIR, 'screenshots');
 const DEFAULT_SERVER_URL = process.env.MILES_SERVER_URL || 'https://api.bymiles.ai';
@@ -118,6 +121,109 @@ function ensureCredentialsDir() {
   }
 }
 
+function savePendingLogin(deviceAuth) {
+  const existingLogin = loadPendingLogin({ warn: false });
+  if (existingLogin?.deviceCode) {
+    throw new Error(
+      `A Miles login is already pending for code ${existingLogin.userCode || 'unknown'}. Run \`miles login --poll --json\` to finish it, or \`miles logout\` to clear it before starting a new login.`,
+    );
+  }
+
+  ensureCredentialsDir();
+  const pendingLogin = {
+    deviceCode: deviceAuth.deviceCode,
+    userCode: deviceAuth.userCode,
+    verificationUrl: deviceAuth.verificationUrl,
+    intervalSeconds: deviceAuth.intervalSeconds,
+    expiresInSeconds: deviceAuth.expiresInSeconds,
+    expiresAt: deviceAuth.expiresAt,
+    requestedAt: new Date().toISOString(),
+  };
+  const tmpFile = `${LOGIN_STATE_FILE}.${process.pid}.tmp`;
+  writeFileSync(tmpFile, JSON.stringify(pendingLogin, null, 2), {
+    mode: 0o600,
+  });
+  try {
+    chmodSync(tmpFile, 0o600);
+  } catch {
+    // Best effort on filesystems that do not preserve POSIX modes.
+  }
+  renameSync(tmpFile, LOGIN_STATE_FILE);
+}
+
+function loadPendingLogin({ warn = true } = {}) {
+  if (!existsSync(LOGIN_STATE_FILE)) return null;
+  try {
+    const pendingLogin = JSON.parse(readFileSync(LOGIN_STATE_FILE, 'utf-8'));
+    if (pendingLogin.expiresAt) {
+      const expiresAtMs = Date.parse(pendingLogin.expiresAt);
+      if (Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now()) {
+        const warning = `Ignoring expired pending Miles login at ${LOGIN_STATE_FILE}.`;
+        clearPendingLogin();
+        if (warn && !cliOptions.json) console.error(warning);
+        return null;
+      }
+    }
+    return pendingLogin;
+  } catch (err) {
+    const warning = `Ignoring unreadable pending Miles login at ${LOGIN_STATE_FILE}: ${err.message}`;
+    clearPendingLogin();
+    if (warn && !cliOptions.json) console.error(warning);
+    return null;
+  }
+}
+
+function clearPendingLogin() {
+  try {
+    unlinkSync(LOGIN_STATE_FILE);
+    return null;
+  } catch (err) {
+    if (['ENOENT', 'ENOTDIR'].includes(err.code)) return null;
+    return `Could not remove pending Miles login at ${LOGIN_STATE_FILE}: ${err.message}`;
+  }
+}
+
+function attachPendingLoginState(deviceAuth, saveResult) {
+  const payload = {
+    ...deviceAuth,
+    pendingState: saveResult.ok ? 'saved' : 'unsaved',
+    pendingStatePath: LOGIN_STATE_FILE,
+  };
+  if (!saveResult.ok) {
+    payload.pendingStateError = saveResult.error;
+  }
+  return payload;
+}
+
+function savePendingLoginForRequest(deviceAuth) {
+  try {
+    savePendingLogin(deviceAuth);
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err.message,
+    };
+  }
+}
+
+function ensureNoActivePendingLogin() {
+  const pendingLogin = loadPendingLogin();
+  if (!pendingLogin?.deviceCode) return;
+
+  exitWithError(
+    'A Miles login is already pending. Finish it with `miles login --poll --json`, or run `miles logout` to clear it before starting a new login.',
+    2,
+    {
+      pendingState: 'exists',
+      pendingStatePath: LOGIN_STATE_FILE,
+      userCode: pendingLogin.userCode || null,
+      verificationUrl: pendingLogin.verificationUrl || null,
+      expiresAt: pendingLogin.expiresAt || null,
+    },
+  );
+}
+
 function getActiveSite(creds) {
   if (!creds.activeSite || !creds.sites?.[creds.activeSite]) return null;
   return { id: creds.activeSite, ...creds.sites[creds.activeSite] };
@@ -179,6 +285,17 @@ function getCommandFlagValue(args, flag) {
   const value = args[index + 1];
   if (!value || value.startsWith('--')) {
     exitWithError(`Usage: ${flag} requires a value.`, 2);
+  }
+  return value;
+}
+
+function getOptionalCommandFlagValue(args, flag) {
+  const index = args.indexOf(flag);
+  if (index === -1) return null;
+  const value = args[index + 1];
+  if (value === undefined || value.startsWith('--')) return null;
+  if (value === '') {
+    exitWithError(`Usage: ${flag} value cannot be empty.`, 2);
   }
   return value;
 }
@@ -623,10 +740,19 @@ function printLoginRequest(deviceAuth) {
     return;
   }
 
-  exitWithError(
-    'Use `miles login --request --json` for agent login requests, or `miles login` for interactive login.',
-    2,
-  );
+  console.log('Miles login requested.\n');
+  console.log(`Code: ${deviceAuth.userCode}`);
+  console.log(`Open: ${deviceAuth.verificationUrl}\n`);
+  console.log('The page should show the same code. If it matches, click Authorize.');
+  console.log('You do not need to type the code.');
+  if (deviceAuth.pendingState === 'unsaved') {
+    console.log(
+      `Pending login state could not be saved at ${deviceAuth.pendingStatePath}: ${deviceAuth.pendingStateError}`,
+    );
+    console.log('Agents must use the JSON deviceCode from this command when polling.');
+  } else {
+    console.log('Your agent should now run `miles login --poll` and keep listening while you authorize.');
+  }
 }
 
 function printLoginPollResult(result, exitStatus = 0) {
@@ -840,94 +966,66 @@ async function cmdLogin(args = []) {
   const wantsPoll = hasCommandFlag(args, '--poll');
 
   if (wantsRequest && wantsPoll) {
-    exitWithError('Use either `miles login --request` or `miles login --poll <deviceCode>`, not both.', 2);
+    exitWithError('Use either `miles login` to request a code or `miles login --poll [deviceCode]` to finish an existing login, not both.', 2);
   }
 
   if (wantsRequest) {
-    if (!cliOptions.json) {
-      exitWithError(
-        'Use `miles login --request --json` for agent login requests, or `miles login` for interactive login.',
-        2,
-      );
-    }
+    ensureNoActivePendingLogin();
     const deviceAuth = await requestLoginDeviceCode(serverUrl);
-    printLoginRequest(deviceAuth);
+    const saveResult = savePendingLoginForRequest(deviceAuth);
+    printLoginRequest(attachPendingLoginState(deviceAuth, saveResult));
     return;
   }
 
   if (wantsPoll) {
-    const deviceCode = getCommandFlagValue(args, '--poll');
+    const explicitDeviceCode = getOptionalCommandFlagValue(args, '--poll');
+    const pendingLogin = explicitDeviceCode ? null : loadPendingLogin();
+    const deviceCode = explicitDeviceCode ?? pendingLogin?.deviceCode;
     if (!deviceCode) {
-      exitWithError('Usage: miles login --poll <deviceCode> [--json] [--interval <seconds>] [--expires-in <seconds>] [--timeout <seconds>] [--once]', 2);
+      exitWithError('No pending Miles login found. Run `miles login` first, show the code to the user, then run `miles login --poll` after they authorize.', 2);
     }
     const result = await pollLoginDeviceCode({
       deviceCode,
       serverUrl,
-      intervalSeconds: parsePositiveSecondsFlag(args, '--interval') ?? 5,
-      expiresInSeconds: parsePositiveSecondsFlag(args, '--expires-in') ?? 600,
+      intervalSeconds:
+        parsePositiveSecondsFlag(args, '--interval') ??
+        pendingLogin?.intervalSeconds ??
+        5,
+      expiresInSeconds:
+        parsePositiveSecondsFlag(args, '--expires-in') ??
+        pendingLogin?.expiresInSeconds ??
+        600,
       timeoutSeconds: parsePositiveSecondsFlag(args, '--timeout'),
       once: hasCommandFlag(args, '--once'),
     });
+    if (['authorized', 'expired', 'denied', 'invalid_request', 'timeout'].includes(result.status)) {
+      const cleanupWarning = clearPendingLogin();
+      if (cleanupWarning) {
+        result.cleanupWarning = cleanupWarning;
+        if (!cliOptions.json) console.error(cleanupWarning);
+      }
+    }
     const exitStatus =
       result.status === 'authorized' || result.status === 'pending' ? 0 : 1;
     printLoginPollResult(result, exitStatus);
     return;
   }
 
-  if (cliOptions.json) {
-    exitWithError('Use `miles login --request --json` to get a code, then `miles login --poll <deviceCode> --json` after the user authorizes it.', 2);
-  }
-
-  const shouldOpen = !hasCommandFlag(args, '--no-open');
-  console.log(
-    shouldOpen ? 'Opening browser for Miles login...' : 'Starting Miles login...',
-  );
-
+  ensureNoActivePendingLogin();
   const deviceAuth = await requestLoginDeviceCode(serverUrl);
-  const {
-    deviceCode,
-    userCode,
-    verificationUrl,
-    intervalSeconds,
-    expiresInSeconds,
-  } = deviceAuth;
-
-  console.log(`\nYour code: ${userCode}`);
-  console.log(`Login URL: ${verificationUrl}\n`);
-
-  if (shouldOpen) {
-    openUrl(verificationUrl);
-  } else {
-    console.log(
-      'Open this URL in a browser and confirm the code matches.',
-    );
-  }
-
-  console.log('Waiting for authorization...');
-
-  const result = await pollLoginDeviceCode({
-    deviceCode,
-    serverUrl,
-    intervalSeconds,
-    expiresInSeconds,
-  });
-
-  if (result.status === 'authorized') {
-    console.log(`\nLogged in successfully!`);
-    if (result.apiKeyPrefix) {
-      console.log(`API key: ${result.apiKeyPrefix}`);
-    }
-    return;
-  }
-
-  printLoginPollResult(result, 1);
+  const saveResult = savePendingLoginForRequest(deviceAuth);
+  printLoginRequest(attachPendingLoginState(deviceAuth, saveResult));
 }
 
 async function cmdLogout() {
   saveCredentials({});
+  const cleanupWarning = clearPendingLogin();
   if (cliOptions.json) {
-    emitJson({ ok: true, authenticated: false, milesHome: MILES_HOME });
+    const payload = { ok: true, authenticated: false, milesHome: MILES_HOME };
+    if (cleanupWarning) payload.cleanupWarning = cleanupWarning;
+    emitJson(payload);
   } else {
+    if (cleanupWarning) console.error(cleanupWarning);
     console.log('Logged out. Credentials cleared.');
   }
 }
@@ -944,7 +1042,7 @@ async function cmdWhoami() {
       return;
     }
     console.log(
-      'Not logged in. Run `miles login --request --json` for agent login, or `miles login` for interactive login.',
+      'Not logged in. Run `miles login` to get a device login code.',
     );
     return;
   }
@@ -1027,7 +1125,7 @@ async function cmdDoctor() {
       ok: summary.auth.authenticated,
       detail: summary.auth.authenticated
         ? 'Miles credentials are present'
-        : 'Not logged in. Run `miles login --request --json` for agent login, or `miles login` for interactive login.',
+        : 'Not logged in. Run `miles login` to get a device login code.',
     },
   ];
 
@@ -1111,7 +1209,7 @@ async function cmdCreateSite(args) {
   const creds = loadCredentials();
   if (!creds.apiKey) {
     exitWithError(
-      'Not logged in. Run `miles login --request --json` for agent login, or `miles login` for interactive login.',
+      'Not logged in. Run `miles login` to get a device login code.',
     );
   }
 
@@ -2659,8 +2757,7 @@ if (!command || command === 'help' || command === '--help') {
 
 Authentication:
   miles doctor                      Check local CLI setup
-  miles login --request --json      Request a device login code
-  miles login --poll <deviceCode>   Poll for device authorization
+  miles login [--json]              Request a device login code
   miles logout                      Clear stored credentials
   miles whoami                      Show current auth + active site
 
@@ -2737,7 +2834,7 @@ handler(args).catch((err) => {
     }
     // Self-correcting guidance
     if (err.status === 401) {
-      console.error('Try: miles login --request --json');
+      console.error('Try: miles login');
     } else if (err.status === 400 && err.data?.phase) {
       console.error(`Current phase: ${err.data.phase}`);
     }

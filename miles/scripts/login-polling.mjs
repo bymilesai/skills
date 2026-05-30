@@ -1,7 +1,7 @@
 const DEFAULT_DEVICE_AUTH_INTERVAL_SECONDS = 5;
 const DEFAULT_DEVICE_AUTH_EXPIRY_SECONDS = 10 * 60;
-const MIN_DEVICE_AUTH_POLL_INTERVAL_MS = 10 * 1000;
-const MAX_DEVICE_AUTH_POLLS = 55;
+const MIN_DEVICE_AUTH_POLL_INTERVAL_MS = 5 * 1000;
+const MAX_DEVICE_AUTH_POLLS = 110;
 const DEVICE_AUTH_SLOW_DOWN_INCREMENT_MS = 5 * 1000;
 
 function toPositiveNumber(value) {
@@ -84,7 +84,7 @@ export function formatRetryAfter(retryAfterSeconds) {
 export function buildDevicePollingTimeoutMessage(maxWaitMs) {
   return [
     `Authorization was not completed within ${formatDuration(maxWaitMs)}.`,
-    'Run `miles login --request --json` for a fresh code.',
+    'Run `miles login` for a fresh code.',
   ].join(' ');
 }
 
@@ -94,6 +94,6 @@ export function buildDevicePollingRateLimitMessage(retryAfterSeconds) {
     'Miles login polling was rate limited before authorization completed.',
   ];
   if (retryAfter) message.push(retryAfter);
-  message.push('Run `miles login --request --json` for a fresh code.');
+  message.push('Run `miles login` for a fresh code.');
   return message.join(' ');
 }

@@ -1,33 +1,33 @@
 {
   "name": "miles",
-  "version": "2026.05.30.2",
+  "version": "2026.05.30.3",
   "schemaVersion": 1,
   "channel": "stable",
-  "source": "https://github.com/bymilesai/skills/releases/download/skill-v2026.05.30.2/miles-skill-2026.05.30.2.tar.gz",
+  "source": "https://github.com/bymilesai/skills/releases/download/skill-v2026.05.30.3/miles-skill-2026.05.30.3.tar.gz",
   "sourceSha256": null,
   "cliBinaries": {
     "darwin-arm64": {
-      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.05.30.2/miles-cli-2026.05.30.2-darwin-arm64",
+      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.05.30.3/miles-cli-2026.05.30.3-darwin-arm64",
       "sha256": null
     },
     "darwin-x64": {
-      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.05.30.2/miles-cli-2026.05.30.2-darwin-x64",
+      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.05.30.3/miles-cli-2026.05.30.3-darwin-x64",
       "sha256": null
     },
     "linux-arm64": {
-      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.05.30.2/miles-cli-2026.05.30.2-linux-arm64",
+      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.05.30.3/miles-cli-2026.05.30.3-linux-arm64",
       "sha256": null
     },
     "linux-x64": {
-      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.05.30.2/miles-cli-2026.05.30.2-linux-x64",
+      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.05.30.3/miles-cli-2026.05.30.3-linux-x64",
       "sha256": null
     },
     "windows-x64": {
-      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.05.30.2/miles-cli-2026.05.30.2-windows-x64.exe",
+      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.05.30.3/miles-cli-2026.05.30.3-windows-x64.exe",
       "sha256": null
     }
   },
-  "payloadManifest": "https://github.com/bymilesai/skills/releases/download/skill-v2026.05.30.2/payload-manifest-2026.05.30.2.json",
+  "payloadManifest": "https://github.com/bymilesai/skills/releases/download/skill-v2026.05.30.3/payload-manifest-2026.05.30.3.json",
   "installScript": "https://start.bymiles.ai/install.sh",
   "updateCheckIntervalHours": 24,
   "urgent": false

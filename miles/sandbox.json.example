@@ -1,0 +1,11 @@
+{
+  "networkPolicy": {
+    "default": "deny",
+    "allow": [
+      "*.bymiles.ai",
+      "start.bymiles.ai",
+      "github.com",
+      "*.githubusercontent.com"
+    ]
+  }
+}

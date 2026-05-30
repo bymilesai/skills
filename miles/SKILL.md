@@ -114,6 +114,81 @@ If `status` is `authorized`, confirm with `"$MILES_CLI" whoami`, then continue. 
 
 Do not assume the Claude Code `hooks:` frontmatter ran. Non-Claude agents may ignore those hooks, so normal skill instructions must still take the user through `doctor`, `whoami`, and the non-blocking login flow when needed.
 
+## Sandboxed Agent Network Access
+
+Miles is an online product. The CLI must reach Miles over HTTPS for login, sites, conversation, builds, previews, and exports. Command approval does not always grant network egress inside sandboxed agents such as Cursor.
+
+Required egress:
+
+| Host | Needed for |
+|------|------------|
+| `api.bymiles.ai` or `*.bymiles.ai` | auth, sites, chat, builds, exports, dashboard handoff |
+| `start.bymiles.ai` | first install from the memorable URL |
+| `github.com` and `*.githubusercontent.com` | release assets, install/update manifests, skill source |
+
+If any Miles command returns `SANDBOX_NETWORK_BLOCKED`, `sandbox_network_blocked`, `Blocked by sandbox network policy`, `not on allow list`, or a proxy 403 for a Miles host:
+
+1. Stop retrying the same command.
+2. Tell the user which host was blocked.
+3. Make the allowlist instructions visible in the final user response for that turn.
+4. Offer exactly two paths: allow the Miles hosts in the agent sandbox, or run the command in the user's normal terminal outside the agent sandbox.
+
+Cursor remediation:
+
+```json
+{
+  "networkPolicy": {
+    "default": "deny",
+    "allow": [
+      "*.bymiles.ai",
+      "start.bymiles.ai",
+      "github.com",
+      "*.githubusercontent.com"
+    ]
+  }
+}
+```
+
+Ask approval before creating or editing `.cursor/sandbox.json`. If the file already exists, merge these hosts into the existing `networkPolicy.allow` list instead of replacing unrelated sandbox settings. Then tell the user to use Cursor Settings > Agents > Auto Run > Auto-Run Network Access and choose `sandbox.json`/`sandbox.json + Defaults`, or choose Allow all if they accept broader network access.
+
+Use this response shape when blocked:
+
+````markdown
+Miles is installed, but Cursor blocked network access to `<host>`.
+
+To use Miles inside Cursor, allow these hosts in Cursor's sandbox network settings:
+
+```json
+{
+  "networkPolicy": {
+    "default": "deny",
+    "allow": [
+      "*.bymiles.ai",
+      "start.bymiles.ai",
+      "github.com",
+      "*.githubusercontent.com"
+    ]
+  }
+}
+```
+
+Save that as `.cursor/sandbox.json` in this project, then set Cursor Settings > Agents > Auto Run > Auto-Run Network Access to use `sandbox.json` or `sandbox.json + Defaults`.
+
+I can create or merge that file for you if you approve. The alternative is to run the Miles login command in your normal terminal outside Cursor's sandbox.
+````
+
+Do not put this only in an intermediate progress update. It must be the final visible response when the agent cannot proceed.
+
+Terminal fallback for login:
+
+```bash
+~/.miles/bin/miles login --json
+~/.miles/bin/miles login --poll --json
+~/.miles/bin/miles whoami
+```
+
+Opening the browser device URL alone does not finish auth. The polling command still needs shell access to `api.bymiles.ai`.
+
 ## Updating or Uninstalling Miles
 
 Users should not need to mention `start.bymiles.ai` after install. Treat these natural prompts as lifecycle requests:

@@ -39,6 +39,7 @@ JSON output uses stable `status` values:
 { "ok": false, "status": "denied" }
 { "ok": false, "status": "rate_limited", "retryAfterSeconds": 120 }
 { "ok": false, "status": "transport_error", "error": "..." }
+{ "ok": false, "status": "sandbox_network_blocked", "code": "SANDBOX_NETWORK_BLOCKED", "host": "api.bymiles.ai" }
 { "ok": false, "status": "invalid_request", "error": "..." }
 { "ok": false, "status": "timeout" }
 ```
@@ -168,3 +169,22 @@ tail -f "$log" | grep --line-buffered -E "Miles:|\[phase:|\[status:|\[question:|
 For Claude Code, use Bash `run_in_background: true` for the long command and Monitor for the filtered log stream. Cursor and OpenCode should use their native streaming job surface when available, or the same temp-log monitor/poll pattern when foreground output is hidden. Always collect the final Miles response from the command result or log before continuing the workflow.
 
 Browser-backed edits need the dashboard WebSocket, but agents do not need to pre-check before every `miles reply`. Let the CLI guard the operation. If it returns `dashboard_connection_required`, open the authenticated dashboard URL with `miles preview --json`, wait for `connected: true`, and retry once. Keep proactive checks for high-stakes operations such as design selection and theme conversion.
+
+## Sandboxed Agents
+
+Miles requires outbound HTTPS to `api.bymiles.ai` for auth, sites, chat, builds, and exports. Install/update also uses `start.bymiles.ai`, `github.com`, and `*.githubusercontent.com`.
+
+When sandboxed hosts such as Cursor block egress, JSON output uses:
+
+```json
+{
+  "ok": false,
+  "code": "SANDBOX_NETWORK_BLOCKED",
+  "status": "sandbox_network_blocked",
+  "host": "api.bymiles.ai"
+}
+```
+
+Do not retry the same blocked command. Add `.cursor/sandbox.json` with the contents from `sandbox.json.example`, switch Cursor's Auto-Run Network Access to use `sandbox.json` or Allow all, or run the Miles command in the user's terminal outside the agent sandbox.
+
+When an agent surfaces this error to a user, include the allowlist JSON and Cursor settings path in the final visible response. JSON responses include `requiredEgress` and `remediation.sandboxJson` so agents can copy the exact allowlist instead of inventing one.

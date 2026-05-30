@@ -52,6 +52,28 @@ curl -fsSL https://start.bymiles.ai/install.sh | sh -s -- --agent codex
 
 If you are Codex and outbound network access is blocked, tell the user Codex needs network enabled once before you can fetch this page or the installer. Then stop until the user enables network or provides the installer contents.
 
+## Sandboxed agent note
+
+Miles is an online product. The installed CLI must reach `api.bymiles.ai` for login, site creation, chat, builds, and exports. If a sandboxed agent such as Cursor reports `Blocked by sandbox network policy`, `not on allow list`, `SANDBOX_NETWORK_BLOCKED`, or a 403 from a sandbox proxy, do not keep retrying. Tell the user which host was blocked and offer either agent sandbox allowlisting or a normal terminal fallback.
+
+For Cursor, add or merge this as `.cursor/sandbox.json` in the project, or use Cursor Settings > Agents > Auto Run > Auto-Run Network Access and choose Allow all:
+
+```json
+{
+  "networkPolicy": {
+    "default": "deny",
+    "allow": [
+      "*.bymiles.ai",
+      "start.bymiles.ai",
+      "github.com",
+      "*.githubusercontent.com"
+    ]
+  }
+}
+```
+
+Ask approval before creating or editing `.cursor/sandbox.json`. If the file already exists, merge these hosts into `networkPolicy.allow` instead of replacing unrelated sandbox settings. If blocked, the final visible response must show this allowlist JSON and the Cursor settings path. For login-only fallback, the user can run `~/.miles/bin/miles login --json`, `~/.miles/bin/miles login --poll --json`, and `~/.miles/bin/miles whoami` in their normal terminal, but full agent workflows still need `api.bymiles.ai` reachable from the agent shell.
+
 ## What The Installer Does
 
 The installer reads `https://start.bymiles.ai/version.json`, downloads the source archive named by that manifest, verifies the archive SHA-256 when the manifest publishes `sourceSha256`, and copies the `miles/` skill into these agent skill directories by default:

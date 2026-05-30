@@ -14,6 +14,8 @@ The URL should serve the same instructions as [start.bymiles.ai.md](start.bymile
 
 If you are Codex and network access is blocked, tell the user that Codex needs network enabled once before it can fetch the setup page or installer. Then stop and wait for the user to enable network or provide the file contents.
 
+If a sandboxed agent such as Cursor reports `Blocked by sandbox network policy`, `not on allow list`, `SANDBOX_NETWORK_BLOCKED`, or a sandbox-proxy 403 for `start.bymiles.ai`, stop retrying. Tell the user to allow `*.bymiles.ai`, `start.bymiles.ai`, `github.com`, and `*.githubusercontent.com` in the agent sandbox, or run the installer in their normal terminal.
+
 ## 2. Pick the install path
 
 Use the native agent installer only when it is available in your runtime and can install this repo directly. Otherwise use the universal bootstrap.
@@ -108,6 +110,36 @@ It will download the Miles skill from GitHub, verify release checksums when publ
 Do you want me to run it?
 ```
 
+## Sandboxed agents
+
+Miles cannot run fully offline. The agent shell needs outbound HTTPS for:
+
+| Host | Purpose |
+|------|---------|
+| `api.bymiles.ai` or `*.bymiles.ai` | auth, sites, chat, builds, exports, dashboard handoff |
+| `start.bymiles.ai` | first install from the memorable URL |
+| `github.com`, `*.githubusercontent.com` | release assets, install/update manifests, skill source |
+
+Cursor users can add this to `.cursor/sandbox.json` in the project, or choose Allow all in Cursor Settings > Agents > Auto Run > Auto-Run Network Access:
+
+```json
+{
+  "networkPolicy": {
+    "default": "deny",
+    "allow": [
+      "*.bymiles.ai",
+      "start.bymiles.ai",
+      "github.com",
+      "*.githubusercontent.com"
+    ]
+  }
+}
+```
+
+The installed skill also includes `sandbox.json.example`. Ask approval before creating or editing `.cursor/sandbox.json`; if it already exists, merge these hosts into `networkPolicy.allow` instead of replacing unrelated sandbox settings. If first install from `start.bymiles.ai` is blocked, run the installer in the user's normal terminal.
+
+When blocked, the final visible response must show the allowlist JSON and Cursor settings path. Do not bury it in a progress update.
+
 ## 3. Verify and log in
 
 After the installer returns, do not stop with a manual login instruction. Finish setup in the same flow unless the user explicitly asks to pause.
@@ -140,6 +172,16 @@ If unauthenticated, run:
 Show the returned `userCode` and complete `verificationUrl` to the user. The page should show the same code; if it matches, the user can click Authorize. The CLI stores a private pending-login receipt locally; immediately run `~/.miles/bin/miles login --poll --json` to listen while the user authorizes, then continue when it returns `authorized`. If JSON reports `"pendingState": "unsaved"`, keep the returned `deviceCode` private and pass it explicitly to `login --poll`.
 
 Do not ask the user whether they want to run login themselves. Installing Miles is not complete until Miles is either already authenticated or the agent has started this login handoff and listener.
+
+If login returns `SANDBOX_NETWORK_BLOCKED` or `sandbox_network_blocked`, do not retry `login` or `login --poll`. Surface the blocked host, provide the sandbox allowlist above, and offer the terminal fallback:
+
+```bash
+~/.miles/bin/miles login --json
+~/.miles/bin/miles login --poll --json
+~/.miles/bin/miles whoami
+```
+
+Opening the browser URL alone is not enough; `login --poll` still needs `api.bymiles.ai`.
 
 ## 4. First use
 

@@ -56,6 +56,18 @@ const LOGIN_STATE_FILE = join(CREDENTIALS_DIR, 'login-state.json');
 const LAST_RESPONSE_FILE = join(CREDENTIALS_DIR, 'last-response');
 const SCREENSHOTS_DIR = join(CREDENTIALS_DIR, 'screenshots');
 const DEFAULT_SERVER_URL = process.env.MILES_SERVER_URL || 'https://api.bymiles.ai';
+const REQUIRED_EGRESS = [
+  '*.bymiles.ai',
+  'start.bymiles.ai',
+  'github.com',
+  '*.githubusercontent.com',
+];
+const REQUIRED_EGRESS_SANDBOX_JSON = {
+  networkPolicy: {
+    default: 'deny',
+    allow: REQUIRED_EGRESS,
+  },
+};
 const MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
 const POLL_TIMEOUT_MS = 10000; // 10 second poll for faster progress updates
 const ERROR_BODY_MAX_CHARS = 2048;
@@ -602,7 +614,14 @@ async function apiRequest(method, path, { body, auth, serverUrl } = {}) {
   const opts = { method, headers };
   if (body) opts.body = JSON.stringify(body);
 
-  const res = await fetch(url, opts);
+  let res;
+  try {
+    res = await fetch(url, opts);
+  } catch (err) {
+    const sandboxError = buildSandboxNetworkError(err, url);
+    if (sandboxError) throw sandboxError;
+    throw err;
+  }
   const text = await res.text();
   const contentType = res.headers.get('content-type') || '';
 
@@ -615,6 +634,11 @@ async function apiRequest(method, path, { body, auth, serverUrl } = {}) {
 
   if (!res.ok) {
     const errMsg = data.error || data.message || `HTTP ${res.status}`;
+    const sandboxError = buildSandboxNetworkError(
+      { message: errMsg, data },
+      url,
+    );
+    if (sandboxError) throw sandboxError;
     const retryAfterSeconds =
       parseRetryAfterSeconds(res.headers.get('retry-after')) ??
       parseRetryAfterSeconds(data.retryAfter ?? data.retry_after);
@@ -638,6 +662,82 @@ class ApiError extends Error {
     this.data = data;
     this.retryAfterSeconds = retryAfterSeconds ?? null;
   }
+}
+
+class SandboxNetworkError extends Error {
+  constructor(host, rawMessage) {
+    super(`Sandbox blocked network access to ${host}.`);
+    this.code = 'SANDBOX_NETWORK_BLOCKED';
+    this.status = 'sandbox_network_blocked';
+    this.host = host;
+    this.requiredEgress = REQUIRED_EGRESS;
+    this.rawMessage = rawMessage;
+    this.remediation = {
+      message:
+        'Allow Miles network access in the agent sandbox, then rerun the Miles command.',
+      cursorSettings:
+        'Cursor Settings > Agents > Auto Run > Auto-Run Network Access: choose Allow all, or choose sandbox.json and allow *.bymiles.ai plus GitHub release hosts.',
+      sandboxJsonPath: '.cursor/sandbox.json',
+      sandboxJson: REQUIRED_EGRESS_SANDBOX_JSON,
+      terminalFallbackCommands: [
+        '~/.miles/bin/miles login --json',
+        '~/.miles/bin/miles login --poll --json',
+        '~/.miles/bin/miles whoami',
+      ],
+    };
+  }
+}
+
+function collectErrorText(value, seen = new Set()) {
+  if (!value || seen.has(value)) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value !== 'object') return String(value);
+
+  seen.add(value);
+  const parts = [];
+  for (const key of [
+    'message',
+    'error',
+    'detail',
+    'details',
+    'stack',
+    'code',
+    'raw',
+    'reason',
+  ]) {
+    if (value[key]) parts.push(String(value[key]));
+  }
+  if (value.data) parts.push(collectErrorText(value.data, seen));
+  if (value.body) parts.push(collectErrorText(value.body, seen));
+  if (value.cause) parts.push(collectErrorText(value.cause, seen));
+  return parts.filter(Boolean).join('\n');
+}
+
+function extractHostFromSandboxText(text, fallbackUrl) {
+  const destinationMatch = text.match(/Destination:\s*([^\s]+)/i);
+  if (destinationMatch?.[1]) {
+    return destinationMatch[1].replace(/^https?:\/\//, '').replace(/:\d+$/, '');
+  }
+  try {
+    return new URL(fallbackUrl).hostname;
+  } catch {
+    return 'api.bymiles.ai';
+  }
+}
+
+function buildSandboxNetworkError(err, url) {
+  const text = collectErrorText(err);
+  const normalized = text.toLowerCase();
+  const isSandboxBlock =
+    normalized.includes('blocked by sandbox network policy') ||
+    normalized.includes('not on allow list') ||
+    normalized.includes('not on allowlist') ||
+    (normalized.includes('sandbox') &&
+      normalized.includes('network') &&
+      normalized.includes('block'));
+
+  if (!isSandboxBlock) return null;
+  return new SandboxNetworkError(extractHostFromSandboxText(text, url), text);
 }
 
 // ============================================================================
@@ -802,6 +902,9 @@ function printLoginPollResult(result, exitStatus = 0) {
     expired: 'Authorization expired. Start a fresh Miles login.',
     denied: 'Authorization was denied. Start a fresh Miles login to retry.',
     invalid_request: 'Miles could not poll this device code. Start a fresh Miles login.',
+    sandbox_network_blocked: result.host
+      ? `The agent sandbox blocked network access to ${result.host}.`
+      : 'The agent sandbox blocked network access to Miles.',
     rate_limited: result.retryAfterSeconds
       ? `Miles login polling was rate limited. Wait about ${result.retryAfterSeconds}s before polling again.`
       : 'Miles login polling was rate limited. Wait before polling again.',
@@ -877,6 +980,19 @@ function loginPollResultFromApiError(err, deviceCode) {
   return null;
 }
 
+function loginPollResultFromSandboxError(err) {
+  if (!(err instanceof SandboxNetworkError)) return null;
+  return {
+    ok: false,
+    status: err.status,
+    code: err.code,
+    host: err.host,
+    requiredEgress: err.requiredEgress,
+    remediation: err.remediation,
+    error: err.message,
+  };
+}
+
 async function pollLoginDeviceCode({
   deviceCode,
   serverUrl,
@@ -934,6 +1050,9 @@ async function pollLoginDeviceCode({
         return result;
       }
     } catch (err) {
+      const sandboxResult = loginPollResultFromSandboxError(err);
+      if (sandboxResult) return sandboxResult;
+
       const result = loginPollResultFromApiError(err, deviceCode);
       if (!result) {
         transportFailureCount += 1;
@@ -2836,7 +2955,17 @@ if (!handler) {
 
 handler(args).catch((err) => {
   if (cliOptions.json) {
-    if (err instanceof ApiError) {
+    if (err instanceof SandboxNetworkError) {
+      emitJson({
+        ok: false,
+        code: err.code,
+        status: err.status,
+        host: err.host,
+        error: err.message,
+        requiredEgress: err.requiredEgress,
+        remediation: err.remediation,
+      });
+    } else if (err instanceof ApiError) {
       emitJson({
         ok: false,
         error: err.message,
@@ -2852,7 +2981,19 @@ handler(args).catch((err) => {
     process.exit(1);
   }
 
-  if (err instanceof ApiError) {
+  if (err instanceof SandboxNetworkError) {
+    console.error(`Error: ${err.message}`);
+    console.error(`Code: ${err.code}`);
+    console.error(`Required egress: ${err.requiredEgress.join(', ')}`);
+    console.error(
+      'Cursor fix: Settings > Agents > Auto Run > Auto-Run Network Access, then choose Allow all or allow these hosts through sandbox.json.',
+    );
+    console.error('Create or update .cursor/sandbox.json:');
+    console.error(JSON.stringify(REQUIRED_EGRESS_SANDBOX_JSON, null, 2));
+    console.error(
+      'Terminal fallback: run the same Miles command in the user terminal outside the agent sandbox.',
+    );
+  } else if (err instanceof ApiError) {
     console.error(`Error: ${err.message}`);
     if (err.data?.details) {
       console.error(`Details: ${JSON.stringify(err.data.details)}`);

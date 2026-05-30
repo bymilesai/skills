@@ -43,6 +43,12 @@ https://start.bymiles.ai/payload-manifest.json
 Dry runs show the payload root, file count, total bytes, and included files before writing anything.
 Dry runs perform read-only GETs for the install and payload manifests unless a local source override is provided. If those fetches fail, the dry run still prints the local plan and says the payload could not be inspected.
 
+## Network Access
+
+Install and update use `start.bymiles.ai`, `github.com`, and `*.githubusercontent.com`. Normal Miles usage also needs `api.bymiles.ai` or `*.bymiles.ai` for auth, sites, chat, builds, exports, and dashboard handoff.
+
+Sandboxed agents such as Cursor may require these hosts in their network allowlist. The installed skill includes `miles/sandbox.json.example` for Cursor-style `networkPolicy` configuration.
+
 ## What It Writes
 
 The installer copies the `miles/` skill into selected local agent skill directories. Default install targets:

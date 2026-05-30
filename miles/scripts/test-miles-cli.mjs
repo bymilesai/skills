@@ -192,6 +192,13 @@ function startMockServer(handler) {
   });
 }
 
+function sendSandboxNetworkBlock(res) {
+  res.writeHead(403, { 'content-type': 'text/plain' });
+  res.end(
+    'Blocked by sandbox network policy\nDestination: api.bymiles.ai:443\nReason: not on allow list',
+  );
+}
+
 try {
   const fallbackPollingPlan = getDeviceAuthPollingPlan();
   assert(
@@ -637,6 +644,30 @@ try {
     'missing expiry failure should name the missing field',
   );
 
+  const sandboxBlockMock = await startMockServer((req, res) => {
+    req.resume();
+    sendSandboxNetworkBlock(res);
+  });
+  const { result: sandboxLoginResult, json: sandboxLogin } =
+    await runJsonAsync(['login', '--json'], {
+      env: { MILES_SERVER_URL: sandboxBlockMock.url },
+    });
+  assert(sandboxLoginResult.status === 1, 'sandbox-blocked login should fail');
+  assert(
+    sandboxLogin.code === 'SANDBOX_NETWORK_BLOCKED' &&
+      sandboxLogin.status === 'sandbox_network_blocked',
+    'sandbox-blocked login should expose a stable error code and status',
+  );
+  assert(
+    sandboxLogin.host === 'api.bymiles.ai' &&
+      sandboxLogin.requiredEgress.includes('*.bymiles.ai'),
+    'sandbox-blocked login should report the blocked host and egress allowlist',
+  );
+  assert(
+    sandboxLogin.remediation?.sandboxJson,
+    'sandbox-blocked login should include sandbox.json remediation guidance',
+  );
+
   const loginPendingMock = await startMockServer((req, res) => {
     let body = '';
     req.on('data', (chunk) => {
@@ -914,6 +945,28 @@ try {
   assert(
     existsSync(loginStateFile(loginTransportStateHome)),
     'transport-error saved-state poll should preserve pending login state',
+  );
+
+  const sandboxPollHome = makeTempDir();
+  writePendingLogin(sandboxPollHome, {
+    deviceCode: 'sandbox-blocked-device',
+  });
+  const { result: sandboxPollResult, json: sandboxPoll } = await runJsonAsync(
+    ['login', '--poll', '--json', '--once'],
+    {
+      milesHome: sandboxPollHome,
+      env: { MILES_SERVER_URL: sandboxBlockMock.url },
+    },
+  );
+  assert(sandboxPollResult.status === 1, 'sandbox-blocked poll should fail');
+  assert(
+    sandboxPoll.code === 'SANDBOX_NETWORK_BLOCKED' &&
+      sandboxPoll.status === 'sandbox_network_blocked',
+    'sandbox-blocked poll should expose a stable status',
+  );
+  assert(
+    existsSync(loginStateFile(sandboxPollHome)),
+    'sandbox-blocked saved-state poll should preserve pending login state',
   );
 
   const secureCredsHome = makeTempDir();

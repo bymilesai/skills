@@ -63,6 +63,8 @@ After install, your agent should verify Miles and complete login if needed. It s
 
 If your agent does not see the new skill, start a new chat or reload the agent window.
 
+Sandboxed agents such as Cursor must allow outbound HTTPS to Miles. If you see `SANDBOX_NETWORK_BLOCKED`, `Blocked by sandbox network policy`, or `not on allow list`, add `*.bymiles.ai`, `start.bymiles.ai`, `github.com`, and `*.githubusercontent.com` to the agent sandbox allowlist. The installed skill includes `miles/sandbox.json.example` for Cursor-style configuration.
+
 If you already use the Vercel skills CLI, this still works:
 
 ```bash

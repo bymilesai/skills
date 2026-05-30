@@ -341,9 +341,16 @@ Future CLI improvement: a rolling `$MILES_HOME/progress.json` file would let eve
 
 ## Opening the Active Dashboard
 
-During long visual phases, keep the active Miles dashboard visible so the user can see progress. Prefer the host agent's internal browser, preview, webview, or navigation tool when one is available. Only use the CLI's external browser fallback after the host browser path has been attempted, is unavailable, or is blocked by policy.
+During long visual phases, every agent host should open the active Miles dashboard before asking Miles to continue. This is required before approving the brief to start design-direction generation, selecting a design direction, starting theme conversion, and retrying after `dashboard_connection_required`.
 
-Mandatory checkpoint: when Miles enters `phase: generating_design_directions`, do not just tell the user you are waiting. Immediately get the active progress URL and open that exact URL in a browser view.
+Browser priority:
+
+1. Use a controlled internal browser, preview, webview, or navigation tool that the agent can open and observe.
+2. Use a configured browser MCP or custom browser tool if the host exposes one.
+3. Use `"$MILES_CLI" preview --open` to open the user's external OS browser.
+4. Continue CLI-only only after explaining that the dashboard could not be opened and visual review is degraded.
+
+Mandatory checkpoint: when Miles is about to enter `phase: generating_design_directions`, do not just tell the user you are waiting. Immediately get the active progress URL and open that exact URL with the browser priority above before sending the approval reply.
 
 To get the URL without launching the OS browser:
 
@@ -351,13 +358,23 @@ To get the URL without launching the OS browser:
 "$MILES_CLI" preview --json
 ```
 
-Open the returned `url` with the host's browser/navigation tool. Use the exact URL from JSON. When `authenticated` is true, that URL is an authenticated browser handoff: it logs the browser into a normal dashboard session and then redirects to the active dashboard. Do not replace it with `dashboardUrl`; that plain dashboard URL may send a fresh browser to login and will not satisfy browser-backed WebSocket work. The JSON response also reports whether the dashboard WebSocket is `connected`; after opening the URL, rerun `preview --json` until `connected` is true before starting browser-backed work. If no internal browser tool is available, use the explicit external-browser fallback:
+Open the returned `url` with the best available browser surface. Use the exact URL from JSON. When `authenticated` is true, that URL is an authenticated browser handoff: it logs the browser into a normal dashboard session and then redirects to the active dashboard. Do not replace it with `dashboardUrl`; that plain dashboard URL may send a fresh browser to login and will not satisfy browser-backed WebSocket work.
+
+After any open attempt, including the external-browser fallback, rerun `preview --json` until `connected` is true before starting browser-backed work:
+
+```bash
+"$MILES_CLI" preview --json
+```
+
+If no controlled/internal browser tool is available, use the explicit external-browser fallback:
 
 ```bash
 "$MILES_CLI" preview --open
 ```
 
-The CLI does not launch dashboard windows from action commands. If the host browser rejects the authenticated handoff URL because of browser security policy, treat that as a hard stop for in-app dashboard opening. Do not try to get the same result by opening `dashboardUrl`, using raw browser protocols, or switching to another browser surface. Tell the user the in-app dashboard could not be opened by policy and use `"$MILES_CLI" preview --open` only when an external browser fallback is acceptable. Do this before design-direction generation, design selection, and theme conversion. For normal edit replies, let the CLI connection guard below decide whether reconnecting is needed.
+Then rerun `preview --json` until `connected` is true. If it remains false, tell the user to keep the dashboard tab open, retry once, and continue CLI-only only if the user accepts degraded visual review.
+
+The CLI does not launch dashboard windows from action commands. If the host browser rejects the authenticated handoff URL because of browser security policy, treat that as a hard stop for that browser surface. Do not try to get the same result by opening `dashboardUrl`, using raw browser protocols, or switching to unauthenticated URLs. Move down the browser priority list instead. Do this before design-direction generation, design selection, and theme conversion. For normal edit replies, let the CLI connection guard below decide whether reconnecting is needed.
 
 ### Browser Tool Mapping by Host
 
@@ -365,11 +382,11 @@ Use the authenticated `url` from `"$MILES_CLI" preview --json` with whichever br
 
 Codex: when the Browser plugin is available, use the Browser skill to open the Miles dashboard in the Codex in-app browser.
 
-Claude Code: prefer `mcp__Claude_in_Chrome__navigate` when available. If not, use `mcp__Claude_Preview__preview_start`. If neither browser surface is available or policy blocks the authenticated handoff, use `"$MILES_CLI" preview --open` only when an external browser fallback is acceptable.
+Claude Code: prefer `mcp__Claude_in_Chrome__navigate` when available. If not, use `mcp__Claude_Preview__preview_start`. If neither browser surface is available or policy blocks the authenticated handoff, use `"$MILES_CLI" preview --open`.
 
-Cursor: use Cursor's available browser, preview, or navigation surface when one is present. Open the exact authenticated `url`, make it visible when the host supports visibility, and repoll `preview --json` until `connected` is true. If no internal surface exists, use `"$MILES_CLI" preview --open` as the explicit external fallback.
+Cursor: use Cursor's available browser, preview, or navigation surface when one is present. Open the exact authenticated `url`, make it visible when the host supports visibility, and repoll `preview --json` until `connected` is true. If no internal surface exists, use `"$MILES_CLI" preview --open` as the external fallback. If sandbox network policy blocks Miles hosts, stop retrying and use the Sandboxed Agents guidance.
 
-OpenCode: use an available browser/webview/preview tool if the host exposes one. Otherwise, use `"$MILES_CLI" preview --open` only when acceptable, or continue CLI-only and explain that dashboard-backed visual work may wait for a connection.
+OpenCode: use an available browser, webview, preview, browser MCP, or custom browser tool if one is visible in the current tool list. Otherwise assume no internal browser is available and use `"$MILES_CLI" preview --open`. Do not wait for a nonexistent internal browser surface. If the agent cannot observe the external browser, rely on `preview --json` connection state plus screenshots or CLI output for review, and tell the user when visual inspection is limited.
 
 Do not decide Browser is unavailable just because there is no direct browser tool namespace. In Codex, Browser is controlled through the `node_repl` JavaScript tool after reading the Browser skill. Follow that skill's bootstrap, then:
 
@@ -381,9 +398,9 @@ Do not decide Browser is unavailable just because there is no direct browser too
 6. Rerun `"$MILES_CLI" preview --json` until `connected` is true.
 7. Continue the Miles wait, design-generation, design-selection, edit, or theme-conversion flow.
 
-If Codex rejects the authenticated handoff URL due to browser security policy, do not retry with `dashboardUrl` as a workaround. That URL is intentionally unauthenticated. Stop the in-app browser setup, explain the policy denial, and use `"$MILES_CLI" preview --open` only when opening the external browser is acceptable. Otherwise continue CLI-only and explain that browser-backed work may wait for a dashboard connection.
+If Codex rejects the authenticated handoff URL due to browser security policy, do not retry with `dashboardUrl` as a workaround. That URL is intentionally unauthenticated. Stop the in-app browser setup, explain the policy denial, and use `"$MILES_CLI" preview --open` as the external browser fallback. Otherwise continue CLI-only and explain that browser-backed work may wait for a dashboard connection.
 
-Only fall back to `"$MILES_CLI" preview --open` or printing the dashboard URL if the Browser plugin is not listed, the Browser skill file cannot be read, `node_repl` JavaScript execution is not available after tool discovery, the Browser bootstrap fails, or the Browser policy denies the authenticated handoff.
+Only fall back to `"$MILES_CLI" preview --open` if the Browser plugin is not listed, the Browser skill file cannot be read, `node_repl` JavaScript execution is not available after tool discovery, the Browser bootstrap fails, or the Browser policy denies the authenticated handoff. Only print a URL without opening it when both internal and external browser opening are unavailable.
 
 ### Connection Reuse for Edits
 
@@ -586,7 +603,7 @@ Self-check before sending: if the response does not include the actual brief con
 
 When Miles finishes generating design directions (phase: `design_directions_ready`), the context includes preview URLs and metadata for each design.
 
-Before design-direction generation begins, tell the user it can take several minutes. Before you send the approval reply that starts generation, run `"$MILES_CLI" preview --json`, open the returned authenticated `url` with the host's internal browser/navigation tool, and rerun `preview --json` until `connected` is true. Then send the approval reply, for example `"$MILES_CLI" reply "Looks good, approved"`. This is required even if Miles has not returned design preview URLs yet; the dashboard URL shows generation progress while the user waits. Do not substitute `dashboardUrl` for the authenticated `url`; a fresh browser may not be logged in. If the internal browser is unavailable or the host policy denies the authenticated handoff, run `"$MILES_CLI" preview --open` as the explicit external-browser fallback when acceptable. During generation, send progress updates only for meaningful milestones: generation started, first design complete, halfway complete, all directions complete, or no visible progress for more than 90 seconds. Use the Progress Visibility action-log style and host transport above. Avoid repeated "still waiting" updates unless there is new information or a long silence.
+Before design-direction generation begins, tell the user it can take several minutes. Before you send the approval reply that starts generation, run `"$MILES_CLI" preview --json`, open the returned authenticated `url` using the browser priority from Opening the Active Dashboard, and rerun `preview --json` until `connected` is true. Then send the approval reply, for example `"$MILES_CLI" reply "Looks good, approved"`. This is required even if Miles has not returned design preview URLs yet; the dashboard URL shows generation progress while the user waits. Do not substitute `dashboardUrl` for the authenticated `url`; a fresh browser may not be logged in. If no internal browser is available, use `"$MILES_CLI" preview --open` as the external-browser fallback, then keep checking `preview --json` until connected or explain the degraded CLI-only path. During generation, send progress updates only for meaningful milestones: generation started, first design complete, halfway complete, all directions complete, or no visible progress for more than 90 seconds. Use the Progress Visibility action-log style and host transport above. Avoid repeated "still waiting" updates unless there is new information or a long silence.
 
 When `preview --json` reports `connected: true`, treat the in-app browser dashboard as the primary design review surface. Run `"$MILES_CLI" design-directions --json` to get direction numbers, names, and preview URLs. Inspect the visible dashboard canvas first; open individual preview URLs in the in-app browser only when the dashboard cards do not expose enough detail to make a useful judgment. Evaluate each option for visual hierarchy, tone match with the user's brief, layout quality, image quality, overall polish, and suitability for the business and audience.
 

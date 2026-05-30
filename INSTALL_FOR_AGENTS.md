@@ -147,7 +147,7 @@ If unauthenticated, run:
 ~/.miles/bin/miles login --json
 ```
 
-Show the returned `userCode` and complete `verificationUrl` to the user. The page should show the same code; if it matches, the user can click Authorize. The CLI stores a private pending-login receipt locally, so after the user authorizes, finish the login with `~/.miles/bin/miles login --poll --json`.
+Show the returned `userCode` and complete `verificationUrl` to the user. The page should show the same code; if it matches, the user can click Authorize. The CLI stores a private pending-login receipt locally; immediately run `~/.miles/bin/miles login --poll --json` to listen while the user authorizes, then continue when it returns `authorized`.
 
 ## 5. What to tell the user
 

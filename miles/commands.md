@@ -17,12 +17,12 @@ Code: YXQS-SHNK
 Open: https://beta.bymiles.ai/device?code=YXQS-SHNK
 ```
 
-JSON output includes `deviceCode`, `userCode`, complete code-embedded `verificationUrl`, `verificationUrlHasCode`, `intervalSeconds`, `expiresInSeconds`, and `expiresAt`. Agents should show `userCode` and `verificationUrl` to the user, ask the user to confirm the browser page shows the same code, then stop until the user authorizes.
+JSON output includes `deviceCode`, `userCode`, complete code-embedded `verificationUrl`, `verificationUrlHasCode`, `intervalSeconds`, `expiresInSeconds`, and `expiresAt`. Agents should show `userCode` and `verificationUrl` to the user, ask the user to confirm the browser page shows the same code, then immediately run `miles login --poll --json` to listen while the user authorizes.
 
 The CLI also saves the pending login to `$MILES_HOME/login-state.json` with mode `0600`, so a later `miles login --poll` can finish the same login without a device code argument. `deviceCode` is a bearer secret for the polling step. Do not paste it into user-facing messages, logs, or shared telemetry.
 
 ### `miles login --poll [deviceCode] --json [--interval <seconds>] [--expires-in <seconds>] [--timeout <seconds>] [--once]`
-Finishes a pending device login after the user authorizes the code. On success, saves the API key to `$MILES_HOME/credentials.json`.
+Listens for the pending device login to be authorized. On success, saves the API key to `$MILES_HOME/credentials.json`.
 
 When `deviceCode` is omitted, the CLI uses the pending login saved by the preceding `miles login`. Explicit `deviceCode`, `--interval`, and `--expires-in` are still accepted for stateless callers.
 

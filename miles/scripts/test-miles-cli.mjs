@@ -169,19 +169,19 @@ function startMockServer(handler) {
 try {
   const fallbackPollingPlan = getDeviceAuthPollingPlan();
   assert(
-    fallbackPollingPlan.pollIntervalMs === 10000,
-    'login polling should clamp the default interval to the safe minimum',
+    fallbackPollingPlan.pollIntervalMs === 5000,
+    'login polling should use the default device interval',
   );
   assert(
-    fallbackPollingPlan.maxAttempts === 55,
-    'login polling should cap default attempts below the polling rate limit',
+    fallbackPollingPlan.maxAttempts === 110,
+    'login polling should cover the normal device-code window',
   );
 
   const missingExpiryPollingPlan = getDeviceAuthPollingPlan({
     intervalSeconds: 5,
   });
   assert(
-    missingExpiryPollingPlan.maxAttempts === 55,
+    missingExpiryPollingPlan.maxAttempts === 110,
     'login polling should use the default expiry when Miles omits expiresIn',
   );
 
@@ -190,12 +190,12 @@ try {
     expiresInSeconds: 600,
   });
   assert(
-    defaultPollingPlan.pollIntervalMs === 10000,
-    'login polling should clamp the server interval to the safe minimum',
+    defaultPollingPlan.pollIntervalMs === 5000,
+    'login polling should honor the server interval for low-delay authorization',
   );
   assert(
-    defaultPollingPlan.maxAttempts === 55,
-    'login polling should stop before the server polling rate limit',
+    defaultPollingPlan.maxAttempts === 110,
+    'login polling should listen through the normal device-code window',
   );
   assert(
     formatDuration(defaultPollingPlan.maxWaitMs) === '9m 10s',
@@ -206,7 +206,7 @@ try {
     expiresInSeconds: 3600,
   });
   assert(
-    cappedPollingPlan.maxAttempts === 55,
+    cappedPollingPlan.maxAttempts === 110,
     'login polling should cap attempts even when the device code has a long expiry',
   );
   assertIncludes(
@@ -230,11 +230,11 @@ try {
     'retry-after parsing should accept HTTP-date header values',
   );
   assert(
-    getSlowedDeviceAuthPollIntervalMs(10000) === 15000,
+    getSlowedDeviceAuthPollIntervalMs(5000) === 10000,
     'slow_down should increase the next device poll by the RFC interval',
   );
   assert(
-    getSlowedDeviceAuthPollIntervalMs(10000, 30) === 30000,
+    getSlowedDeviceAuthPollIntervalMs(5000, 30) === 30000,
     'slow_down should honor retry-after timing when it is longer than the default increase',
   );
   const rateLimitWithRetry = buildDevicePollingRateLimitMessage(120);
@@ -451,7 +451,7 @@ try {
     });
   });
   const { result: loginSavedStatePollResult, json: loginSavedStatePoll } =
-    await runJsonAsync(['login', '--poll', '--json', '--once'], {
+    await runJsonAsync(['login', '--poll', '--json'], {
       milesHome: loginTextHome,
       env: { MILES_SERVER_URL: loginSavedStatePollMock.url },
     });

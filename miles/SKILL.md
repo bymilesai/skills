@@ -89,18 +89,18 @@ If Miles is not authenticated, start a non-blocking device login:
 "$MILES_CLI" login --json
 ```
 
-Parse `userCode`, `verificationUrl`, `intervalSeconds`, and `expiresInSeconds` from JSON. The CLI also saves a local pending-login receipt containing the private `deviceCode`, so the next poll can finish the same login without pasting that secret into shell history. Show the user the code and complete URL as the final assistant message of the turn, then stop and wait for the user to authorize. Do not run another command after displaying the code in that turn.
+Parse `userCode`, `verificationUrl`, `intervalSeconds`, and `expiresInSeconds` from JSON. The CLI also saves a local pending-login receipt containing the private `deviceCode`, so the next poll can finish the same login without pasting that secret into shell history. Show the user the code and complete URL in a visible assistant message, then immediately start the login listener command below. Do not wait for the user to say "done".
 
-Your final message for that turn must include:
+The visible message must include:
 
 ```text
 Code: <userCode>
 Open: <verificationUrl>
 
-Open the URL. The page should show this same code; if it matches, click Authorize. You do not need to type the code. Tell me when it is done.
+Open the URL. The page should show this same code; if it matches, click Authorize. You do not need to type the code. I will keep listening for authorization.
 ```
 
-After the user confirms authorization, run:
+Then immediately run:
 
 ```bash
 "$MILES_CLI" login --poll --json
@@ -259,20 +259,20 @@ If not logged in, start a non-blocking login. `miles login` must request a code 
 "$MILES_CLI" login --json
 ```
 
-Parse the JSON, including `userCode`, complete `verificationUrl`, `intervalSeconds`, and `expiresInSeconds`. The CLI stores the private `deviceCode` locally for the polling step. Display the agent-side `userCode` and complete `verificationUrl` to the user as the final assistant message of the turn. The user must compare the browser code with the agent code before authorizing; this is a security requirement. Prefer the complete URL over opening the OS/default browser because the host browser may differ from the user's active browser profile.
+Parse the JSON, including `userCode`, complete `verificationUrl`, `intervalSeconds`, and `expiresInSeconds`. The CLI stores the private `deviceCode` locally for the polling step. Display the agent-side `userCode` and complete `verificationUrl` to the user in a visible assistant message, then immediately run `"$MILES_CLI" login --poll --json` to listen for authorization. The user must compare the browser code with the agent code before authorizing; this is a security requirement. Prefer the complete URL over opening the OS/default browser because the host browser may differ from the user's active browser profile.
 
 Hard rules:
 
 - Never wait inside the initial `login` command. It must return a code before any polling happens.
 - Always display the agent-side code to the user and ask them to confirm it matches the browser before they authorize.
+- After displaying the code, immediately run `login --poll --json` so the agent notices authorization without requiring a second user reply.
 - Never tell the user to authorize a code the agent did not just generate. If a browser tab shows a different code than the current agent code, instruct the user to discard that tab.
-- The message containing the code must be the final assistant message of the turn, so the user can act on it.
 - Hand the user the `verificationUrl`; OS browser opening can land in the wrong profile.
 - On `expired` or `timeout`, mint a fresh code rather than reusing the old one.
 - On `rate_limited`, wait before polling the same device code again; do not mint a fresh code.
 - When using `--once`, inspect `status`; exit code 0 can mean either `authorized` or `pending`.
 
-When the user says they have authorized, finish the login:
+Listen for authorization:
 
 ```bash
 "$MILES_CLI" login --poll --json

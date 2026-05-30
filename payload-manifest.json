@@ -3,17 +3,17 @@
   "version": "2026.05.29.4",
   "root": "miles",
   "fileCount": 8,
-  "totalBytes": 169206,
+  "totalBytes": 169238,
   "files": [
     {
       "path": "miles/SKILL.md",
-      "size": 32439,
-      "sha256": "ba5b1966112b9afff324b05f1489e3ea1cd81802fd3c2cdf2ed2e5f36e3a910c"
+      "size": 32463,
+      "sha256": "8baabd33c7420328eb9142ddacb299740dee4a2e915391f33396dd4c30711ccf"
     },
     {
       "path": "miles/commands.md",
-      "size": 10258,
-      "sha256": "93fad25ed336a0d91ae74b825a87f8004aa39a5e872afc0a342b7f3b3a820c8d"
+      "size": 10294,
+      "sha256": "cfe30cd523c305d6f3f23e9244e373ff3a40a21945b62ade50884118ec92ab2d"
     },
     {
       "path": "miles/examples.md",
@@ -23,7 +23,7 @@
     {
       "path": "miles/scripts/login-polling.mjs",
       "size": 3108,
-      "sha256": "e5ebdc51380a0c2523de1c5fbcb843b85af21aa5fe35037b3f9758f1f6da3c61"
+      "sha256": "3b987c3cd19bb2e9e99d584bec5d0711fa9f2df04564ecdd49cf61def63afc05"
     },
     {
       "path": "miles/scripts/miles",
@@ -37,8 +37,8 @@
     },
     {
       "path": "miles/scripts/test-miles-cli.mjs",
-      "size": 31450,
-      "sha256": "6c5afebf83d8b09cf5d5de7bc7fbe8bdbdf4f737a7d18bd1d6dd4943c1434545"
+      "size": 31422,
+      "sha256": "0e50ac11b3666e09a220f45a5b02a3ad9ee48957ce24cd2c485a92f7d385db38"
     },
     {
       "path": "miles/smoke-checklist.md",

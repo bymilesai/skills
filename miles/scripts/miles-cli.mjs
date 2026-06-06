@@ -2822,13 +2822,37 @@ async function cmdScreenshot(args) {
 
   const serverUrl = DEFAULT_SERVER_URL;
 
-  // Fetch screenshot as binary image from the server
+  // Fetch screenshot as binary image from the server. Freshly generated
+  // previews can lag readability by a few seconds; when the renderer reports
+  // the target document 404'd, retry briefly before reporting failure.
   const encodedUrl = encodeURIComponent(url);
   const endpoint = `${serverUrl}/api/v2/headless/screenshot?url=${encodedUrl}`;
 
-  const response = await fetch(endpoint, {
-    headers: { Authorization: `Bearer ${site.siteToken}` },
-  });
+  const SCREENSHOT_RETRY_DELAYS_MS = [3000, 8000];
+  let response;
+  for (let attempt = 0; ; attempt++) {
+    response = await fetch(endpoint, {
+      headers: { Authorization: `Bearer ${site.siteToken}` },
+    });
+    if (response.ok || attempt >= SCREENSHOT_RETRY_DELAYS_MS.length) break;
+
+    let retryable = false;
+    try {
+      const peek = await response.clone().json();
+      retryable =
+        typeof peek?.targetStatus === 'number' && peek.targetStatus === 404;
+    } catch {
+      // Non-JSON error body — not the retryable not-ready case.
+    }
+    if (!retryable) break;
+
+    console.error(
+      `Preview not readable yet (HTTP 404 at the renderer); retrying in ${
+        SCREENSHOT_RETRY_DELAYS_MS[attempt] / 1000
+      }s...`,
+    );
+    await new Promise((r) => setTimeout(r, SCREENSHOT_RETRY_DELAYS_MS[attempt]));
+  }
 
   if (!response.ok) {
     const errorBody = await readResponseErrorBody(response);

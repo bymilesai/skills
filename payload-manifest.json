@@ -3,7 +3,7 @@
   "version": "2026.05.30.7",
   "root": "miles",
   "fileCount": 26,
-  "totalBytes": 241946,
+  "totalBytes": 242847,
   "files": [
     {
       "path": "miles/SKILL.md",
@@ -122,8 +122,8 @@
     },
     {
       "path": "miles/scripts/miles-cli.mjs",
-      "size": 117644,
-      "sha256": "cd70a22d71919ee159922b1a274d0d639327ddd2ad29b1f0a537cd30e4e81bdf"
+      "size": 118545,
+      "sha256": "3058e7f7c843def0e5749fbd5b416231bb677deb1e36e47cc7b69c5880c87790"
     },
     {
       "path": "miles/scripts/test-miles-cli.mjs",

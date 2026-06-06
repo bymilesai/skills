@@ -1670,13 +1670,27 @@ async function cmdWaitJob(args) {
   const maxWait = timeoutSeconds ? timeoutSeconds * 1000 : MAX_WAIT_MS;
   const startTime = Date.now();
   let lastProgress = '';
+  let consecutiveFailures = 0;
 
   while (Date.now() - startTime < maxWait) {
-    const data = await apiRequest(
-      'GET',
-      `/api/v2/headless/conversations/${site.conversationId}/wait?timeout=${POLL_TIMEOUT_MS}`,
-      { auth: site.siteToken, serverUrl },
-    );
+    let data;
+    try {
+      data = await apiRequest(
+        'GET',
+        `/api/v2/headless/conversations/${site.conversationId}/wait?timeout=${POLL_TIMEOUT_MS}`,
+        { auth: site.siteToken, serverUrl },
+      );
+      consecutiveFailures = 0;
+    } catch (err) {
+      // Transient transport failures (server restart, network blip) should
+      // not kill a long wait; only give up after repeated failures.
+      if (err instanceof ApiError || ++consecutiveFailures >= 3) {
+        throw err;
+      }
+      console.error(`Poll failed (${err.message}); retrying...`);
+      await new Promise((r) => setTimeout(r, 3000));
+      continue;
+    }
 
     if (data.status === 'running') {
       const elapsed = Math.round((Date.now() - startTime) / 1000);
@@ -2874,10 +2888,22 @@ async function cmdConnectBrowser(args = []) {
 
   const serverUrl = DEFAULT_SERVER_URL;
   const shouldOpen = hasCommandFlag(args, '--open');
-  const waitSeconds = hasCommandFlag(args, '--wait')
-    ? (parsePositiveSecondsFlag(args, '--wait') ??
-      DASHBOARD_CONNECT_TIMEOUT_MS / 1000)
-    : null;
+  let waitSeconds = null;
+  if (hasCommandFlag(args, '--wait')) {
+    const value = getOptionalCommandFlagValue(args, '--wait');
+    if (value === null) {
+      waitSeconds = DASHBOARD_CONNECT_TIMEOUT_MS / 1000;
+    } else {
+      const seconds = Number(value);
+      if (!Number.isInteger(seconds) || seconds <= 0) {
+        exitWithError(
+          'Usage: --wait accepts an optional positive number of seconds.',
+          EXIT_PRECONDITION,
+        );
+      }
+      waitSeconds = seconds;
+    }
+  }
   const dashboard = await getDashboardOpenUrl(creds, site, serverUrl);
   if (!dashboard.url) {
     exitWithError(
@@ -3183,6 +3209,10 @@ async function cmdSiteState() {
   const next = [];
   if (streaming) {
     next.push('miles wait-job');
+  } else if (status.status === 'aborted' || status.status === 'failed') {
+    next.push(
+      'miles say "<continue, retry, or redirect the work>"  (last run did not finish)',
+    );
   } else if (phase === 'discovery' || phase === 'brief_review') {
     next.push('miles say "<answer or feedback>"');
   } else if (phase === 'design_directions_ready') {
@@ -3335,6 +3365,11 @@ async function cmdConvertTheme(rawArgs = []) {
     );
   }
 
+  // Keep stdout clean for the JSON handle when --no-wait was requested.
+  const logLine = noWait
+    ? (line) => console.error(line)
+    : (line) => console.log(line);
+
   // Check if the dashboard is already connected before theme conversion.
   let connected = false;
   const status = await apiRequest(
@@ -3345,9 +3380,9 @@ async function cmdConvertTheme(rawArgs = []) {
   connected = status.connected;
 
   if (!connected) {
-    console.log(`Dashboard: ${dashboardUrl}`);
+    logLine(`Dashboard: ${dashboardUrl}`);
 
-    console.log('Waiting for WordPress Playground to connect...');
+    logLine('Waiting for WordPress Playground to connect...');
     const wsStart = Date.now();
     while (Date.now() - wsStart < PLAYGROUND_CONNECT_TIMEOUT_MS) {
       await new Promise((r) => setTimeout(r, 2000));
@@ -3362,18 +3397,18 @@ async function cmdConvertTheme(rawArgs = []) {
       }
       const elapsed = Math.round((Date.now() - wsStart) / 1000);
       if (elapsed > 0 && elapsed % 10 === 0) {
-        console.log(`Still waiting for connection... (${elapsed}s)`);
+        logLine(`Still waiting for connection... (${elapsed}s)`);
       }
     }
 
     if (!connected) {
       exitWithDashboardConnectionRequired(site, PLAYGROUND_CONNECT_TIMEOUT_MS);
     }
-    console.log('Playground connected.');
+    logLine('Playground connected.');
   }
 
   // Trigger theme conversion
-  console.log('Converting the site into a WordPress block theme...');
+  logLine('Converting the site into a WordPress block theme...');
   await apiRequest(
     'POST',
     `/api/v2/headless/conversations/${site.conversationId}/build-theme`,

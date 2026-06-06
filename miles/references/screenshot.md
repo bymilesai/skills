@@ -8,6 +8,7 @@ miles screenshot --json /preview/<slug>/index.html
 ```
 
 - Accepts the path portion of any `previewUrl` (design directions, the built site) or a full URL.
+- Pass URLs exactly as returned by other primitives. Never reconstruct them by hand from IDs or fragments — a URL mangled in shell interpolation 404s at the renderer and reads like a missing preview.
 - Saves to `$MILES_HOME/screenshots/screenshot-<timestamp>.jpg` and prints the path.
 - `--json` adds `targetUrl`, `bytes`, `contentType`, and structured error `detail` — rerun with `--json` once when a capture fails to see why.
 

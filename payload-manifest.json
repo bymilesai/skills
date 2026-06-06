@@ -3,12 +3,12 @@
   "version": "2026.05.30.7",
   "root": "miles",
   "fileCount": 25,
-  "totalBytes": 227743,
+  "totalBytes": 230405,
   "files": [
     {
       "path": "miles/SKILL.md",
-      "size": 14576,
-      "sha256": "88344aaccba1cf2a67a3f7e99b7cfbbacbaae8ab42730b36a42287dabeebde13"
+      "size": 15068,
+      "sha256": "752024e5b4620571b20c2c48826f6502b4fe342e9023fbcb96338eb0d89e82d3"
     },
     {
       "path": "miles/references/account-status.md",
@@ -22,8 +22,8 @@
     },
     {
       "path": "miles/references/browser.md",
-      "size": 2940,
-      "sha256": "822870dd28b992767109660ab10afee4762d567b980b47dd4dca8c05a6ed34ef"
+      "size": 5110,
+      "sha256": "25ff31ba926040bc1eb161b70da60ebaac67d0a67e2b47e966ff43fee8d86c5c"
     },
     {
       "path": "miles/references/build-site.md",

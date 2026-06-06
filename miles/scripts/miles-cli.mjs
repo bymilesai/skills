@@ -54,7 +54,10 @@ const CREDENTIALS_DIR = MILES_HOME;
 const CREDENTIALS_FILE = join(CREDENTIALS_DIR, 'credentials.json');
 const LOGIN_STATE_FILE = join(CREDENTIALS_DIR, 'login-state.json');
 const LAST_RESPONSE_FILE = join(CREDENTIALS_DIR, 'last-response');
+const ACTIVE_RUN_FILE = join(CREDENTIALS_DIR, 'active-run.json');
 const SCREENSHOTS_DIR = join(CREDENTIALS_DIR, 'screenshots');
+// Ignore in-flight markers older than this — no Miles run takes an hour.
+const ACTIVE_RUN_MAX_AGE_MS = 60 * 60 * 1000;
 const DEFAULT_SERVER_URL = process.env.MILES_SERVER_URL || 'https://api.bymiles.ai';
 const REQUIRED_EGRESS = [
   '*.bymiles.ai',
@@ -299,6 +302,58 @@ function getActiveSite(creds) {
 function writeLastResponse(text) {
   ensureCredentialsDir();
   writeFileSync(LAST_RESPONSE_FILE, text);
+}
+
+// ============================================================================
+// In-flight run marker
+//
+// A fired turn runs server-side and outlives this process. The marker lets
+// later invocations (and host hooks) tell the agent a run from a previous
+// turn may still be in flight or have an unread result — the recovery path
+// when the user interrupts the agent mid-run.
+// ============================================================================
+
+function writeActiveRun(data) {
+  try {
+    ensureCredentialsDir();
+    writeFileSync(
+      ACTIVE_RUN_FILE,
+      JSON.stringify({ ...data, firedAt: new Date().toISOString() }),
+    );
+  } catch {
+    // Marker is best-effort; the run itself is unaffected.
+  }
+}
+
+function clearActiveRun() {
+  try {
+    if (existsSync(ACTIVE_RUN_FILE)) unlinkSync(ACTIVE_RUN_FILE);
+  } catch {
+    // Stale markers expire via ACTIVE_RUN_MAX_AGE_MS.
+  }
+}
+
+function readActiveRun() {
+  try {
+    if (!existsSync(ACTIVE_RUN_FILE)) return null;
+    const data = JSON.parse(readFileSync(ACTIVE_RUN_FILE, 'utf-8'));
+    const ageMs = Date.now() - new Date(data.firedAt).getTime();
+    if (!Number.isFinite(ageMs) || ageMs > ACTIVE_RUN_MAX_AGE_MS) return null;
+    return { ...data, ageMinutes: Math.max(1, Math.round(ageMs / 60000)) };
+  } catch {
+    return null;
+  }
+}
+
+function activeRunNotice(run) {
+  return `A Miles run (${run.verb}) fired ${run.ageMinutes}m ago may still be in flight or have an unread result. Run \`miles wait-job\` to rejoin it, \`miles site-state --json\` to inspect, or \`miles cancel\` to stop it (it keeps running and billing server-side until it finishes or is cancelled).`;
+}
+
+/** Surface the marker on stderr so JSON stdout stays clean. */
+function noteActiveRunIfAny() {
+  const run = readActiveRun();
+  if (!run) return;
+  console.error(`[note: ${activeRunNotice(run)}]`);
 }
 
 function emitJson(value) {
@@ -1574,6 +1629,11 @@ async function cmdCreateSite(rawArgs) {
   };
   creds.activeSite = data.siteId;
   saveCredentials(creds);
+  writeActiveRun({
+    verb: 'site-create',
+    siteId: data.siteId,
+    conversationId: data.conversationId,
+  });
 
   if (noWait) {
     emitNoWaitHandle({
@@ -1590,6 +1650,7 @@ async function cmdCreateSite(rawArgs) {
 }
 
 async function cmdSay(rawArgs) {
+  noteActiveRunIfAny();
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
@@ -1628,6 +1689,12 @@ async function cmdSay(rawArgs) {
     }
     throw err;
   }
+
+  writeActiveRun({
+    verb: 'say',
+    siteId: site.id,
+    conversationId: site.conversationId,
+  });
 
   if (noWait) {
     emitNoWaitHandle({
@@ -1724,6 +1791,7 @@ async function cmdWaitJob(args) {
       error: data.error || undefined,
       credits: data.credits || undefined,
     };
+    clearActiveRun();
     writeLastResponse(formatWaitResponse(data));
     emitJson(result);
     process.exit(outcomeExitCode(data.outcome));
@@ -1756,6 +1824,7 @@ async function cmdCancel() {
     { auth: site.siteToken, serverUrl },
   );
 
+  clearActiveRun();
   if (cliOptions.json) {
     emitJson({ ok: true, message: data.message || 'Aborted.' });
     return;
@@ -2377,7 +2446,10 @@ async function doWait(
     maxWaitMs,
     options,
   );
-  if (wsHandled) return wsHandled.data ?? null;
+  if (wsHandled) {
+    if (wsHandled.data) clearActiveRun();
+    return wsHandled.data ?? null;
+  }
 
   // Fallback: polling loop
   const startTime = Date.now();
@@ -2436,6 +2508,7 @@ async function doWait(
     }
 
     // Got a response
+    clearActiveRun();
     const output = formatWaitResponse(data);
     writeLastResponse(output);
     console.log('');
@@ -2551,6 +2624,7 @@ function formatWaitResponse(data) {
 }
 
 async function cmdStatus() {
+  noteActiveRunIfAny();
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
@@ -2606,6 +2680,7 @@ async function cmdStatus() {
 }
 
 async function cmdDesignDirections() {
+  noteActiveRunIfAny();
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
@@ -2707,6 +2782,12 @@ async function cmdBuildSite(rawArgs) {
     }
     throw err;
   }
+
+  writeActiveRun({
+    verb: 'build-site',
+    siteId: site.id,
+    conversationId: site.conversationId,
+  });
 
   if (noWait) {
     emitNoWaitHandle({
@@ -2816,6 +2897,7 @@ async function cmdScreenshot(args) {
 }
 
 async function cmdSites() {
+  noteActiveRunIfAny();
   const creds = loadCredentials();
   if (!creds.apiKey) {
     exitWithError('Not logged in.', EXIT_PRECONDITION);
@@ -3019,6 +3101,7 @@ async function cmdBalance() {
  * needed — use this for headroom checks before committing to a build.
  */
 async function cmdAccountStatus() {
+  noteActiveRunIfAny();
   const creds = loadCredentials();
   if (!creds.apiKey) {
     exitWithError(
@@ -3182,6 +3265,7 @@ async function cmdSiteAttach(args) {
  * connection state, and suggested next moves. The `git status` of Miles.
  */
 async function cmdSiteState() {
+  noteActiveRunIfAny();
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
@@ -3417,6 +3501,12 @@ async function cmdConvertTheme(rawArgs = []) {
     { auth: site.siteToken, serverUrl },
   );
 
+  writeActiveRun({
+    verb: 'convert-theme',
+    siteId: site.id,
+    conversationId: site.conversationId,
+  });
+
   if (noWait) {
     emitNoWaitHandle({
       siteId: site.id,
@@ -3478,6 +3568,32 @@ async function cmdExportSite() {
   console.log(`Preview: ${data.previewUrl}`);
   console.log(`Slug: ${data.slug}`);
   if (data.message) console.log(data.message);
+}
+
+/**
+ * UserPromptSubmit hook handler (Claude Code). If a fired run may still be
+ * in flight (e.g. the user interrupted the agent mid-run), inject recovery
+ * context into the next turn. No network calls — local marker only.
+ */
+async function cmdHookPrompt() {
+  try {
+    // Drain stdin (hook payload is unused; the marker is the state source).
+    readFileSync(0, 'utf-8');
+  } catch {
+    // No stdin is fine.
+  }
+
+  const run = readActiveRun();
+  if (!run) return;
+
+  console.log(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'UserPromptSubmit',
+        additionalContext: `${activeRunNotice(run)} Reattach or ask the user before starting new Miles work.`,
+      },
+    }),
+  );
 }
 
 async function cmdHook() {
@@ -3586,6 +3702,7 @@ const commands = {
   'check-auth': cmdCheckAuth,
   'hook-init': cmdHookInit,
   hook: cmdHook,
+  'hook-prompt': cmdHookPrompt,
 
   // Aliases for earlier skill versions
   login: cmdLogin,

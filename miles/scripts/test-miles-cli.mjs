@@ -1365,6 +1365,98 @@ try {
     'malformed hook payload should warn on stderr',
   );
 
+  // In-flight run marker: hook-prompt injects recovery context while a
+  // fired run is unsettled, stays silent when clean, and ignores stale
+  // markers. Inspection verbs surface the same notice on stderr.
+  const markerHome = makeTempDir();
+  const hookPromptClean = run(['hook-prompt'], { milesHome: markerHome });
+  assert(
+    hookPromptClean.status === 0 && hookPromptClean.stdout === '',
+    'hook-prompt should stay silent with no marker',
+  );
+
+  writeFileSync(
+    join(markerHome, 'active-run.json'),
+    JSON.stringify({
+      verb: 'build-site',
+      siteId: 'site-9',
+      conversationId: 'conversation-9',
+      firedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+    }),
+  );
+  const hookPromptActive = run(['hook-prompt'], { milesHome: markerHome });
+  assert(
+    hookPromptActive.status === 0,
+    'hook-prompt should exit 0 with a live marker',
+  );
+  const hookPromptJson = JSON.parse(hookPromptActive.stdout);
+  assertIncludes(
+    hookPromptJson.hookSpecificOutput.additionalContext,
+    'build-site',
+    'hook-prompt should describe the in-flight run',
+  );
+  assertIncludes(
+    hookPromptJson.hookSpecificOutput.additionalContext,
+    'miles cancel',
+    'hook-prompt should offer the cancel recovery path',
+  );
+
+  writeFileSync(
+    join(markerHome, 'credentials.json'),
+    JSON.stringify({
+      activeSite: 'site-9',
+      sites: {
+        'site-9': {
+          siteToken: 'site-token',
+          conversationId: 'conversation-9',
+          dashboardUrl: 'https://beta.bymiles.ai/sites/site-9',
+        },
+      },
+    }),
+  );
+  const markerMock = await startMockServer((req, res) => {
+    req.on('data', () => {});
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          status: 'idle',
+          phase: 'site_preview',
+          conversationStatus: 'idle',
+          directions: [],
+        }),
+      );
+    });
+  });
+  const noticeResult = await runAsync(['status', '--json'], {
+    milesHome: markerHome,
+    env: { MILES_SERVER_URL: markerMock.url },
+  });
+  assertIncludes(
+    noticeResult.stderr,
+    'may still be in flight',
+    'inspection verbs should surface the in-flight marker on stderr',
+  );
+  assert(
+    !noticeResult.stdout.includes('may still be in flight'),
+    'the marker notice must not pollute JSON stdout',
+  );
+
+  writeFileSync(
+    join(markerHome, 'active-run.json'),
+    JSON.stringify({
+      verb: 'build-site',
+      siteId: 'site-9',
+      conversationId: 'conversation-9',
+      firedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+    }),
+  );
+  const hookPromptStale = run(['hook-prompt'], { milesHome: markerHome });
+  assert(
+    hookPromptStale.stdout === '',
+    'hook-prompt should ignore markers older than an hour',
+  );
+
   assert(existsSync(launcherPath), 'launcher should exist');
   console.log('Miles CLI smoke tests passed.');
 } finally {

@@ -19,6 +19,7 @@ The brief is the blueprint Miles designs from. Include what the site is for, who
 
 ## Judgment
 
+- With `--brief`, this command immediately starts design-direction generation — a multi-minute run. Before firing: set up your host's progress transport (SKILL.md "Long-Running Commands"), tell the user it takes several minutes, and if they are present open the dashboard (`connect-browser --open`) right after the handle exists so they watch the directions appear.
 - User present and wanting the experience → no `--brief`; relay the interview ([full-workflow.md](full-workflow.md)).
 - User supplied content/brief → write it to a temp file, use `--brief`. Do not answer interview questions yourself from content you were given; inject it as the brief instead.
 - Only answer discovery questions on the user's behalf if they explicitly said "you decide" — and even then still show the brief and directions for approval.

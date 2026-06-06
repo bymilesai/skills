@@ -3,12 +3,12 @@
   "version": "2026.05.30.7",
   "root": "miles",
   "fileCount": 25,
-  "totalBytes": 225513,
+  "totalBytes": 227743,
   "files": [
     {
       "path": "miles/SKILL.md",
-      "size": 13153,
-      "sha256": "5c45c94d48b08ea7cec09172681bc1dcb4447e3c9af633fd791a6c34fd81b93b"
+      "size": 14576,
+      "sha256": "88344aaccba1cf2a67a3f7e99b7cfbbacbaae8ab42730b36a42287dabeebde13"
     },
     {
       "path": "miles/references/account-status.md",
@@ -27,8 +27,8 @@
     },
     {
       "path": "miles/references/build-site.md",
-      "size": 1647,
-      "sha256": "6935f946e8f0f3159a3cbc55aed7cc53ccf5e14719f6d9a127b27d7faa223c74"
+      "size": 1780,
+      "sha256": "ba950e58a28818e4c431d96278e96ffae7e1329721dbc19d10c400c8ae7c52e9"
     },
     {
       "path": "miles/references/connect-browser.md",
@@ -52,8 +52,8 @@
     },
     {
       "path": "miles/references/full-workflow.md",
-      "size": 7082,
-      "sha256": "eee504a490ea5490d82ebb6e6d481cf278b92526c48a0e93fef4afe55cf2755e"
+      "size": 7388,
+      "sha256": "e2c4bdf36c7dc7ac15ae55388091dfb39fa1796bc24768f1a77ab69ac784ea3e"
     },
     {
       "path": "miles/references/outcomes.md",
@@ -82,8 +82,8 @@
     },
     {
       "path": "miles/references/site-create.md",
-      "size": 2312,
-      "sha256": "f9e7550c9f6266e41f10fe15b19d0e2723a3fec1311945422af27369f0a78303"
+      "size": 2680,
+      "sha256": "0ada095c4da753c836c3c4b445cc2f32e09d32f173471852f6cbe723c9b54899"
     },
     {
       "path": "miles/references/site-state.md",

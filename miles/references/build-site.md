@@ -13,7 +13,7 @@ By default it streams build progress (minutes) and prints the settled response, 
 ## Judgment
 
 - Build is the expensive step. Before firing: the user (or calling workflow) has chosen a direction, and credits have headroom (`account-status`).
-- Tell the user it takes several minutes. If they want to watch, `connect-browser --open` gives the live dashboard — optional, never required.
+- Tell the user it takes several minutes, set up your host's progress transport first (SKILL.md "Long-Running Commands"), and when the user is present open the dashboard (`connect-browser --open`) before firing so they watch the build live. Only unattended callers run it dark.
 - One build at a time per conversation: a second build-ish command while one runs exits 5 (`capacity`). Use `wait-job` or `cancel`, not retries.
 - After the build settles, verify before declaring success: `screenshot` the site preview or read the settled response. Then iterate with `say` edits.
 - Building a different direction later is possible (it replaces the built site) — but confirm with the user, it spends credits again.

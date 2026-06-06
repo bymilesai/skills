@@ -94,6 +94,7 @@ Each arrow is one primitive; reorder or skip according to what you already have:
 auth → account-status                     # headroom before committing
 site-create "<description>"               # or --brief file to skip discovery
   loop: say "<user's answer>"             # relay interview; approve brief
+connect-browser --open                    # user watching? open the live canvas
 design-directions --json → screenshot     # inspect, recommend, let user pick
 build-site --design N                     # headless full-site build
 say "<edit>" ...                          # iterate on the built site
@@ -102,6 +103,14 @@ export --type html | --type theme         # deliverables
 ```
 
 Long verbs (`site-create`, `say`, `build-site`, `convert-theme`) stream progress and wait by default. Add `--no-wait` to get a JSON handle immediately and then drive `wait-job` / `cancel` yourself — useful when your host can poll but not stream. `--no-wait` requires a server with `cancel` support; never fire work you cannot stop.
+
+## Long-Running Commands: Never Dead Air
+
+`site-create` (with a brief), brief approval via `say`, `build-site`, and `convert-theme` each run for **minutes**. Two rules apply BEFORE you fire the first one:
+
+1. **The user must see progress the whole time.** Many hosts — Claude Code included — buffer foreground stdout, which turns the live progress stream into minutes of silence. On those hosts, either run the command in the background and monitor its output log, or fire with `--no-wait` and loop `miles wait-job --timeout 60`, relaying each poll's progress as short `Miles: <action>` milestone lines. Read [full-workflow.md](references/full-workflow.md) for your host's transport pattern before the first long command — not after the user has been staring at nothing.
+
+2. **A present user should watch the design happen.** Before sending the approval that starts design-direction generation, and before `build-site`, open the dashboard: run `connect-browser --json` and open the authenticated `url` with your best browser surface ([browser.md](references/browser.md)), or `connect-browser --open` to launch their own browser. The dashboard is the live canvas — nothing headless requires it, but a user watching a spinner-free void while their site generates is a product failure. Skip it only for unattended/automation callers, and in every case tell the user roughly how long the step takes before it starts.
 
 ## First Run
 
@@ -142,7 +151,7 @@ Do not assume the frontmatter hooks ran: non-Claude hosts may ignore them, so wa
 - When Miles asks a question (`[question: ...]`), relay it to the user with their native question UI when available, or a compact Markdown card; the question must be visible in your final response for that turn. When the user answers, `say` their answer through unchanged. Relay mechanics and templates: [full-workflow.md](references/full-workflow.md).
 - When the brief arrives (`phase: brief_review`), show the user the FULL brief plus an approve/request-changes choice as your final response. Never summarize it away — it is the blueprint for the whole site.
 - When directions are ready, inspect them (connected dashboard if open, otherwise `screenshot` each preview), give a recommendation tied to the brief with short notes per direction, and let the user choose. Only claim you visually inspected something that actually loaded.
-- Progress: relay short `Miles: <action>` milestone lines, not raw logs or paragraphs. Per-host transport for long-running commands (background + log monitoring on hosts that buffer stdout): [full-workflow.md](references/full-workflow.md).
+- Progress: relay short `Miles: <action>` milestone lines, not raw logs or paragraphs — see Long-Running Commands above for keeping them visible on your host.
 - Credits: surface `[warning: ...]` immediately; on `[error: ...]` about credits, stop and tell the user to top up. `account-status --json` reads balance any time.
 
 ## Updating or Uninstalling Miles

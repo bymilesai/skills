@@ -110,7 +110,14 @@ Signals worth filtering for: `Miles:` lines, `[phase: …]`, `[status: …]`, `[
 
 **Codex**: run long commands normally with a 10-minute timeout — live stdout shows in its activity surface.
 
-**Claude Code**: foreground stdout is buffered, hiding progress. Run long commands (`site-create`, `say`, `build-site`, `convert-theme`, `wait`) with `run_in_background: true`, merge stderr (`2>&1 | tee "$log"`), Monitor the log with a line-buffered selective filter including error/completion signatures, relay concise milestones, read the final response from the result or log, clean up the log:
+**Claude Code**: foreground stdout is buffered — a plain Bash call shows the user NOTHING for the whole run. Never do that. The simplest reliable pattern is fire-and-poll:
+
+```bash
+"$MILES_CLI" build-site --design 2 --no-wait     # returns a JSON handle immediately
+"$MILES_CLI" wait-job --timeout 60               # repeat; relay progress between polls
+```
+
+Each `wait-job` call returns within ~60s with either the settled JSON result or a still-running notice plus progress on stderr — relay a short `Miles: <action>` line to the user between polls. Alternatively run the long command with `run_in_background: true`, merge stderr (`2>&1 | tee "$log"`), and Monitor the log with a line-buffered selective filter:
 
 ```bash
 log="${TMPDIR:-/tmp}/miles-$(date +%s)-build.log"
@@ -118,9 +125,9 @@ log="${TMPDIR:-/tmp}/miles-$(date +%s)-build.log"
 tail -f "$log" | grep --line-buffered -E "Miles:|\[phase:|\[status:|\[outcome:|\[question:|\[directions\]|\[site_ready: true\]|\[warning:|\[error:|No credits|complete|failed"
 ```
 
-**Cursor / OpenCode**: use the native streaming job surface when it shows live stdout; otherwise the same background + temp-log pattern, polling the log when no monitor tool exists.
+**Cursor / OpenCode**: use the native streaming job surface when it shows live stdout; otherwise the fire-and-poll pattern above, or background + temp-log, polling the log when no monitor tool exists.
 
-**Fallback**: generous timeout, no invented progress; `miles status --json` between steps for coarse phase. An alternative on any host: fire with `--no-wait` and poll `miles wait-job` ([wait-job.md](wait-job.md)).
+**Fallback**: fire-and-poll works on any host with `cancel`-capable servers; otherwise generous timeout, no invented progress, `miles status --json` between steps for coarse phase.
 
 ## The chain, end to end
 

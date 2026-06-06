@@ -5,6 +5,7 @@ Deliverable URLs, dispatched per type. Plumbing.
 ```bash
 miles export [--type html]   [--json]   # default type
 miles export --type theme    [--json]
+miles export theme                      # positional form
 ```
 
 (`export-site` and `export-theme` are the legacy aliases.)

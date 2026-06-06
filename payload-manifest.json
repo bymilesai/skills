@@ -3,7 +3,7 @@
   "version": "2026.05.30.7",
   "root": "miles",
   "fileCount": 26,
-  "totalBytes": 241526,
+  "totalBytes": 241946,
   "files": [
     {
       "path": "miles/SKILL.md",
@@ -17,8 +17,8 @@
     },
     {
       "path": "miles/references/auth.md",
-      "size": 3480,
-      "sha256": "52d8dee19c90394ba37adf9ab178e3b3f9cce41088d3f7320fd026a348bb8dd9"
+      "size": 3558,
+      "sha256": "8fcd2886380cea8516519937d838b04acddf89ee113e6fdf73a9008e2f366ccf"
     },
     {
       "path": "miles/references/browser.md",
@@ -27,8 +27,8 @@
     },
     {
       "path": "miles/references/build-site.md",
-      "size": 1780,
-      "sha256": "ba950e58a28818e4c431d96278e96ffae7e1329721dbc19d10c400c8ae7c52e9"
+      "size": 1835,
+      "sha256": "eb0475aa6f71d5f13b013fd301e2f783ed58ec2ca3ef8a78ab72e2955f79936c"
     },
     {
       "path": "miles/references/connect-browser.md",
@@ -47,8 +47,8 @@
     },
     {
       "path": "miles/references/export.md",
-      "size": 1391,
-      "sha256": "faf4ec03b1eb116d3aa506300a4a4d68cf8738e5ea9349f741c68a187cf69eb5"
+      "size": 1449,
+      "sha256": "f57a3909bdb4585991695b0b4711a5fc9e32e48106ff53a06709acbc14476bfd"
     },
     {
       "path": "miles/references/full-workflow.md",
@@ -102,8 +102,8 @@
     },
     {
       "path": "miles/references/wait-job.md",
-      "size": 2498,
-      "sha256": "9ec5fff3c8b523e7acd6463ec7fcde621409fea3641b145fdcc0fbbca5f4093c"
+      "size": 2756,
+      "sha256": "1035842b27d71ed3b31017db761a404ffac5cbf9f6dd3d228b164b4d8743a488"
     },
     {
       "path": "miles/sandbox.json.example",
@@ -122,8 +122,8 @@
     },
     {
       "path": "miles/scripts/miles-cli.mjs",
-      "size": 117673,
-      "sha256": "4fdcbe6a76d71acdd7a85cc015ee150a4232abac5ce464682ffa577a0918caa7"
+      "size": 117644,
+      "sha256": "cd70a22d71919ee159922b1a274d0d639327ddd2ad29b1f0a537cd30e4e81bdf"
     },
     {
       "path": "miles/scripts/test-miles-cli.mjs",

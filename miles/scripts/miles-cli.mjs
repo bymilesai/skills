@@ -2604,7 +2604,7 @@ function formatWaitResponse(data) {
     lines.push('[site_ready: true]');
     lines.push(`[dashboard: ${data.dashboardUrl}]`);
     lines.push(
-      '[edit: To make changes to this WordPress site, run: miles reply "describe your changes"]',
+      '[edit: To make changes to this WordPress site, run: miles say "describe your changes"]',
     );
   }
 
@@ -2666,15 +2666,15 @@ async function cmdStatus() {
     (data.phase === 'site_preview' || data.phase === 'site_generation')
   ) {
     console.log(
-      '[edit: To request changes to the site, run: miles reply "describe your changes"]',
+      '[edit: To request changes to the site, run: miles say "describe your changes"]',
     );
     console.log(
-      '[build: When edits are done, run: miles build-theme — to convert the site to a WordPress theme]',
+      '[build: When edits are done, run: miles convert-theme — to convert the site to a WordPress theme]',
     );
   }
   if (data.siteReady) {
     console.log(
-      '[edit: To make changes to this WordPress site, run: miles reply "describe your changes"]',
+      '[edit: To make changes to this WordPress site, run: miles say "describe your changes"]',
     );
   }
 }
@@ -2717,7 +2717,7 @@ async function cmdDesignDirections() {
     console.log(
       `No design directions generated yet. Current phase: ${data.phase || 'unknown'}.`,
     );
-    console.log('Use `miles reply` to continue the conversation with Miles.');
+    console.log('Use `miles say` to continue the conversation with Miles.');
     return;
   }
 
@@ -2815,14 +2815,9 @@ async function cmdScreenshot(args) {
   // Extract the URL: first arg that starts with / or http
   const url = args.find((a) => a.startsWith('/') || a.startsWith('http'));
   if (!url) {
-    exitWithError(
-      'Usage: miles screenshot <preview-url>',
-      1,
-      {
-        example:
-          'miles screenshot /preview/abc123/previews/hero-xyz/index.html',
-      },
-    );
+    exitWithError('Usage: miles screenshot <preview-url>', EXIT_PRECONDITION, {
+      example: 'miles screenshot /preview/abc123/previews/hero-xyz/index.html',
+    });
   }
 
   const serverUrl = DEFAULT_SERVER_URL;

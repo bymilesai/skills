@@ -27,7 +27,7 @@ miles auth logout            # clear stored credentials
 }
 ```
 
-The CLI saves the private `deviceCode` to `$MILES_HOME/login-state.json` (mode 0600) so the poll step can finish the same login without putting the secret in shell history. If `pendingState` is `unsaved`, the JSON includes `deviceCode` — keep it private and pass it explicitly: `miles auth poll <deviceCode> --json`.
+The JSON always includes the private `deviceCode` — treat the whole response as sensitive and never echo it into user-facing messages. The CLI also saves it to `$MILES_HOME/login-state.json` (mode 0600) so the poll step can finish the same login without the secret in shell history; only when `pendingState` is `unsaved` do you need to pass it explicitly: `miles auth poll <deviceCode> --json`.
 
 2. Show the user the code + complete URL in a visible assistant message, then immediately run `miles auth poll --json`. Do not wait for the user to confirm first.
 

@@ -12,9 +12,16 @@ The async job triad. Plumbing, HEADLESS. Long verbs stream and wait by default; 
   "status": "streaming",
   "siteId": "…",
   "conversationId": "…",
-  "next": { "wait": "miles wait-job", "state": "miles site-state --json", "cancel": "miles cancel" }
+  "next": {
+    "watch": "User present? Open the url from `miles connect-browser --json` in a browser surface NOW so they watch this run live.",
+    "wait": "miles wait-job",
+    "state": "miles site-state --json",
+    "cancel": "miles cancel"
+  }
 }
 ```
+
+Act on `watch` first when a user is present — it is the open-the-canvas moment (SKILL.md "Never Dead Air").
 
 `--no-wait` requires a server that supports `cancel` (exit 2 otherwise). Never fire work you cannot stop — an uncancellable build burns the user's credits.
 

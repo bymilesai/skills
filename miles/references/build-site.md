@@ -4,6 +4,7 @@ Commit a design direction and build the complete static HTML site. Porcelain, HE
 
 ```bash
 miles build-site --design <number> [--no-wait]
+miles build-site <number>            # positional form
 ```
 
 (`select-design-direction <n>` is the legacy alias.)

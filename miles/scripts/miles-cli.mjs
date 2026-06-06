@@ -626,6 +626,8 @@ function emitNoWaitHandle({ siteId, conversationId }) {
     siteId: siteId || null,
     conversationId,
     next: {
+      watch:
+        'User present? Open the url from `miles connect-browser --json` in a browser surface NOW so they watch this run live.',
       wait: 'miles wait-job',
       state: 'miles site-state --json',
       cancel: 'miles cancel',

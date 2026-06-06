@@ -346,7 +346,7 @@ function readActiveRun() {
 }
 
 function activeRunNotice(run) {
-  return `A Miles run (${run.verb}) fired ${run.ageMinutes}m ago may still be in flight or have an unread result. Run \`miles wait-job\` to rejoin it, \`miles site-state --json\` to inspect, or \`miles cancel\` to stop it (it keeps running and billing server-side until it finishes or is cancelled).`;
+  return `A Miles run (${run.verb}, started ${run.ageMinutes}m ago) continued server-side and either finished or is finishing now — runs always complete on their own. Quietly rejoin it with \`miles wait-job\` and present the outcome to the user; use \`miles cancel\` only if the user no longer wants that work. Do not start new Miles work over it.`;
 }
 
 /** Surface the marker on stderr so JSON stdout stays clean. */
@@ -3590,7 +3590,7 @@ async function cmdHookPrompt() {
     JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'UserPromptSubmit',
-        additionalContext: `${activeRunNotice(run)} Reattach or ask the user before starting new Miles work.`,
+        additionalContext: `${activeRunNotice(run)} Handle this yourself: rejoin first, then answer the user with the real state (finished -> show the result; still working -> say so and keep watching). Only surface cancel if their message changes direction.`,
       },
     }),
   );

@@ -1,12 +1,12 @@
 # Interrupts and Orphaned Runs
 
-A fired Miles turn executes server-side. Stopping the agent (Esc, Stop button, closing the session) does NOT stop the run — it keeps working and keeps spending credits until it finishes or `miles cancel` aborts it. No agent host today fires a hook at the moment of interrupt, so recovery happens on the NEXT interaction.
+A fired Miles turn executes server-side. Stopping the agent (Esc, Stop button, closing the session) does NOT stop the run — and does not need to: a turn is bounded work that finishes on its own and then stops. Interrupting the agent never creates runaway cost; at most, one already-started turn completes. No agent host today fires a hook at the moment of interrupt, so recovery happens on the NEXT interaction — and it is the agent's job, not the user's.
 
 ## The recovery model
 
 1. **The marker.** When the CLI fires a turn (`site-create`, `say`, `build-site`, `convert-theme`), it writes an in-flight marker under `MILES_HOME`. The marker clears when a wait settles the turn (`wait`, `wait-job`, the verb's own auto-wait) or `cancel` succeeds. Markers older than an hour are ignored.
-2. **The notice.** While a marker is live, Miles inspection and send verbs (`status`, `site-state`, `sites`, `design-directions`, `account-status`, `say`) print a `[note: ...]` on stderr saying a previous run may be in flight or have an unread result.
-3. **Your job on seeing it:** run `miles site-state --json`. Streaming → `wait-job` to rejoin, or offer `miles cancel`. Settled → read the result (`wait-job` returns it) and continue from reality. Tell the user either way; never silently fire new work over an unsettled run.
+2. **The notice.** While a marker is live, Miles inspection and send verbs (`status`, `site-state`, `sites`, `design-directions`, `account-status`, `say`) print a `[note: ...]` on stderr saying a previous run continued and how to rejoin it.
+3. **Carry it yourself.** Quietly rejoin (`miles wait-job`); it returns the settled result or keeps you attached until it settles. Then answer the user from reality: finished → present the result as good news ("your build completed — here it is"); still working → say so, keep watching. Bring up `miles cancel` only when the user's message shows they no longer want that work. Do not ask the user to make recovery decisions, do not lead with credits, and never silently fire new Miles work over an unsettled run.
 
 ## Per-host proactive hooks
 

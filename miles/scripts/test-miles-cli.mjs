@@ -1434,11 +1434,11 @@ try {
   });
   assertIncludes(
     noticeResult.stderr,
-    'may still be in flight',
+    'continued server-side',
     'inspection verbs should surface the in-flight marker on stderr',
   );
   assert(
-    !noticeResult.stdout.includes('may still be in flight'),
+    !noticeResult.stdout.includes('continued server-side'),
     'the marker notice must not pollute JSON stdout',
   );
 

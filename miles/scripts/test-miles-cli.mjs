@@ -287,23 +287,38 @@ try {
   assert(helpResult.status === 0, 'help should exit cleanly');
   assertIncludes(
     helpResult.stdout,
-    'miles login [--json]              Request a device login code',
-    'help should document the non-blocking login request',
+    'miles auth [login|poll|status|logout]',
+    'help should document the auth umbrella',
   );
   assertIncludes(
     helpResult.stdout,
-    'miles preview [--open]',
-    'help should document host-controlled preview opening',
+    'miles connect-browser [--open] [--wait]',
+    'help should document the explicit browser gate',
   );
   assertIncludes(
     helpResult.stdout,
-    'miles select-design-direction <n> Choose a design direction',
-    'help should document design selection without browser side effects',
+    'miles build-site --design <n>',
+    'help should document the headless site build',
   );
   assertIncludes(
     helpResult.stdout,
-    'miles build-theme                 Build WordPress theme',
-    'help should document theme conversion without browser side effects',
+    'miles convert-theme',
+    'help should document theme conversion as browser-gated',
+  );
+  assertIncludes(
+    helpResult.stdout,
+    'miles wait-job',
+    'help should document the composable wait verb',
+  );
+  assertIncludes(
+    helpResult.stdout,
+    'miles cancel',
+    'help should document turn cancellation',
+  );
+  assertIncludes(
+    helpResult.stdout,
+    'Exit codes: 0 ok | 1 failed/aborted | 2 precondition | 3 need connection',
+    'help should document the shared exit-code grammar',
   );
 
   const doctorHome = makeTempDir();
@@ -1008,12 +1023,18 @@ try {
   );
 
   const { result: statusResult, json: status } = runJson(['status', '--json']);
-  assert(statusResult.status === 1, 'status --json should fail without an active site');
+  assert(
+    statusResult.status === 2,
+    'status --json should exit 2 without an active site',
+  );
   assert(status.ok === false, 'status --json failure should be structured');
   assertIncludes(status.error, 'No active conversation', 'status should explain the precondition');
 
   const replyResult = run(['reply', 'Use --json output']);
-  assert(replyResult.status === 1, 'reply without an active conversation should fail');
+  assert(
+    replyResult.status === 2,
+    'reply alias without an active conversation should exit 2',
+  );
   assert(
     !replyResult.stdout.includes('The --json option'),
     'reply prose containing --json should not be treated as a global option',
@@ -1022,6 +1043,12 @@ try {
     replyResult.stderr,
     'No active conversation',
     'reply should preserve --json inside user prose',
+  );
+
+  const sayResult = run(['say', 'Hello there']);
+  assert(
+    sayResult.status === 2,
+    'say without an active conversation should exit 2',
   );
 
   const reconnectHome = makeTempDir();
@@ -1047,23 +1074,23 @@ try {
       res.end(JSON.stringify({ error: 'dashboard_connection_required' }));
     });
   });
-  const reconnectResult = await runAsync(['reply', 'Make the form wider'], {
+  const reconnectResult = await runAsync(['say', 'Make the form wider'], {
     milesHome: reconnectHome,
     env: { MILES_SERVER_URL: reconnectMock.url },
   });
   assert(
-    reconnectResult.status === 1,
-    `reply should fail fast when the server requires dashboard reconnection\nstatus: ${reconnectResult.status}\nrequests: ${JSON.stringify(reconnectRequests)}\nstdout:\n${reconnectResult.stdout}\nstderr:\n${reconnectResult.stderr}`,
+    reconnectResult.status === 3,
+    `say should exit 3 (need_connection) when the server requires dashboard reconnection\nstatus: ${reconnectResult.status}\nrequests: ${JSON.stringify(reconnectRequests)}\nstdout:\n${reconnectResult.stdout}\nstderr:\n${reconnectResult.stderr}`,
   );
   assertIncludes(
     reconnectResult.stderr,
-    'Dashboard connection required',
-    'reply should explain the dashboard reconnection requirement',
+    'browser dashboard connection is required',
+    'say should explain the dashboard reconnection requirement',
   );
   assertIncludes(
     reconnectResult.stderr,
-    'miles preview --json',
-    'reply should tell agents how to recover from dashboard_connection_required',
+    'miles connect-browser --json',
+    'say should tell agents how to recover from a missing connection',
   );
   assert(
     reconnectRequests.some(
@@ -1071,7 +1098,171 @@ try {
         request.method === 'POST' &&
         request.url === '/api/v2/headless/conversations/conversation-1/message',
     ),
-    'reply should send the message to the active conversation endpoint',
+    'say should send the message to the active conversation endpoint',
+  );
+
+  // build-site must be headless: it must POST select-design-direction without
+  // checking the dashboard connection first, and exit with the outcome code.
+  const buildHome = makeTempDir();
+  writeFileSync(
+    join(buildHome, 'credentials.json'),
+    JSON.stringify({
+      activeSite: 'site-2',
+      sites: {
+        'site-2': {
+          siteToken: 'site-token',
+          conversationId: 'conversation-2',
+          dashboardUrl: 'https://beta.bymiles.ai/sites/site-2',
+        },
+      },
+    }),
+  );
+  const buildRequests = [];
+  const buildMock = await startMockServer((req, res) => {
+    buildRequests.push({ method: req.method, url: req.url });
+    req.on('data', () => {});
+    req.on('end', () => {
+      if (req.url.includes('/select-design-direction')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ message: 'Design 1 selected.' }));
+        return;
+      }
+      if (req.url.includes('/wait')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            status: 'completed',
+            outcome: 'completed',
+            phase: 'site_preview',
+            milesMessage: 'Site built.',
+            siteReady: false,
+          }),
+        );
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+  });
+  const buildResult = await runAsync(['build-site', '--design', '1'], {
+    milesHome: buildHome,
+    env: { MILES_SERVER_URL: buildMock.url },
+  });
+  assert(
+    buildResult.status === 0,
+    `build-site should complete headlessly\nstatus: ${buildResult.status}\nrequests: ${JSON.stringify(buildRequests)}\nstderr:\n${buildResult.stderr}`,
+  );
+  assert(
+    !buildRequests.some((request) => request.url.includes('/ws-status')),
+    'build-site must not gate on the dashboard connection',
+  );
+  assert(
+    buildRequests.some(
+      (request) =>
+        request.method === 'POST' &&
+        request.url ===
+          '/api/v2/headless/conversations/conversation-2/select-design-direction',
+    ),
+    'build-site should trigger the design selection build',
+  );
+  assertIncludes(
+    buildResult.stdout,
+    '[outcome: completed]',
+    'build-site should surface the settled turn outcome',
+  );
+
+  // wait-job maps blocked/declined outcomes onto exit 4 with JSON on stdout.
+  const waitJobHome = makeTempDir();
+  writeFileSync(
+    join(waitJobHome, 'credentials.json'),
+    JSON.stringify({
+      activeSite: 'site-3',
+      sites: {
+        'site-3': {
+          siteToken: 'site-token',
+          conversationId: 'conversation-3',
+          dashboardUrl: 'https://beta.bymiles.ai/sites/site-3',
+        },
+      },
+    }),
+  );
+  const waitJobMock = await startMockServer((req, res) => {
+    req.on('data', () => {});
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          status: 'waiting_for_input',
+          outcome: 'declined',
+          outcomeUnresolved: ['User declined the plugin install'],
+          phase: 'complete',
+          milesMessage: 'Understood, skipping that.',
+        }),
+      );
+    });
+  });
+  const waitJobResult = await runAsync(['wait-job'], {
+    milesHome: waitJobHome,
+    env: { MILES_SERVER_URL: waitJobMock.url },
+  });
+  assert(
+    waitJobResult.status === 4,
+    `wait-job should exit 4 on a declined outcome\nstatus: ${waitJobResult.status}\nstdout:\n${waitJobResult.stdout}`,
+  );
+  const waitJobJson = JSON.parse(waitJobResult.stdout);
+  assert(
+    waitJobJson.outcome === 'declined' && waitJobJson.ok === false,
+    'wait-job should report the declined outcome as structured JSON',
+  );
+
+  // cancel is gated on the capabilities handshake: a server without the
+  // cancel primitive must produce exit 2, not a confusing 404.
+  const legacyHome = makeTempDir();
+  writeFileSync(
+    join(legacyHome, 'credentials.json'),
+    JSON.stringify({
+      activeSite: 'site-4',
+      sites: {
+        'site-4': {
+          siteToken: 'site-token',
+          conversationId: 'conversation-4',
+          dashboardUrl: 'https://beta.bymiles.ai/sites/site-4',
+        },
+      },
+    }),
+  );
+  const legacyMock = await startMockServer((req, res) => {
+    req.on('data', () => {});
+    req.on('end', () => {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+  });
+  const legacyCancel = await runAsync(['cancel'], {
+    milesHome: legacyHome,
+    env: { MILES_SERVER_URL: legacyMock.url },
+  });
+  assert(
+    legacyCancel.status === 2,
+    `cancel against a legacy server should exit 2\nstatus: ${legacyCancel.status}\nstderr:\n${legacyCancel.stderr}`,
+  );
+  assertIncludes(
+    legacyCancel.stderr,
+    'does not support',
+    'cancel should explain the missing server capability',
+  );
+
+  // --no-wait must refuse to fire-and-forget when cancel is unsupported.
+  const noWaitResult = await runAsync(
+    ['say', '--no-wait', 'Build the site'],
+    {
+      milesHome: legacyHome,
+      env: { MILES_SERVER_URL: legacyMock.url },
+    },
+  );
+  assert(
+    noWaitResult.status === 2,
+    `--no-wait against a legacy server should exit 2\nstatus: ${noWaitResult.status}\nstderr:\n${noWaitResult.stderr}`,
   );
 
   const { result: unsupportedJsonResult, json: unsupportedJson } = runJson([

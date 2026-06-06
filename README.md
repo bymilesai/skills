@@ -148,15 +148,18 @@ Preview the next version without changing files:
 /opt/homebrew/bin/node scripts/release-skill.mjs --dry-run patch
 ```
 
-The workflow looks like:
+The skill is a set of composable primitives that chain into the full guided workflow:
 
-1. **Authentication** — agents use `miles login --json`, show the device code, then immediately run `miles login --poll --json` while you authorize
-2. **Create site** — `miles create-site "description"` starts a conversation with Miles
-3. **Discovery** — Miles asks questions, your agent relays them to you, sends your answers back
+1. **Authentication** — agents use `miles auth login --json`, show the device code, then immediately run `miles auth poll --json` while you authorize
+2. **Create site** — `miles site-create "description"` starts a conversation with Miles; `--brief file.md` skips discovery and designs around content you already have
+3. **Discovery** — Miles asks questions, your agent relays them to you, sends your answers back with `miles say`
 4. **Brief review** — Miles presents a design brief for your approval
-5. **Design directions** — Miles generates multiple design directions with preview URLs
-6. **Build** — You pick a direction, Miles builds the full site in both HTML and as a WordPress block theme
-7. **Export** — Download as static HTML site or export a full WordPress sandbox instance you can drop into Local or WP Studio
-8. **Edit** - Continue to make direct edits to your WordPress using Miles and the cloud sandbox it provides
+5. **Design directions** — Miles generates multiple design directions with preview URLs (`miles design-directions --json`, `miles screenshot`)
+6. **Build** — You pick a direction, `miles build-site --design N` builds the full HTML site with no browser required
+7. **WordPress** — `miles connect-browser` then `miles convert-theme` turns the built site into a WordPress block theme
+8. **Export** — `miles export --type html|theme` returns the deliverables
+9. **Edit** — Continue making direct edits to your WordPress site with `miles say`, and resume any site from any machine with `miles site-attach`
 
-See [commands.md](miles/commands.md) for the full command reference, [examples.md](miles/examples.md) for workflow examples, and [smoke-checklist.md](miles/smoke-checklist.md) for clean-environment validation.
+Agents can also enter mid-flow: design around an existing brief, fetch design options programmatically, resume an existing site, or stop at the static HTML deliverable. Every verb shares one exit-code grammar and emits JSON for composition.
+
+See [SKILL.md](miles/SKILL.md) for the primitive menu, [references/](miles/references/) for per-primitive contracts, and [smoke-checklist.md](miles/smoke-checklist.md) for clean-environment validation.

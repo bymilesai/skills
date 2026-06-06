@@ -73,21 +73,53 @@ const POLL_TIMEOUT_MS = 10000; // 10 second poll for faster progress updates
 const ERROR_BODY_MAX_CHARS = 2048;
 const DASHBOARD_CONNECT_TIMEOUT_MS = 30000;
 const PLAYGROUND_CONNECT_TIMEOUT_MS = 60000;
+
+// Shared exit-code grammar. Every verb maps its result onto these so agents
+// can branch on exit codes without parsing prose.
+const EXIT_OK = 0; // completed
+const EXIT_ERROR = 1; // failed / aborted / unexpected error
+const EXIT_PRECONDITION = 2; // missing auth, site, argument, or server support
+const EXIT_NEED_CONNECTION = 3; // a connection must be established, then retry
+const EXIT_BLOCKED = 4; // turn ended blocked or declined
+const EXIT_CAPACITY = 5; // server capacity / another run already streaming
+
 const JSON_COMMANDS = new Set([
   'doctor',
+  'auth',
   'login',
   'logout',
   'whoami',
+  'account-status',
   'status',
+  'site-state',
+  'site-attach',
   'design-directions',
   'screenshot',
   'sites',
   'use',
   'preview',
+  'connect-browser',
   'balance',
   'messages',
+  'wait-job',
+  'cancel',
+  'export',
   'export-theme',
   'export-site',
+]);
+
+// Long-running verbs that accept --no-wait (fire the turn, return a JSON
+// handle immediately). Only offered when the connected server supports
+// `cancel` — a fire-and-forget surface without cancellation burns credits.
+const NO_WAIT_VERBS = new Set([
+  'site-create',
+  'create-site',
+  'say',
+  'reply',
+  'build-site',
+  'select-design-direction',
+  'convert-theme',
+  'build-theme',
 ]);
 
 let cliOptions = { json: false };
@@ -433,13 +465,14 @@ function exitWithDashboardConnectionRequired(site, timeoutMs = null) {
   const dashboardUrl = getDashboardUrl(site);
   const prefix =
     timeoutMs === null
-      ? 'Dashboard connection required before this browser-backed operation.'
+      ? 'A browser dashboard connection is required before this operation.'
       : `Dashboard did not connect within ${timeoutMs / 1000}s.`;
   exitWithError(
-    `${prefix} Run \`miles preview --json\`, open the returned authenticated url in your agent browser or regular browser, then retry the same command.`,
-    1,
+    `${prefix} Run \`miles connect-browser --json\`, open the returned authenticated url in your agent browser or regular browser, wait for connected: true, then retry the same command once.`,
+    EXIT_NEED_CONNECTION,
     {
-      code: 'dashboard_connection_required',
+      code: 'need_connection',
+      connection: { kind: 'browser-dashboard' },
       dashboardUrl,
     },
   );
@@ -490,6 +523,116 @@ function getLocalRuntimeSummary(creds = loadCredentials()) {
   };
 }
 
+// ============================================================================
+// Capabilities handshake + turn outcomes
+// ============================================================================
+
+let cachedCapabilities;
+
+/**
+ * Fetch the connected server's primitive contract. Returns null when the
+ * server predates the handshake (404) or the fetch fails — callers treat
+ * null as "legacy contract": the pre-handshake primitive set only.
+ */
+async function getServerCapabilities(serverUrl = DEFAULT_SERVER_URL) {
+  if (cachedCapabilities !== undefined) return cachedCapabilities;
+  try {
+    cachedCapabilities = await apiRequest(
+      'GET',
+      '/api/v2/headless/capabilities',
+      { serverUrl },
+    );
+  } catch {
+    cachedCapabilities = null;
+  }
+  return cachedCapabilities;
+}
+
+/**
+ * Exit 2 when the connected server does not advertise a primitive. Keeps the
+ * skill honest: never run an operation the API can't deliver.
+ */
+async function requirePrimitive(name, serverUrl = DEFAULT_SERVER_URL) {
+  const capabilities = await getServerCapabilities(serverUrl);
+  if (!capabilities?.primitives?.[name]) {
+    exitWithError(
+      `The connected Miles server does not support \`${name}\` yet. Run \`miles doctor --json\` to see the supported primitive set.`,
+      EXIT_PRECONDITION,
+      { code: 'primitive_unsupported', primitive: name },
+    );
+  }
+  return capabilities;
+}
+
+/**
+ * Map a settled turn outcome to the shared exit-code grammar.
+ */
+function outcomeExitCode(outcome) {
+  switch (outcome) {
+    case 'completed':
+      return EXIT_OK;
+    case 'blocked':
+    case 'declined':
+      return EXIT_BLOCKED;
+    case 'need_connection':
+      return EXIT_NEED_CONNECTION;
+    case 'capacity':
+      return EXIT_CAPACITY;
+    case 'aborted':
+    case 'failed':
+      return EXIT_ERROR;
+    default:
+      // Legacy servers do not send an outcome; preserve exit 0 behavior.
+      return EXIT_OK;
+  }
+}
+
+/**
+ * Exit using the settled wait payload. Outcome-aware when the server sent
+ * one; silent no-op (exit 0 at process end) otherwise.
+ */
+function exitWithTurnOutcome(data) {
+  const code = outcomeExitCode(data?.outcome);
+  if (code !== EXIT_OK) process.exit(code);
+}
+
+function parseNoWaitFlag(command, args) {
+  const index = args.indexOf('--no-wait');
+  if (index === -1) return { noWait: false, args };
+  if (!NO_WAIT_VERBS.has(command)) {
+    exitWithError(
+      `--no-wait is not supported for \`${command}\`.`,
+      EXIT_PRECONDITION,
+    );
+  }
+  return {
+    noWait: true,
+    args: args.filter((_, i) => i !== index),
+  };
+}
+
+/**
+ * --no-wait ships only with cancellation. If the server can't abort a fired
+ * turn, refuse to fire-and-forget it.
+ */
+async function ensureNoWaitSupported(serverUrl = DEFAULT_SERVER_URL) {
+  await requirePrimitive('cancel', serverUrl);
+}
+
+function emitNoWaitHandle({ siteId, conversationId }) {
+  emitJson({
+    ok: true,
+    status: 'streaming',
+    siteId: siteId || null,
+    conversationId,
+    next: {
+      wait: 'miles wait-job',
+      state: 'miles site-state --json',
+      cancel: 'miles cancel',
+    },
+  });
+}
+
 function truncateText(text, maxChars = ERROR_BODY_MAX_CHARS) {
   if (text.length <= maxChars) return { text, truncated: false };
   return {
@@ -507,13 +650,13 @@ function readReplyMessage(args) {
   const fileIndex = args.indexOf('--file');
 
   if (stdinIndex !== -1 && fileIndex !== -1) {
-    exitWithError('Use either `miles reply --stdin` or `miles reply --file <path>`, not both.');
+    exitWithError('Use either `miles say --stdin` or `miles say --file <path>`, not both.', EXIT_PRECONDITION);
   }
 
   if (stdinIndex !== -1) {
     const remaining = args.filter((_, index) => index !== stdinIndex);
     if (remaining.length > 0) {
-      exitWithError('Usage: miles reply --stdin');
+      exitWithError('Usage: miles say --stdin', EXIT_PRECONDITION);
     }
     return stripOneTrailingNewline(readFileSync(0, 'utf8'));
   }
@@ -521,13 +664,13 @@ function readReplyMessage(args) {
   if (fileIndex !== -1) {
     const filePath = args[fileIndex + 1];
     if (!filePath) {
-      exitWithError('Usage: miles reply --file <path>');
+      exitWithError('Usage: miles say --file <path>', EXIT_PRECONDITION);
     }
     const remaining = args.filter(
       (_, index) => index !== fileIndex && index !== fileIndex + 1,
     );
     if (remaining.length > 0) {
-      exitWithError('Usage: miles reply --file <path>');
+      exitWithError('Usage: miles say --file <path>', EXIT_PRECONDITION);
     }
     return stripOneTrailingNewline(readFileSync(filePath, 'utf8'));
   }
@@ -1273,10 +1416,20 @@ async function cmdDoctor() {
     },
   ];
 
+  // Capabilities handshake: which primitives the connected server supports.
+  // Best-effort — a legacy server (or no network) reports contract: null.
+  const capabilities = await getServerCapabilities();
+
   const result = {
     status: checks.every((check) => check.ok) ? 'ok' : 'needs_setup',
     checks,
     ...summary,
+    server: {
+      url: DEFAULT_SERVER_URL,
+      contract: capabilities?.contract ?? null,
+      schemaVersion: capabilities?.schemaVersion ?? null,
+      primitives: capabilities ? Object.keys(capabilities.primitives) : null,
+    },
   };
 
   if (cliOptions.json) {
@@ -1349,15 +1502,18 @@ async function cmdCheckAuth() {
   process.exit(0);
 }
 
-async function cmdCreateSite(args) {
+async function cmdCreateSite(rawArgs) {
   const creds = loadCredentials();
   if (!creds.apiKey) {
     exitWithError(
-      'Not logged in. Run `miles login` to get a device login code.',
+      'Not logged in. Run `miles auth login` to get a device login code.',
+      EXIT_PRECONDITION,
     );
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
+  const { noWait, args } = parseNoWaitFlag('site-create', rawArgs);
+  if (noWait) await ensureNoWaitSupported(serverUrl);
 
   // Parse args
   let message = '';
@@ -1370,9 +1526,13 @@ async function cmdCreateSite(args) {
       try {
         brief = readFileSync(briefPath, 'utf-8');
       } catch (err) {
-        exitWithError(`Could not read brief file: ${briefPath}`, 1, {
-          cause: err.message,
-        });
+        exitWithError(
+          `Could not read brief file: ${briefPath}`,
+          EXIT_PRECONDITION,
+          {
+            cause: err.message,
+          },
+        );
       }
     } else if (args[i] === '--name' && args[i + 1]) {
       name = args[++i];
@@ -1383,11 +1543,14 @@ async function cmdCreateSite(args) {
 
   if (!message) {
     exitWithError(
-      'Usage: miles create-site "<description>" [--name "Site Name"] [--brief <file>]',
+      'Usage: miles site-create "<description>" [--name "Site Name"] [--brief <file>] [--no-wait]',
+      EXIT_PRECONDITION,
     );
   }
 
-  console.log('Creating site and starting conversation with Miles...');
+  if (!noWait) {
+    console.log('Creating site and starting conversation with Miles...');
+  }
 
   const body = { message };
   if (name) body.name = name;
@@ -1410,26 +1573,42 @@ async function cmdCreateSite(args) {
   creds.activeSite = data.siteId;
   saveCredentials(creds);
 
+  if (noWait) {
+    emitNoWaitHandle({
+      siteId: data.siteId,
+      conversationId: data.conversationId,
+    });
+    return;
+  }
+
   console.log(`Dashboard: ${data.dashboardUrl}`);
 
-  await doWait(creds, data.conversationId, serverUrl);
+  const settled = await doWait(creds, data.conversationId, serverUrl);
+  exitWithTurnOutcome(settled);
 }
 
-async function cmdReply(args) {
+async function cmdSay(rawArgs) {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
     exitWithError(
-      'No active conversation. Use `miles create-site` to start one.',
+      'No active conversation. Use `miles site-create` to start one, or `miles site-attach <siteId>` to resume an existing site.',
+      EXIT_PRECONDITION,
     );
   }
 
+  const serverUrl = DEFAULT_SERVER_URL;
+  const { noWait, args } = parseNoWaitFlag('say', rawArgs);
+  if (noWait) await ensureNoWaitSupported(serverUrl);
+
   const message = readReplyMessage(args);
   if (!message) {
-    exitWithError('Usage: miles reply "<message>" | miles reply --stdin | miles reply --file <path>');
+    exitWithError(
+      'Usage: miles say "<message>" | miles say --stdin | miles say --file <path>',
+      EXIT_PRECONDITION,
+    );
   }
 
-  const serverUrl = DEFAULT_SERVER_URL;
   let response;
   try {
     response = await apiRequest(
@@ -1448,20 +1627,124 @@ async function cmdReply(args) {
     throw err;
   }
 
-  await doWait(creds, site.conversationId, serverUrl, undefined, {
+  if (noWait) {
+    emitNoWaitHandle({
+      siteId: site.id,
+      conversationId: site.conversationId,
+    });
+    return;
+  }
+
+  const settled = await doWait(creds, site.conversationId, serverUrl, undefined, {
     sinceMessageId: response?.sinceMessageId,
   });
+  exitWithTurnOutcome(settled);
 }
 
 async function cmdWait() {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    exitWithError('No active conversation.');
+    exitWithError('No active conversation.', EXIT_PRECONDITION);
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
-  await doWait(creds, site.conversationId, serverUrl);
+  const settled = await doWait(creds, site.conversationId, serverUrl);
+  exitWithTurnOutcome(settled);
+}
+
+/**
+ * Plumbing wait: poll the settled turn over REST only, progress to stderr,
+ * one JSON result on stdout, outcome-mapped exit code. The composable
+ * counterpart to the streaming `wait` used by the guided flow.
+ */
+async function cmdWaitJob(args) {
+  const creds = loadCredentials();
+  const site = getActiveSite(creds);
+  if (!site?.conversationId) {
+    exitWithError('No active conversation.', EXIT_PRECONDITION);
+  }
+
+  const serverUrl = DEFAULT_SERVER_URL;
+  const timeoutSeconds = parsePositiveSecondsFlag(args, '--timeout');
+  const maxWait = timeoutSeconds ? timeoutSeconds * 1000 : MAX_WAIT_MS;
+  const startTime = Date.now();
+  let lastProgress = '';
+
+  while (Date.now() - startTime < maxWait) {
+    const data = await apiRequest(
+      'GET',
+      `/api/v2/headless/conversations/${site.conversationId}/wait?timeout=${POLL_TIMEOUT_MS}`,
+      { auth: site.siteToken, serverUrl },
+    );
+
+    if (data.status === 'running') {
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
+      const progressMsg =
+        formatProgress(data.progress, elapsed) ||
+        `phase: ${data.phase || 'working'} (${elapsed}s)`;
+      if (progressMsg !== lastProgress) {
+        console.error(progressMsg);
+        lastProgress = progressMsg;
+      }
+      continue;
+    }
+
+    const result = {
+      ok: data.outcome
+        ? data.outcome === 'completed'
+        : data.status !== 'failed',
+      status: data.status,
+      outcome: data.outcome || null,
+      outcomeUnresolved: data.outcomeUnresolved || undefined,
+      outcomeReason: data.outcomeReason || undefined,
+      phase: data.phase || null,
+      milesMessage: data.milesMessage || null,
+      question: data.question || null,
+      brief: data.brief || null,
+      directions: data.directions || undefined,
+      selectedDirectionId: data.selectedDirectionId || null,
+      siteReady: Boolean(data.siteReady),
+      error: data.error || undefined,
+      credits: data.credits || undefined,
+    };
+    writeLastResponse(formatWaitResponse(data));
+    emitJson(result);
+    process.exit(outcomeExitCode(data.outcome));
+  }
+
+  emitJson({
+    ok: false,
+    status: 'running',
+    error: `Turn still running after ${Math.round(maxWait / 1000)}s. Run miles wait-job again to keep waiting, or miles cancel to stop the run.`,
+  });
+  process.exit(EXIT_ERROR);
+}
+
+/**
+ * Cancel the running turn for the active conversation.
+ */
+async function cmdCancel() {
+  const creds = loadCredentials();
+  const site = getActiveSite(creds);
+  if (!site?.conversationId) {
+    exitWithError('No active conversation.', EXIT_PRECONDITION);
+  }
+
+  const serverUrl = DEFAULT_SERVER_URL;
+  await requirePrimitive('cancel', serverUrl);
+
+  const data = await apiRequest(
+    'POST',
+    `/api/v2/headless/conversations/${site.conversationId}/abort`,
+    { auth: site.siteToken, serverUrl },
+  );
+
+  if (cliOptions.json) {
+    emitJson({ ok: true, message: data.message || 'Aborted.' });
+    return;
+  }
+  console.log(data.message || 'Aborted.');
 }
 
 /**
@@ -1726,6 +2009,7 @@ async function doWaitWebSocket(
     let finished = false;
     let heartbeatTimer = null;
     let subscribeMessageId = null;
+    let settledData = null;
     const activeToolInput = new Map();
 
     const emitProgress = (message, key = message) => {
@@ -1764,6 +2048,7 @@ async function doWaitWebSocket(
           { auth: token, serverUrl },
         );
         if (data.status !== 'running') {
+          settledData = data;
           const output = formatWaitResponse(data);
           writeLastResponse(output);
           console.log('');
@@ -1789,7 +2074,7 @@ async function doWaitWebSocket(
         console.log(`Miles is still working.`);
         console.log('Use `miles wait` to continue polling for the response.');
       }
-      resolve(true);
+      resolve({ handled: true, data: settledData });
     }, maxWait);
 
     ws.onopen = () => {
@@ -1841,7 +2126,7 @@ async function doWaitWebSocket(
           if (alreadyDone) {
             cleanup();
             clearTimeout(timeoutTimer);
-            resolve(true);
+            resolve({ handled: true, data: settledData });
             return;
           }
 
@@ -1971,7 +2256,7 @@ async function doWaitWebSocket(
                 if (done) {
                   cleanup();
                   clearTimeout(timeoutTimer);
-                  resolve(true);
+                  resolve({ handled: true, data: settledData });
                 }
               } catch (err) {
                 fallBackToPolling(err);
@@ -1990,7 +2275,7 @@ async function doWaitWebSocket(
                 if (done) {
                   cleanup();
                   clearTimeout(timeoutTimer);
-                  resolve(true);
+                  resolve({ handled: true, data: settledData });
                 }
               } catch (err) {
                 fallBackToPolling(err);
@@ -2027,7 +2312,7 @@ async function doWaitWebSocket(
               resolve(false);
               return;
             }
-            resolve(true);
+            resolve({ handled: true, data: settledData });
             return;
           }
         }
@@ -2076,7 +2361,7 @@ async function doWait(
     maxWaitMs,
     options,
   );
-  if (wsHandled) return;
+  if (wsHandled) return wsHandled.data ?? null;
 
   // Fallback: polling loop
   const startTime = Date.now();
@@ -2139,7 +2424,7 @@ async function doWait(
     writeLastResponse(output);
     console.log('');
     console.log(output);
-    return;
+    return data;
   }
 
   // Timed out - tell the agent what's happening so it can act
@@ -2148,12 +2433,31 @@ async function doWait(
     : 'Miles is still working.';
   console.log(statusMsg);
   console.log('Use `miles wait` to continue polling for the response.');
+  return null;
 }
 
 function formatWaitResponse(data) {
   const lines = [];
 
   lines.push(`[status: ${data.status}]`);
+  if (data.outcome) {
+    lines.push(`[outcome: ${data.outcome}]`);
+    if (data.outcome === 'blocked' || data.outcome === 'declined') {
+      const unresolved = Array.isArray(data.outcomeUnresolved)
+        ? data.outcomeUnresolved
+        : [];
+      for (const item of unresolved) {
+        lines.push(`[unresolved: ${item}]`);
+      }
+      lines.push(
+        data.outcome === 'declined'
+          ? '[note: The user declined this work. Do not retry or route around the decline.]'
+          : '[note: The requested work did not happen. Resolve the blocker before retrying.]',
+      );
+    } else if (data.outcomeReason) {
+      lines.push(`[outcome_reason: ${data.outcomeReason}]`);
+    }
+  }
   lines.push(`[phase: ${data.phase}]`);
 
   if (data.milesMessage) {
@@ -2234,7 +2538,7 @@ async function cmdStatus() {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    exitWithError('No active conversation.');
+    exitWithError('No active conversation.', EXIT_PRECONDITION);
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -2289,7 +2593,7 @@ async function cmdDesignDirections() {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    exitWithError('No active conversation.');
+    exitWithError('No active conversation.', EXIT_PRECONDITION);
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -2305,7 +2609,10 @@ async function cmdDesignDirections() {
       selectedDirectionId: data.selectedDirectionId || null,
       directions: (data.directions || []).map((h) => ({
         number: h.number,
+        directionId: h.directionId || null,
         name: h.directionName || `Design ${h.number}`,
+        status: h.status || null,
+        selectable: h.selectable !== undefined ? Boolean(h.selectable) : null,
         previewUrl: h.previewUrl || null,
         screenshotCommand: h.previewUrl
           ? `miles screenshot ${h.previewUrl.replace(/^https?:\/\/[^/]+/, '')}`
@@ -2334,67 +2641,78 @@ async function cmdDesignDirections() {
   if (data.selectedDirectionId) {
     console.log(`\nSelected: ${data.selectedDirectionId}`);
   } else {
-    console.log(
-      `\nUse \`miles select-design-direction <number>\` to choose a design.`,
-    );
+    console.log(`\nUse \`miles build-site --design <number>\` to choose a design and build the full site.`);
   }
 }
 
-async function cmdSelectDesignDirection(args) {
+/**
+ * Commit a design direction and build the full HTML site. Fully headless:
+ * the server build pipeline does not need a browser. Open the dashboard with
+ * `miles connect-browser` only when the user wants to watch progress live.
+ */
+async function cmdBuildSite(rawArgs) {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    exitWithError('No active conversation.');
+    exitWithError('No active conversation.', EXIT_PRECONDITION);
   }
 
-  const rawDirectionNumber = args[0];
+  const serverUrl = DEFAULT_SERVER_URL;
+  const { noWait, args } = parseNoWaitFlag('build-site', rawArgs);
+  if (noWait) await ensureNoWaitSupported(serverUrl);
+
+  const designFlag = getOptionalCommandFlagValue(args, '--design');
+  const positional = args.find((a) => /^\d+$/.test(a));
+  const rawDirectionNumber = designFlag ?? positional;
   if (!/^\d+$/.test(rawDirectionNumber || '')) {
-    exitWithError('Usage: miles select-design-direction <number>');
+    exitWithError(
+      'Usage: miles build-site --design <number> [--no-wait]',
+      EXIT_PRECONDITION,
+    );
   }
   const directionNumber = parseInt(rawDirectionNumber, 10);
 
-  const serverUrl = DEFAULT_SERVER_URL;
-
-  console.log(`Selecting design direction ${directionNumber}...`);
-
-  // Wait for the dashboard WebSocket connection before starting the build.
-  // This ensures the dashboard subscribes to the conversation stream and
-  // can display live build progress instead of joining mid-stream.
-  const dashboardUrl = getDashboardUrl(site);
-  if (!dashboardUrl) {
-    exitWithError(
-      'Active site is missing its dashboard URL. Run `miles sites` and `miles use <siteId>`, or recreate the site.',
+  if (!noWait) {
+    console.log(
+      `Selecting design direction ${directionNumber} and starting the site build...`,
     );
   }
-  console.log(`Dashboard: ${dashboardUrl}`);
-  console.log(`Waiting for dashboard to connect...`);
-  const dashboardConnected = await waitForDashboardConnection(
-    site,
-    serverUrl,
-    DASHBOARD_CONNECT_TIMEOUT_MS,
-  );
-  if (!dashboardConnected) {
-    exitWithDashboardConnectionRequired(site, DASHBOARD_CONNECT_TIMEOUT_MS);
+
+  let data;
+  try {
+    data = await apiRequest(
+      'POST',
+      `/api/v2/headless/conversations/${site.conversationId}/select-design-direction`,
+      { auth: site.siteToken, body: { directionNumber }, serverUrl },
+    );
+  } catch (err) {
+    if (isDashboardConnectionRequiredError(err)) {
+      exitWithDashboardConnectionRequired(site);
+    }
+    throw err;
   }
 
-  const data = await apiRequest(
-    'POST',
-    `/api/v2/headless/conversations/${site.conversationId}/select-design-direction`,
-    { auth: site.siteToken, body: { directionNumber }, serverUrl },
-  );
+  if (noWait) {
+    emitNoWaitHandle({
+      siteId: site.id,
+      conversationId: site.conversationId,
+    });
+    return;
+  }
 
   console.log(data.message);
   console.log('');
   console.log('Waiting for Miles to build the site...');
 
-  await doWait(creds, site.conversationId, serverUrl);
+  const settled = await doWait(creds, site.conversationId, serverUrl);
+  exitWithTurnOutcome(settled);
 }
 
 async function cmdScreenshot(args) {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.siteToken) {
-    exitWithError('No active site. Use `miles create-site` first.');
+    exitWithError('No active site. Use `miles site-create` first.', EXIT_PRECONDITION);
   }
 
   // Extract the URL: first arg that starts with / or http
@@ -2484,7 +2802,7 @@ async function cmdScreenshot(args) {
 async function cmdSites() {
   const creds = loadCredentials();
   if (!creds.apiKey) {
-    exitWithError('Not logged in.');
+    exitWithError('Not logged in.', EXIT_PRECONDITION);
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -2525,7 +2843,7 @@ async function cmdSites() {
 async function cmdUse(args) {
   const siteId = args[0];
   if (!siteId) {
-    exitWithError('Usage: miles use <siteId>');
+    exitWithError('Usage: miles use <siteId>', EXIT_PRECONDITION);
   }
 
   const creds = loadCredentials();
@@ -2547,40 +2865,62 @@ async function cmdUse(args) {
   }
 }
 
-async function cmdPreview(args = []) {
+async function cmdConnectBrowser(args = []) {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site) {
-    exitWithError('No active site.');
+    exitWithError('No active site.', EXIT_PRECONDITION);
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
   const shouldOpen = hasCommandFlag(args, '--open');
+  const waitSeconds = hasCommandFlag(args, '--wait')
+    ? (parsePositiveSecondsFlag(args, '--wait') ??
+      DASHBOARD_CONNECT_TIMEOUT_MS / 1000)
+    : null;
   const dashboard = await getDashboardOpenUrl(creds, site, serverUrl);
   if (!dashboard.url) {
     exitWithError(
-      'Active site is missing its dashboard URL. Run `miles sites` and `miles use <siteId>`, or recreate the site.',
+      'Active site is missing its dashboard URL. Run `miles sites` and `miles site-attach <siteId>`, or recreate the site.',
+      EXIT_PRECONDITION,
     );
   }
+
+  if (shouldOpen) openUrl(dashboard.url);
 
   let connected = null;
   let connectionStatusError = null;
   if (site.conversationId) {
     try {
-      connected = await getDashboardConnectionStatus(site, serverUrl);
+      if (waitSeconds) {
+        connected = await waitForDashboardConnection(
+          site,
+          serverUrl,
+          waitSeconds * 1000,
+        );
+      } else {
+        connected = await getDashboardConnectionStatus(site, serverUrl);
+      }
     } catch (err) {
-      connectionStatusError = err.message || 'Could not check dashboard connection.';
+      connectionStatusError =
+        err.message || 'Could not check dashboard connection.';
       if (!cliOptions.json) {
         console.error(`WebSocket status unavailable: ${connectionStatusError}`);
       }
     }
   }
+
+  if (waitSeconds && connected === false) {
+    exitWithDashboardConnectionRequired(site, waitSeconds * 1000);
+  }
+
   if (cliOptions.json) {
     const payload = {
       url: dashboard.url,
       dashboardUrl: dashboard.dashboardUrl,
       authenticated: dashboard.authenticated,
       connected,
+      connection: { kind: 'browser-dashboard' },
       activeSite: getActiveSiteSummary(creds),
     };
     if (connectionStatusError) {
@@ -2596,14 +2936,13 @@ async function cmdPreview(args = []) {
   if (connected !== null) {
     console.log(`WebSocket: ${connected ? 'connected' : 'not connected'}`);
   }
-  if (shouldOpen) openUrl(dashboard.url);
 }
 
 async function cmdBalance() {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    exitWithError('No active site.');
+    exitWithError('No active site.', EXIT_PRECONDITION);
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -2647,11 +2986,306 @@ async function cmdBalance() {
   }
 }
 
+/**
+ * Account-scoped status: plan, credits, and site count. No conversation
+ * needed — use this for headroom checks before committing to a build.
+ */
+async function cmdAccountStatus() {
+  const creds = loadCredentials();
+  if (!creds.apiKey) {
+    exitWithError(
+      'Not logged in. Run `miles auth login` to get a device login code.',
+      EXIT_PRECONDITION,
+    );
+  }
+
+  const serverUrl = DEFAULT_SERVER_URL;
+  await requirePrimitive('account-status', serverUrl);
+
+  const data = await apiRequest('GET', '/api/v2/headless/account/balance', {
+    auth: creds.apiKey,
+    serverUrl,
+  });
+
+  let siteCount = null;
+  try {
+    const sites = await apiRequest('GET', '/api/v2/headless/sites', {
+      auth: creds.apiKey,
+      serverUrl,
+    });
+    siteCount = sites.sites?.length ?? 0;
+  } catch {
+    // Site listing is enrichment only; balance is the primary payload.
+  }
+
+  if (cliOptions.json) {
+    emitJson({
+      plan: data.plan || null,
+      credits: data.credits || null,
+      siteCount,
+      activeSite: getActiveSiteSummary(creds),
+    });
+    return;
+  }
+
+  console.log(`Plan: ${data.plan || 'Unknown'}`);
+  if (data.credits) {
+    console.log(
+      `Credits: ${data.credits.totalSpendableCredits.toLocaleString()} spendable (${data.credits.usagePercent}% of plan allowance used)`,
+    );
+    if (data.credits.topUpBalanceCredits > 0) {
+      console.log(
+        `Top-up credits: ${data.credits.topUpBalanceCredits.toLocaleString()}`,
+      );
+    }
+  }
+  if (siteCount !== null) {
+    console.log(`Sites: ${siteCount}`);
+  }
+}
+
+/**
+ * Attach to any site owned by this account — cross-machine resume. Mints a
+ * fresh site token, hydrates local credentials, and makes it the active
+ * site. With --duplicate, forks the site instead (the official way to
+ * branch an existing site before risky edits).
+ */
+async function cmdSiteAttach(args) {
+  const creds = loadCredentials();
+  if (!creds.apiKey) {
+    exitWithError(
+      'Not logged in. Run `miles auth login` to get a device login code.',
+      EXIT_PRECONDITION,
+    );
+  }
+
+  const siteId = args.find((a) => !a.startsWith('--'));
+  if (!siteId) {
+    exitWithError(
+      'Usage: miles site-attach <siteId> [--duplicate] [--name "Copy name"]. Run `miles sites --json` to list site ids.',
+      EXIT_PRECONDITION,
+    );
+  }
+  const duplicate = hasCommandFlag(args, '--duplicate');
+  const copyName = getOptionalCommandFlagValue(args, '--name');
+  const serverUrl = DEFAULT_SERVER_URL;
+
+  let attachedSiteId;
+  let siteToken;
+  let conversationId = null;
+  let dashboardUrl = null;
+  let name = null;
+  let phase = null;
+
+  if (duplicate) {
+    const body = copyName ? { name: copyName } : {};
+    const data = await apiRequest(
+      'POST',
+      `/api/v2/headless/sites/${siteId}/duplicate`,
+      { auth: creds.apiKey, body, serverUrl },
+    );
+    attachedSiteId = data.siteId;
+    siteToken = data.siteToken;
+    conversationId = data.conversationId || null;
+    dashboardUrl = data.dashboardUrl || null;
+    name = copyName || null;
+  } else {
+    const data = await apiRequest(
+      'POST',
+      `/api/v2/headless/sites/${siteId}/session-token`,
+      { auth: creds.apiKey, serverUrl },
+    );
+    attachedSiteId = data.siteId;
+    siteToken = data.siteToken;
+
+    try {
+      const listing = await apiRequest('GET', '/api/v2/headless/sites', {
+        auth: creds.apiKey,
+        serverUrl,
+      });
+      const entry = (listing.sites || []).find((s) => s.id === attachedSiteId);
+      if (entry) {
+        conversationId = entry.conversationId || null;
+        dashboardUrl = entry.dashboardUrl || null;
+        name = entry.name || null;
+        phase = entry.phase || null;
+      }
+    } catch {
+      // Token already minted; metadata enrichment is best-effort.
+    }
+  }
+
+  if (!creds.sites) creds.sites = {};
+  creds.sites[attachedSiteId] = {
+    siteToken,
+    name,
+    conversationId,
+    dashboardUrl,
+  };
+  creds.activeSite = attachedSiteId;
+  saveCredentials(creds);
+
+  const payload = {
+    ok: true,
+    siteId: attachedSiteId,
+    conversationId,
+    phase,
+    duplicated: duplicate,
+    next: conversationId
+      ? ['miles site-state --json']
+      : ['This site has no conversation yet; conversation verbs will not work.'],
+  };
+
+  if (cliOptions.json) {
+    emitJson(payload);
+    return;
+  }
+  console.log(
+    duplicate
+      ? `Duplicated site ${siteId} into ${attachedSiteId} (now active).`
+      : `Attached to site ${attachedSiteId}${name ? ` (${name})` : ''} (now active).`,
+  );
+  if (phase) console.log(`Phase: ${phase}`);
+  console.log('Run `miles site-state --json` to see where this site is.');
+}
+
+/**
+ * One JSON snapshot of the active site: phase, streaming status, directions,
+ * connection state, and suggested next moves. The `git status` of Miles.
+ */
+async function cmdSiteState() {
+  const creds = loadCredentials();
+  const site = getActiveSite(creds);
+  if (!site?.conversationId) {
+    exitWithError(
+      'No active conversation. Use `miles site-create` or `miles site-attach <siteId>` first.',
+      EXIT_PRECONDITION,
+    );
+  }
+
+  const serverUrl = DEFAULT_SERVER_URL;
+  const [status, directions, connected] = await Promise.all([
+    apiRequest(
+      'GET',
+      `/api/v2/headless/conversations/${site.conversationId}/status`,
+      { auth: site.siteToken, serverUrl },
+    ),
+    apiRequest(
+      'GET',
+      `/api/v2/headless/conversations/${site.conversationId}/design-directions`,
+      { auth: site.siteToken, serverUrl },
+    ).catch(() => null),
+    getDashboardConnectionStatus(site, serverUrl).catch(() => null),
+  ]);
+
+  const phase = status.phase || null;
+  const streaming = status.status === 'streaming';
+  const next = [];
+  if (streaming) {
+    next.push('miles wait-job');
+  } else if (phase === 'discovery' || phase === 'brief_review') {
+    next.push('miles say "<answer or feedback>"');
+  } else if (phase === 'design_directions_ready') {
+    next.push('miles design-directions --json');
+    next.push('miles build-site --design <number>');
+  } else if (
+    phase === 'site_preview' ||
+    phase === 'site_generation' ||
+    status.siteReady
+  ) {
+    next.push('miles say "<describe an edit>"');
+    next.push('miles export --type html');
+    next.push('miles convert-theme  (needs connect-browser first)');
+  }
+  if (phase === 'complete' || status.siteReady) {
+    next.push('miles export --type theme');
+  }
+
+  const payload = {
+    siteId: site.id,
+    conversationId: site.conversationId,
+    phase,
+    status: status.status,
+    conversationStatus: status.conversationStatus || null,
+    error: status.error || undefined,
+    siteReady: Boolean(status.siteReady),
+    selectedDirectionId: status.selectedDirectionId || null,
+    directionCount: status.directionCount || 0,
+    directions: (directions?.directions || []).map((h) => ({
+      number: h.number,
+      directionId: h.directionId || null,
+      name: h.directionName || `Design ${h.number}`,
+      previewUrl: h.previewUrl || null,
+    })),
+    connection: {
+      kind: 'browser-dashboard',
+      connected,
+    },
+    next,
+  };
+
+  if (cliOptions.json) {
+    emitJson(payload);
+    return;
+  }
+
+  console.log(`[phase: ${payload.phase}]`);
+  console.log(`[status: ${payload.status}]`);
+  if (payload.siteReady) console.log('[site_ready: true]');
+  if (payload.directionCount > 0) {
+    console.log(`[directions: ${payload.directionCount}]`);
+  }
+  console.log(
+    `[browser: ${connected === null ? 'unknown' : connected ? 'connected' : 'not connected'}]`,
+  );
+  if (next.length) {
+    console.log('Next:');
+    next.forEach((n) => console.log(`  ${n}`));
+  }
+}
+
+/**
+ * Export dispatcher over the per-deliverable endpoints.
+ * html is fully headless. theme metadata is headless, but downloading the
+ * theme zip from a Playground site tunnels through the connected browser.
+ */
+async function cmdExport(args) {
+  const flagType = getOptionalCommandFlagValue(args, '--type');
+  const positional = args.find((a) => a === 'html' || a === 'theme');
+  const type = flagType || positional || 'html';
+
+  if (type === 'html') return cmdExportSite();
+  if (type === 'theme') return cmdExportTheme();
+
+  exitWithError(
+    `Unknown export type: ${type}. Supported types: html, theme.`,
+    EXIT_PRECONDITION,
+  );
+}
+
+/**
+ * Auth umbrella: status (default), login, poll, logout.
+ */
+async function cmdAuth(args) {
+  const sub = args[0];
+  const rest = args.slice(1);
+
+  if (!sub || sub === 'status' || sub === 'whoami') return cmdWhoami();
+  if (sub === 'login') return cmdLogin(rest);
+  if (sub === 'poll') return cmdLogin(['--poll', ...rest]);
+  if (sub === 'logout') return cmdLogout();
+
+  exitWithError(
+    'Usage: miles auth [status|login|poll|logout]',
+    EXIT_PRECONDITION,
+  );
+}
+
 async function cmdMessages() {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    exitWithError('No active conversation.');
+    exitWithError('No active conversation.', EXIT_PRECONDITION);
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -2679,18 +3313,25 @@ async function cmdMessages() {
   });
 }
 
-async function cmdBuildTheme() {
+async function cmdConvertTheme(rawArgs = []) {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    exitWithError('No active conversation. Use `miles create-site` first.');
+    exitWithError(
+      'No active conversation. Use `miles site-create` first.',
+      EXIT_PRECONDITION,
+    );
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
+  const { noWait } = parseNoWaitFlag('convert-theme', rawArgs);
+  if (noWait) await ensureNoWaitSupported(serverUrl);
+
   const dashboardUrl = getDashboardUrl(site);
   if (!dashboardUrl) {
     exitWithError(
-      'Active site is missing its dashboard URL. Run `miles sites` and `miles use <siteId>`, or recreate the site.',
+      'Active site is missing its dashboard URL. Run `miles sites` and `miles site-attach <siteId>`, or recreate the site.',
+      EXIT_PRECONDITION,
     );
   }
 
@@ -2732,23 +3373,32 @@ async function cmdBuildTheme() {
   }
 
   // Trigger theme conversion
-  console.log('Building WordPress theme...');
+  console.log('Converting the site into a WordPress block theme...');
   await apiRequest(
     'POST',
     `/api/v2/headless/conversations/${site.conversationId}/build-theme`,
     { auth: site.siteToken, serverUrl },
   );
 
+  if (noWait) {
+    emitNoWaitHandle({
+      siteId: site.id,
+      conversationId: site.conversationId,
+    });
+    return;
+  }
+
   // Wait for completion after the agent has established the dashboard session.
-  await doWait(creds, site.conversationId, serverUrl);
-  console.log('To edit this site, run: miles reply "describe your changes"');
+  const settled = await doWait(creds, site.conversationId, serverUrl);
+  console.log('To edit this site, run: miles say "describe your changes"');
+  exitWithTurnOutcome(settled);
 }
 
 async function cmdExportTheme() {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    exitWithError('No active conversation.');
+    exitWithError('No active conversation.', EXIT_PRECONDITION);
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -2773,7 +3423,7 @@ async function cmdExportSite() {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    exitWithError('No active conversation.');
+    exitWithError('No active conversation.', EXIT_PRECONDITION);
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -2872,62 +3522,93 @@ const { command, args } = parsed;
 cliOptions = parsed.options;
 
 const commands = {
+  // v0 primitive grammar
+  auth: cmdAuth,
+  'account-status': cmdAccountStatus,
+  'site-create': cmdCreateSite,
+  say: cmdSay,
+  'design-directions': cmdDesignDirections,
+  'build-site': cmdBuildSite,
+  'wait-job': cmdWaitJob,
+  'site-state': cmdSiteState,
+  'site-attach': cmdSiteAttach,
+  screenshot: cmdScreenshot,
+  export: cmdExport,
+  'connect-browser': cmdConnectBrowser,
+  'convert-theme': cmdConvertTheme,
+  cancel: cmdCancel,
+
+  // Supporting verbs
   doctor: cmdDoctor,
+  wait: cmdWait,
+  status: cmdStatus,
+  sites: cmdSites,
+  use: cmdUse,
+  balance: cmdBalance,
+  messages: cmdMessages,
+  'check-auth': cmdCheckAuth,
+  'hook-init': cmdHookInit,
+  hook: cmdHook,
+
+  // Aliases for earlier skill versions
   login: cmdLogin,
   logout: cmdLogout,
   whoami: cmdWhoami,
-  'check-auth': cmdCheckAuth,
-  'hook-init': cmdHookInit,
   'create-site': cmdCreateSite,
-  reply: cmdReply,
-  wait: cmdWait,
-  status: cmdStatus,
-  'design-directions': cmdDesignDirections,
-  'select-design-direction': cmdSelectDesignDirection,
-  screenshot: cmdScreenshot,
-  sites: cmdSites,
-  use: cmdUse,
-  preview: cmdPreview,
-  balance: cmdBalance,
-  messages: cmdMessages,
-  'build-theme': cmdBuildTheme,
+  reply: cmdSay,
+  'select-design-direction': cmdBuildSite,
+  preview: cmdConnectBrowser,
+  'build-theme': cmdConvertTheme,
   'export-theme': cmdExportTheme,
   'export-site': cmdExportSite,
-  hook: cmdHook,
 };
 
 if (!command || command === 'help' || command === '--help') {
   console.log(`Miles CLI - Design websites with Miles AI
 
-Authentication:
-  miles doctor                      Check local CLI setup
-  miles login [--json]              Request a device login code
-  miles logout                      Clear stored credentials
-  miles whoami                      Show current auth + active site
+Primitives (HEADLESS = no browser needed, BROWSER = needs connect-browser first):
 
-Site Management:
-  miles create-site "<description>" Create site + start conversation
-  miles create-site --brief <file>  Create with pre-built brief (skip discovery)
-  miles sites                       List all sites
-  miles use <siteId>                Switch active site
-  miles preview [--open]            Get dashboard URL
-  miles balance                     Show credit balance
+Account:
+  miles auth [login|poll|status|logout]   HEADLESS  Device login lifecycle
+  miles account-status [--json]           HEADLESS  Plan, credits, site count
+  miles doctor [--json]                   HEADLESS  Check local CLI setup
 
-Conversation:
-  miles reply "<message>"           Send message to Miles, wait for response
-  miles reply --stdin               Read reply text from stdin
-  miles reply --file <path>         Read reply text from a file
-  miles wait                        Long-poll for Miles' response
-  miles status                      Quick status check (non-blocking)
-  miles design-directions           Get design direction preview URLs
-  miles select-design-direction <n> Choose a design direction
-  miles build-theme                 Build WordPress theme (waits, converts)
-  miles screenshot <preview-url>    Screenshot a preview URL (saves JPEG, prints path)
-  miles messages                    Full conversation history
+Sites:
+  miles site-create "<description>" [--brief <file>] [--name "Name"]
+                                          HEADLESS  Create site + conversation
+  miles site-attach <siteId> [--duplicate]
+                                          HEADLESS  Resume any owned site
+  miles site-state [--json]               HEADLESS  Phase, directions, next moves
+  miles sites [--json]                    HEADLESS  List all sites
+  miles use <siteId>                      HEADLESS  Switch active site (local)
+
+Design + build:
+  miles say "<message>"                   HEADLESS* Talk to Miles (discovery,
+                                                    brief feedback, edits)
+  miles design-directions [--json]        HEADLESS  List design directions
+  miles build-site --design <n>           HEADLESS  Commit a design, build site
+  miles screenshot <preview-url>          HEADLESS  Capture a preview JPEG
+  miles wait-job [--timeout <s>]          HEADLESS  Wait for the running turn
+                                                    (JSON result + exit code)
+  miles cancel                            HEADLESS  Stop the running turn
+
+WordPress:
+  miles connect-browser [--open] [--wait] BROWSER   Dashboard URL + connection
+  miles convert-theme                     BROWSER   HTML site -> block theme
 
 Export:
-  miles export-theme                Download WordPress theme info
-  miles export-site                 Get static HTML files info
+  miles export [--type html|theme]        HEADLESS  Deliverable URLs (theme zip
+                                                    download needs the browser)
+
+* say is headless before the site is built; edits on a built WordPress site
+  need the browser connection and fail fast with exit 3 when it is missing.
+
+Long verbs accept --no-wait to return a JSON handle immediately (requires a
+server with cancel support). Pair with wait-job and cancel.
+
+Exit codes: 0 ok | 1 failed/aborted | 2 precondition | 3 need connection
+(open connect-browser url, wait for connected, retry once) | 4 blocked or
+declined by user | 5 capacity/already running.
 
 Options:
   --json                            Emit JSON for inspection commands`);
@@ -2951,6 +3632,21 @@ if (!handler) {
     `Unknown command: ${command}. Use \`miles help\` for available commands.`,
   );
   process.exit(1);
+}
+
+/**
+ * Map API rejections onto the shared exit-code grammar so agents can branch
+ * without parsing error prose.
+ */
+function apiErrorExitCode(err) {
+  if (!(err instanceof ApiError)) return EXIT_ERROR;
+  const code = err.data?.code;
+  if (code === 'dashboard_connection_required') return EXIT_NEED_CONNECTION;
+  if (code === 'conversation_execution_locked') return EXIT_CAPACITY;
+  if (code === 'CONTENT_POLICY_VIOLATION') return EXIT_BLOCKED;
+  if (err.status === 429 || err.status === 503) return EXIT_CAPACITY;
+  if (err.status === 401) return EXIT_PRECONDITION;
+  return EXIT_ERROR;
 }
 
 handler(args).catch((err) => {
@@ -2978,7 +3674,7 @@ handler(args).catch((err) => {
         error: err.message,
       });
     }
-    process.exit(1);
+    process.exit(apiErrorExitCode(err));
   }
 
   if (err instanceof SandboxNetworkError) {
@@ -3007,5 +3703,5 @@ handler(args).catch((err) => {
   } else {
     console.error(`Error: ${err.message}`);
   }
-  process.exit(1);
+  process.exit(apiErrorExitCode(err));
 });

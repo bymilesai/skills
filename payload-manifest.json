@@ -2,23 +2,103 @@
   "name": "miles",
   "version": "2026.05.30.7",
   "root": "miles",
-  "fileCount": 9,
-  "totalBytes": 200614,
+  "fileCount": 25,
+  "totalBytes": 224345,
   "files": [
     {
       "path": "miles/SKILL.md",
-      "size": 42583,
-      "sha256": "34904e3aa2da524789d0168a295c28db4a055b50519b1390186a2e8320110cd4"
+      "size": 13153,
+      "sha256": "5c45c94d48b08ea7cec09172681bc1dcb4447e3c9af633fd791a6c34fd81b93b"
     },
     {
-      "path": "miles/commands.md",
-      "size": 13451,
-      "sha256": "1bec5bbfe8f7b1f34aaec9bfabc29bf09c3341433c5bc3b8f692fcb6ca5c4438"
+      "path": "miles/references/account-status.md",
+      "size": 1237,
+      "sha256": "06ed567991f79106d1026a3fd7c2c946886219bbdb0910712c242673ee478b89"
     },
     {
-      "path": "miles/examples.md",
-      "size": 4309,
-      "sha256": "89f7324fb60daf46dc3dd447c3c0a2d58e362a211fee7e6cbc0c417992ccb637"
+      "path": "miles/references/auth.md",
+      "size": 3480,
+      "sha256": "52d8dee19c90394ba37adf9ab178e3b3f9cce41088d3f7320fd026a348bb8dd9"
+    },
+    {
+      "path": "miles/references/browser.md",
+      "size": 2940,
+      "sha256": "822870dd28b992767109660ab10afee4762d567b980b47dd4dca8c05a6ed34ef"
+    },
+    {
+      "path": "miles/references/build-site.md",
+      "size": 1647,
+      "sha256": "6935f946e8f0f3159a3cbc55aed7cc53ccf5e14719f6d9a127b27d7faa223c74"
+    },
+    {
+      "path": "miles/references/connect-browser.md",
+      "size": 2223,
+      "sha256": "9c85a5c3da071231e3df350567acb11f95eeaf0133a81ee43c9803acca074ab1"
+    },
+    {
+      "path": "miles/references/convert-theme.md",
+      "size": 1875,
+      "sha256": "b80d9bb0e4c3d24cd8d87eb4e6a72c84bd67551cbe092774432410f71b647b1a"
+    },
+    {
+      "path": "miles/references/design-directions.md",
+      "size": 1842,
+      "sha256": "82e09d0fd95654827d44b37a37d521c5f6a761a8db25d4bff2a326a238e558d4"
+    },
+    {
+      "path": "miles/references/export.md",
+      "size": 1391,
+      "sha256": "faf4ec03b1eb116d3aa506300a4a4d68cf8738e5ea9349f741c68a187cf69eb5"
+    },
+    {
+      "path": "miles/references/full-workflow.md",
+      "size": 7082,
+      "sha256": "eee504a490ea5490d82ebb6e6d481cf278b92526c48a0e93fef4afe55cf2755e"
+    },
+    {
+      "path": "miles/references/outcomes.md",
+      "size": 2666,
+      "sha256": "cdd022ae74bd38675715e454bcbdf497d751306ae1c565d884e85fd65ccfb60f"
+    },
+    {
+      "path": "miles/references/sandbox.md",
+      "size": 2655,
+      "sha256": "2f084f26e4da62489c2eda5a67bc34e68cd4c18d23abd4f26efdcb61cd6adfef"
+    },
+    {
+      "path": "miles/references/say.md",
+      "size": 2010,
+      "sha256": "95c3972bf6e16533b7baba1b405603379699eaf13d283e639ceae1c444532f23"
+    },
+    {
+      "path": "miles/references/screenshot.md",
+      "size": 1379,
+      "sha256": "6ed6463207747b6827bf233b2c6804d9fca0976d5627427767e9c4369173e3e4"
+    },
+    {
+      "path": "miles/references/site-attach.md",
+      "size": 1622,
+      "sha256": "50deb7b65ac6505d019fb64942491af0e2e5e2eb4a20377365f1b40ff7be95b3"
+    },
+    {
+      "path": "miles/references/site-create.md",
+      "size": 2312,
+      "sha256": "f9e7550c9f6266e41f10fe15b19d0e2723a3fec1311945422af27369f0a78303"
+    },
+    {
+      "path": "miles/references/site-state.md",
+      "size": 1597,
+      "sha256": "44586daace1f91dfe87ac4e29cfabec42f27ca5841deba5b1a697e1a490a4e50"
+    },
+    {
+      "path": "miles/references/state-objects.md",
+      "size": 2298,
+      "sha256": "6ce56b9c87bfdfbe05eca4d111500da5b69f9835c45e58f132deb9f25ecf631c"
+    },
+    {
+      "path": "miles/references/wait-job.md",
+      "size": 2498,
+      "sha256": "9ec5fff3c8b523e7acd6463ec7fcde621409fea3641b145fdcc0fbbca5f4093c"
     },
     {
       "path": "miles/sandbox.json.example",
@@ -37,18 +117,18 @@
     },
     {
       "path": "miles/scripts/miles-cli.mjs",
-      "size": 90978,
-      "sha256": "68244a6ccbc19e51c096f9da269a02e0a7ab7d591a60ff68f7760055349bfc67"
+      "size": 112664,
+      "sha256": "44bb852191187de461a534ea6ac2897846ba5851f43b55f9c96505c388cd3d1d"
     },
     {
       "path": "miles/scripts/test-miles-cli.mjs",
-      "size": 40582,
-      "sha256": "84225f887bc0bb26c8479de6ba3746a51d2846d7349fa6a10801283350ce6378"
+      "size": 46425,
+      "sha256": "49fd083c4f1ac0df6f00a164a97084d3edbb477c702104af740d51a1954f8fe8"
     },
     {
       "path": "miles/smoke-checklist.md",
-      "size": 4414,
-      "sha256": "a32abd96ba8056eaa0941eafd7219bd95ad5f24c1713d051807dbb65cee2eed5"
+      "size": 5052,
+      "sha256": "886bb0d1a47178357c14b6d8bf4e6dc357496444f2545d5dd34f84f3b12f4767"
     }
   ]
 }

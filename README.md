@@ -6,7 +6,7 @@ Miles provides instant cloud sandboxes for WordPress so you can build and experi
 
 ## What it does
 
-Miles can conduct a design interview, generates a strategic website brief, create multiple design directions for review. You or your agent can decide which design to build and continue to iterate on the design and structure.
+Miles conducts a design interview, generates a strategic website brief, and creates multiple design directions for review. You or your agent decide which design to build, then continue to iterate on the design and structure.
 
 ## Install
 
@@ -95,14 +95,6 @@ Once installed, just ask your AI agent to build a website with Miles:
 
 The skill handles authentication, the design conversation with Miles, and the full build process. Your agent will relay Miles' questions to you and present design options for your approval. You can continue to make changes to your WordPress site with Miles.
 
-The bundled CLI lives at `miles/scripts/miles`. Use `doctor --json` to check the local setup. Set `MILES_HOME` when you want an isolated clean-machine test:
-
-```bash
-export MILES_HOME=/tmp/miles-skill-smoke
-export MILES_CLI=/path/to/installed/miles/scripts/miles
-"$MILES_CLI" doctor --json
-```
-
 The installer also writes a lifecycle helper:
 
 ```bash
@@ -114,39 +106,7 @@ The installer also writes a lifecycle helper:
 
 Agents should run `check-update --json` when Miles is first used in a session. The check is cached for 24 hours and should only prompt the user when it returns `"shouldPrompt": true`. Urgent updates may keep returning `"shouldPrompt": true` from the cached result until the user updates. Updates and uninstall always require user approval.
 
-When files under `miles/` change during normal development, regenerate the payload manifest before testing:
-
-```bash
-/opt/homebrew/bin/node scripts/generate-payload-manifest.mjs
-```
-
-## Releasing Skill Updates
-
-Skill updates should ship as versioned releases, not moving branch archives. The release workflow mirrors the Miles plugin release model:
-
-1. Run the release script from a clean `trunk` checkout.
-2. The script bumps `version.json`, `install.sh`, and `payload-manifest.json`.
-3. The script opens and merges a release PR, then pushes a `skill-v<version>` tag.
-4. GitHub Actions packages an immutable `miles-skill-<version>.tar.gz` release asset plus Bun-compiled CLI binaries, computes SHA-256 values, and writes those checksums back to `trunk`'s `version.json`.
-5. Installed helpers compare their receipt version with `https://start.bymiles.ai/version.json` and prompt users when a newer release is available.
-
-Default patch release:
-
-```bash
-/opt/homebrew/bin/node scripts/release-skill.mjs patch
-```
-
-Urgent release that keeps prompting users until they update:
-
-```bash
-/opt/homebrew/bin/node scripts/release-skill.mjs --urgent patch
-```
-
-Preview the next version without changing files:
-
-```bash
-/opt/homebrew/bin/node scripts/release-skill.mjs --dry-run patch
-```
+## How it works
 
 The skill is a set of composable primitives that chain into the full guided workflow:
 
@@ -162,4 +122,6 @@ The skill is a set of composable primitives that chain into the full guided work
 
 Agents can also enter mid-flow: design around an existing brief, fetch design options programmatically, resume an existing site, or stop at the static HTML deliverable. Every verb shares one exit-code grammar and emits JSON for composition.
 
-See [SKILL.md](miles/SKILL.md) for the primitive menu, [references/](miles/references/) for per-primitive contracts, and [smoke-checklist.md](miles/smoke-checklist.md) for clean-environment validation.
+See [SKILL.md](miles/SKILL.md) for the primitive menu and [references/](miles/references/) for per-primitive contracts.
+
+Maintainers: see [RELEASING.md](RELEASING.md) for the release process.

@@ -19,7 +19,7 @@ import {
   writeFileSync,
 } from 'fs';
 import { homedir } from 'os';
-import { dirname, join, resolve } from 'path';
+import { basename, dirname, join, resolve } from 'path';
 import { execFileSync } from 'child_process';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
@@ -98,6 +98,7 @@ const JSON_COMMANDS = new Set([
   'site-attach',
   'design-directions',
   'screenshot',
+  'upload-assets',
   'sites',
   'use',
   'preview',
@@ -803,16 +804,21 @@ async function readResponseErrorBody(response) {
 // HTTP helpers
 // ============================================================================
 
-async function apiRequest(method, path, { body, auth, serverUrl } = {}) {
+async function apiRequest(method, path, { body, formData, auth, serverUrl } = {}) {
   const url = `${serverUrl}${path}`;
-  const headers = { 'Content-Type': 'application/json' };
+  // Multipart bodies set their own Content-Type (with boundary) via fetch.
+  const headers = formData ? {} : { 'Content-Type': 'application/json' };
 
   if (auth) {
     headers['Authorization'] = `Bearer ${auth}`;
   }
 
   const opts = { method, headers };
-  if (body) opts.body = JSON.stringify(body);
+  if (formData) {
+    opts.body = formData;
+  } else if (body) {
+    opts.body = JSON.stringify(body);
+  }
 
   let res;
   try {
@@ -1569,8 +1575,12 @@ async function cmdCreateSite(rawArgs) {
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
-  const { noWait, args } = parseNoWaitFlag('site-create', rawArgs);
+  const { noWait, args: argsAfterNoWait } = parseNoWaitFlag(
+    'site-create',
+    rawArgs,
+  );
   if (noWait) await ensureNoWaitSupported(serverUrl);
+  const { attachPaths, args } = parseAttachFlags(argsAfterNoWait);
 
   // Parse args
   let message = '';
@@ -1600,9 +1610,21 @@ async function cmdCreateSite(rawArgs) {
 
   if (!message) {
     exitWithError(
-      'Usage: miles site-create "<description>" [--name "Site Name"] [--brief <file>] [--no-wait]',
+      'Usage: miles site-create "<description>" [--name "Site Name"] [--brief <file>] [--attach <file>] [--no-wait]',
       EXIT_PRECONDITION,
     );
+  }
+
+  // Attachments must exist before the create call: the build fires inside
+  // the same request. The API key gives them account scope, which is the
+  // only scope create-site accepts (the site doesn't exist yet).
+  let uploadedFiles = null;
+  if (attachPaths.length) {
+    const refs = await uploadAttachments(attachPaths, {
+      auth: creds.apiKey,
+      serverUrl,
+    });
+    uploadedFiles = refs.map(toUploadedFileRef);
   }
 
   if (!noWait) {
@@ -1612,6 +1634,7 @@ async function cmdCreateSite(rawArgs) {
   const body = { message };
   if (name) body.name = name;
   if (brief) body.brief = brief;
+  if (uploadedFiles) body.uploadedFiles = uploadedFiles;
 
   const data = await apiRequest('POST', '/api/v2/headless/sites', {
     auth: creds.apiKey,
@@ -1661,16 +1684,31 @@ async function cmdSay(rawArgs) {
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
-  const { noWait, args } = parseNoWaitFlag('say', rawArgs);
+  const { noWait, args: argsAfterNoWait } = parseNoWaitFlag('say', rawArgs);
   if (noWait) await ensureNoWaitSupported(serverUrl);
+  const { attachPaths, args } = parseAttachFlags(argsAfterNoWait);
 
   const message = readReplyMessage(args);
   if (!message) {
     exitWithError(
-      'Usage: miles say "<message>" | miles say --stdin | miles say --file <path>',
+      'Usage: miles say "<message>" [--attach <file>] | miles say --stdin | miles say --file <path>',
       EXIT_PRECONDITION,
     );
   }
+
+  // The site token scopes uploads to this site — exactly where the refs are
+  // about to be used.
+  let uploadedFiles = null;
+  if (attachPaths.length) {
+    const refs = await uploadAttachments(attachPaths, {
+      auth: site.siteToken,
+      serverUrl,
+    });
+    uploadedFiles = refs.map(toUploadedFileRef);
+  }
+
+  const sayBody = { message };
+  if (uploadedFiles) sayBody.uploadedFiles = uploadedFiles;
 
   let response;
   try {
@@ -1679,7 +1717,7 @@ async function cmdSay(rawArgs) {
       `/api/v2/headless/conversations/${site.conversationId}/message`,
       {
         auth: site.siteToken,
-        body: { message },
+        body: sayBody,
         serverUrl,
       },
     );
@@ -2805,6 +2843,152 @@ async function cmdBuildSite(rawArgs) {
   exitWithTurnOutcome(settled);
 }
 
+// ============================================================================
+// Asset uploads (logos, imagery, content documents)
+// ============================================================================
+
+// Best-effort Content-Type for the multipart part. The server re-infers from
+// the extension when the type is missing or wrong, so this only needs to
+// cover the common cases.
+const UPLOAD_EXTENSION_MIME = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.webp': 'image/webp',
+  '.pdf': 'application/pdf',
+  '.html': 'text/html',
+  '.css': 'text/css',
+  '.txt': 'text/plain',
+  '.csv': 'text/csv',
+  '.md': 'text/markdown',
+  '.rtf': 'application/rtf',
+  '.docx':
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+};
+
+function inferUploadMimeType(filename) {
+  const ext = filename.toLowerCase().match(/\.[^.]+$/)?.[0];
+  return (ext && UPLOAD_EXTENSION_MIME[ext]) || 'application/octet-stream';
+}
+
+/**
+ * Upload one file to POST /headless/assets and return the minimal ref the
+ * other routes accept as `uploadedFiles`: s3Key + filename + mimeType (the
+ * server rebuilds URLs from the validated key; refs never carry URLs).
+ * sizeBytes is included for display only.
+ */
+async function uploadAssetFile(filePath, { auth, serverUrl }) {
+  const buffer = readFileSync(filePath);
+  const filename = basename(filePath);
+  const formData = new FormData();
+  formData.append(
+    'file',
+    new Blob([buffer], { type: inferUploadMimeType(filename) }),
+    filename,
+  );
+
+  const data = await apiRequest('POST', '/api/v2/headless/assets', {
+    auth,
+    formData,
+    serverUrl,
+  });
+
+  return {
+    s3Key: data.s3Key,
+    filename: data.filename,
+    mimeType: data.mimeType,
+    sizeBytes: data.sizeBytes,
+  };
+}
+
+/**
+ * Extract repeated `--attach <path>` pairs, returning the remaining args
+ * untouched so message/brief parsing sees the grammar it expects.
+ */
+function parseAttachFlags(args) {
+  const attachPaths = [];
+  const rest = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--attach') {
+      if (!args[i + 1] || args[i + 1].startsWith('--')) {
+        exitWithError('--attach requires a file path.', EXIT_PRECONDITION, {
+          example: 'miles site-create "..." --attach ./logo.png',
+        });
+      }
+      attachPaths.push(args[++i]);
+    } else {
+      rest.push(args[i]);
+    }
+  }
+  return { attachPaths, args: rest };
+}
+
+/**
+ * Upload a list of local files and return their refs. Gated on the server
+ * advertising `upload-assets`; fails fast on a missing file before any
+ * network work.
+ */
+async function uploadAttachments(paths, { auth, serverUrl }) {
+  await requirePrimitive('upload-assets', serverUrl);
+
+  const resolved = paths.map((p) => {
+    const abs = resolve(p);
+    if (!existsSync(abs)) {
+      exitWithError(`Attachment not found: ${p}`, EXIT_PRECONDITION);
+    }
+    return abs;
+  });
+
+  const refs = [];
+  for (const filePath of resolved) {
+    console.error(`Uploading ${basename(filePath)}...`);
+    refs.push(await uploadAssetFile(filePath, { auth, serverUrl }));
+  }
+  return refs;
+}
+
+/** Strip a ref down to the wire shape the uploadedFiles schema accepts. */
+function toUploadedFileRef(ref) {
+  return { s3Key: ref.s3Key, filename: ref.filename, mimeType: ref.mimeType };
+}
+
+async function cmdUploadAssets(args) {
+  const creds = loadCredentials();
+  const site = getActiveSite(creds);
+  // Prefer the API key: account-scoped refs are valid on BOTH site-create
+  // and the message route. A site token narrows the refs to that site's
+  // conversation only.
+  const auth = creds.apiKey || site?.siteToken;
+  if (!auth) {
+    exitWithError(
+      'Not logged in. Run `miles auth login` to get a device login code.',
+      EXIT_PRECONDITION,
+    );
+  }
+
+  const paths = args.filter((a) => !a.startsWith('--'));
+  if (!paths.length) {
+    exitWithError(
+      'Usage: miles upload-assets <file> [<file>...]',
+      EXIT_PRECONDITION,
+      { example: 'miles upload-assets ./logo.svg ./team-photo.jpg' },
+    );
+  }
+
+  const refs = await uploadAttachments(paths, {
+    auth,
+    serverUrl: DEFAULT_SERVER_URL,
+  });
+
+  emitJson({
+    ok: true,
+    files: refs,
+    next: 'Pass these refs to Miles via `--attach <file>` on site-create/say, or as the uploadedFiles array when calling the API directly (s3Key, filename, mimeType).',
+  });
+}
+
 async function cmdScreenshot(args) {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
@@ -3705,6 +3889,7 @@ const commands = {
   'site-state': cmdSiteState,
   'site-attach': cmdSiteAttach,
   screenshot: cmdScreenshot,
+  'upload-assets': cmdUploadAssets,
   export: cmdExport,
   'connect-browser': cmdConnectBrowser,
   'convert-theme': cmdConvertTheme,
@@ -3748,7 +3933,7 @@ Account:
 
 Sites:
   miles site-create "<description>" [--brief <file>] [--name "Name"]
-                                          HEADLESS  Create site + conversation
+                    [--attach <file>]     HEADLESS  Create site + conversation
   miles site-attach <siteId> [--duplicate]
                                           HEADLESS  Resume any owned site
   miles site-state [--json]               HEADLESS  Phase, directions, next moves
@@ -3756,8 +3941,11 @@ Sites:
   miles use <siteId>                      HEADLESS  Switch active site (local)
 
 Design + build:
-  miles say "<message>"                   HEADLESS* Talk to Miles (discovery,
+  miles say "<message>" [--attach <file>] HEADLESS* Talk to Miles (discovery,
                                                     brief feedback, edits)
+  miles upload-assets <file> [...]        HEADLESS  Upload brand assets (logo,
+                                                    imagery, content docs);
+                                                    prints reusable refs
   miles design-directions [--json]        HEADLESS  List design directions
   miles build-site --design <n>           HEADLESS  Commit a design, build site
   miles screenshot <preview-url>          HEADLESS  Capture a preview JPEG

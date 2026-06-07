@@ -1,33 +1,33 @@
 {
   "name": "miles",
-  "version": "2026.06.07.1",
+  "version": "2026.06.07.2",
   "schemaVersion": 1,
   "channel": "stable",
-  "source": "https://github.com/bymilesai/skills/releases/download/skill-v2026.06.07.1/miles-skill-2026.06.07.1.tar.gz",
-  "sourceSha256": "2a6e10b6d04a6009049887f882cbb492dd8252004eb779efbaeb394bb07d1a21",
+  "source": "https://github.com/bymilesai/skills/releases/download/skill-v2026.06.07.2/miles-skill-2026.06.07.2.tar.gz",
+  "sourceSha256": null,
   "cliBinaries": {
     "darwin-arm64": {
-      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.06.07.1/miles-cli-2026.06.07.1-darwin-arm64",
-      "sha256": "8ab99d1945bbda0ea6f803b4c64f61d368b93b4f8429a1616f737e8bb82da343"
+      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.06.07.2/miles-cli-2026.06.07.2-darwin-arm64",
+      "sha256": null
     },
     "darwin-x64": {
-      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.06.07.1/miles-cli-2026.06.07.1-darwin-x64",
-      "sha256": "477041bf6b3f709d56796c66f5c6e5275fdb39e2eabf9cb2036dc2eb09b35920"
+      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.06.07.2/miles-cli-2026.06.07.2-darwin-x64",
+      "sha256": null
     },
     "linux-arm64": {
-      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.06.07.1/miles-cli-2026.06.07.1-linux-arm64",
-      "sha256": "2eb740036312a499ce4b4044df5a0d719e0d39981df57425a49b424436aaf448"
+      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.06.07.2/miles-cli-2026.06.07.2-linux-arm64",
+      "sha256": null
     },
     "linux-x64": {
-      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.06.07.1/miles-cli-2026.06.07.1-linux-x64",
-      "sha256": "9550a8100f685cc30ac6db2f4a353c0ff333154ee18b8696dc8cab3c93ef1c8b"
+      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.06.07.2/miles-cli-2026.06.07.2-linux-x64",
+      "sha256": null
     },
     "windows-x64": {
-      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.06.07.1/miles-cli-2026.06.07.1-windows-x64.exe",
-      "sha256": "a884359afbc4cc6e2295bdca4def4067cd2bbdaf4690f74b3ca2a3adfd05a856"
+      "url": "https://github.com/bymilesai/skills/releases/download/skill-v2026.06.07.2/miles-cli-2026.06.07.2-windows-x64.exe",
+      "sha256": null
     }
   },
-  "payloadManifest": "https://github.com/bymilesai/skills/releases/download/skill-v2026.06.07.1/payload-manifest-2026.06.07.1.json",
+  "payloadManifest": "https://github.com/bymilesai/skills/releases/download/skill-v2026.06.07.2/payload-manifest-2026.06.07.2.json",
   "installScript": "https://start.bymiles.ai/install.sh",
   "updateCheckIntervalHours": 24,
   "urgent": false

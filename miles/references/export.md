@@ -5,6 +5,7 @@ Deliverable URLs, dispatched per type. Plumbing.
 ```bash
 miles export [--type html]   [--json]   # default type
 miles export --type theme    [--json]
+miles export --type theme --download theme.zip   # stream the ZIP to disk
 miles export theme                      # positional form
 ```
 
@@ -28,7 +29,9 @@ Available only after `convert-theme` completes. Returns:
 { "themeSlug": "…", "downloadUrl": "…", "editorUrl": "…", "dashboardUrl": "…" }
 ```
 
-Reading this metadata is headless. **Downloading the theme zip from `downloadUrl` is browser-backed for Playground sites** — the zip is assembled through the connected dashboard. If a download fails without a connected browser, that is the gate, not an error to retry: `connect-browser`, then retry once.
+Reading this metadata is headless. **Downloading the theme zip is browser-backed for Playground sites** — the zip is assembled through the connected dashboard. If a download fails without a connected browser, that is the gate, not an error to retry: `connect-browser`, then retry once.
+
+`--download <file>` does the download in one step with your site token and saves to disk; it fails fast with exit 3 when the browser gate is closed. The `downloadUrl` in the metadata points at the same authenticated endpoint (send your site token as a Bearer header).
 
 ## Not supported
 

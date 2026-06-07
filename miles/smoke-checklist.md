@@ -22,22 +22,25 @@ Use a fresh Miles state directory so credentials, screenshots, and hook relay fi
 export MILES_HOME=/tmp/miles-skill-smoke
 export MILES_CLI=/path/to/installed/miles/scripts/miles
 "$MILES_CLI" doctor --json
-"$MILES_CLI" whoami --json
+"$MILES_CLI" auth status
 ```
 
-## End-To-End Flow
+`doctor --json` must report the expected `MILES_HOME`, the CLI path, and a `server` section listing the connected server's supported primitives.
+
+## Guided Flow (user present)
 
 1. Authenticate.
 
    ```bash
-   "$MILES_CLI" login
-   "$MILES_CLI" whoami --json
+   "$MILES_CLI" auth login
+   "$MILES_CLI" auth poll --json
+   "$MILES_CLI" auth status
    ```
 
 2. Request a design.
 
    ```bash
-   "$MILES_CLI" create-site "Build a small website for a local service business."
+   "$MILES_CLI" site-create "Build a small website for a local service business."
    ```
 
    During long commands, verify the agent gives one short start line, then either uses host-rendered progress or sends compact action-log lines based on meaningful Miles milestones. A single edit should have at most three progress lines plus a compact completion checklist. It should not turn streamed output into a transcript or explanatory paragraphs.
@@ -45,71 +48,81 @@ export MILES_CLI=/path/to/installed/miles/scripts/miles
 3. Relay Miles' questions to the user. Send the user's exact answers back with:
 
    ```bash
-   "$MILES_CLI" reply "user answer"
+   "$MILES_CLI" say "user answer"
    ```
 
-4. When Miles presents a brief, show it to the user and require explicit approval or requested changes. Before sending an approval reply that starts design-direction generation, open the dashboard URL and wait for the WebSocket to connect.
+4. When Miles presents a brief, verify the agent shows the FULL brief and requires explicit approval or requested changes as its final response for that turn.
 
-5. Open the active dashboard progress URL in the agent browser.
+5. Optionally open the live dashboard so the user can watch generation (generation itself is headless).
 
    ```bash
-   "$MILES_CLI" preview --json
+   "$MILES_CLI" connect-browser --json
    # Open the returned authenticated url with the host's browser/navigation tool.
-   # Rerun preview --json until connected is true.
-   "$MILES_CLI" reply "Looks good, approved"
+   "$MILES_CLI" say "Looks good, approved"
    ```
 
-   If no internal browser is available, run `"$MILES_CLI" preview --open`.
+   If no internal browser is available, `"$MILES_CLI" connect-browser --open` is the fallback.
 
-6. When design directions are ready, inspect them before selection.
+6. When design directions are ready, inspect them before recommending.
 
    ```bash
    "$MILES_CLI" design-directions --json
    ```
 
-   If `preview --json` reports `connected: true`, use the visible dashboard canvas as the primary review surface. Inspect the directions in the browser, compare them against the brief, and give the user a concise recommendation. Use `"$MILES_CLI" screenshot "<preview-url-or-path>" --json` only when the dashboard/browser preview is unavailable, blocked, not visibly loaded, or when local image files are needed in the final response.
+   With a connected dashboard, the visible canvas is the primary review surface; otherwise the agent should `"$MILES_CLI" screenshot "<preview-url-or-path>" --json` each direction. Verify the agent gives a recommendation tied to the brief and lets the user choose.
 
-7. Select the approved design direction.
+7. Build the chosen design — verify no browser is required for this step.
 
    ```bash
-   "$MILES_CLI" preview --json
-   # Open the returned authenticated url with the host's browser/navigation tool.
-   # Rerun preview --json until connected is true.
-   "$MILES_CLI" select-design-direction 1
-   "$MILES_CLI" status --json
+   "$MILES_CLI" build-site --design 1
+   "$MILES_CLI" site-state --json
    ```
 
 8. Verify the built site and request one multi-page or content update.
 
    ```bash
-   "$MILES_CLI" preview --json
-   # Open the returned authenticated url with the host's browser/navigation tool.
-   # Rerun preview --json until connected is true.
    "$MILES_CLI" screenshot "<site-preview-url-or-path>" --json
-   "$MILES_CLI" reply "Add an About page and keep the visual style consistent."
-   "$MILES_CLI" wait
-   "$MILES_CLI" status --json
+   "$MILES_CLI" say "Add an About page and keep the visual style consistent."
+   "$MILES_CLI" site-state --json
    ```
 
-   For a second small edit immediately afterward, verify the agent sends the edit directly instead of running another redundant `preview --json`. If the CLI returns `dashboard_connection_required`, verify the agent opens `preview --json`, waits for `connected: true`, and retries the same edit once.
+   For a second small edit immediately afterward, verify the agent sends the edit directly instead of running a redundant `connect-browser`. If the CLI exits 3 (`need_connection`), verify the agent opens the authenticated URL from `connect-browser --json`, waits for `connected: true`, and retries the same edit once.
 
-9. Export the result when needed.
+9. Convert and export.
 
    ```bash
-   "$MILES_CLI" export-site --json
-   "$MILES_CLI" preview --json
-   # Open the returned authenticated url with the host's browser/navigation tool.
-   # Rerun preview --json until connected is true.
-   "$MILES_CLI" build-theme
-   "$MILES_CLI" export-theme --json
+   "$MILES_CLI" export --type html --json
+   "$MILES_CLI" connect-browser --json
+   # Open the returned authenticated url; rerun until connected is true.
+   "$MILES_CLI" convert-theme
+   "$MILES_CLI" export --type theme --json
    ```
+
+## Headless Chain (no browser at all)
+
+From a brief file, the whole HTML deliverable must complete with zero browser interaction:
+
+```bash
+"$MILES_CLI" site-create --brief ./brief.md "Site per attached brief"
+"$MILES_CLI" design-directions --json
+"$MILES_CLI" screenshot "<direction-preview-path>" --json
+"$MILES_CLI" build-site --design 1
+"$MILES_CLI" export --type html --json
+```
+
+Also verify:
+
+- `"$MILES_CLI" site-attach <siteId>` from a second `MILES_HOME` resumes the same site and `site-state --json` reports the correct phase with sensible `next[]` hints.
+- On a server with `cancel` support: `say --no-wait` returns a JSON handle, `wait-job` settles with an `outcome`, and `cancel` stops a running turn (`wait-job` then reports `outcome: "aborted"`).
+- Old verb aliases still work: `create-site`, `reply`, `select-design-direction`, `preview`, `build-theme`, `export-site`, `export-theme`.
 
 ## Pass Criteria
 
 - The skill is discoverable after install.
-- `doctor --json` reports the expected `MILES_HOME` and CLI path.
+- `doctor --json` reports the expected `MILES_HOME`, CLI path, and server primitives.
 - Authentication does not reuse development credentials unless intentionally pointed at the same `MILES_HOME`.
 - Brief approval and design selection are explicit user decisions.
+- `build-site` completes without any dashboard connection.
 - Screenshot output includes a readable local file path.
-- Multi-page or post-build update commands return a clear status.
+- Exit codes follow the shared grammar (2 preconditions, 3 need_connection, 4 blocked/declined, 5 capacity).
 - The flow works without relying on host-specific skill path variables as the primary command contract.

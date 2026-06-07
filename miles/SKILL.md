@@ -40,8 +40,9 @@ This is the complete v0 contract. Do not invent other commands. HEADLESS = works
 |---|---|---|---|
 | `miles auth [login\|poll\|status\|logout]` | HEADLESS | Device-code login lifecycle | [auth.md](references/auth.md) |
 | `miles account-status --json` | HEADLESS | Plan, credits, site count — headroom check | [account-status.md](references/account-status.md) |
-| `miles site-create "<description>" [--brief <file>]` | HEADLESS | New site + conversation; `--brief` skips discovery | [site-create.md](references/site-create.md) |
-| `miles say "<message>"` | HEADLESS* | Talk to Miles: answers, brief feedback, edits | [say.md](references/say.md) |
+| `miles site-create "<description>" [--brief <file>] [--attach <file>]` | HEADLESS | New site + conversation; `--brief` skips discovery; `--attach` sends brand assets | [site-create.md](references/site-create.md) |
+| `miles say "<message>" [--attach <file>]` | HEADLESS* | Talk to Miles: answers, brief feedback, edits | [say.md](references/say.md) |
+| `miles upload-assets <file> [...]` | HEADLESS | Upload brand assets (logo, imagery, content docs) → reusable refs | [upload-assets.md](references/upload-assets.md) |
 | `miles design-directions --json` | HEADLESS | List generated design directions with ids + previews | [design-directions.md](references/design-directions.md) |
 | `miles build-site --design <n>` | HEADLESS | Commit a design → full HTML site build | [build-site.md](references/build-site.md) |
 | `miles wait-job` / `miles cancel` | HEADLESS | Wait for / stop the running turn (JSON + exit codes) | [wait-job.md](references/wait-job.md) |
@@ -82,7 +83,7 @@ Everything up to and including the built HTML site is headless: discovery, brief
 State is derived from the conversation and monotonic — you can enter at whatever job matches what you already have. The interview is one primitive among many, not the container.
 
 - **"Build me a website" (user present, wants the experience)** → run the full guided workflow: relay Miles' interview to the user, show the brief, present directions, build. Load [full-workflow.md](references/full-workflow.md) — it carries the relay rules, brief-review template, and progress style.
-- **"I already have the content / a brief — design around it"** → write the brief to a file → `site-create --brief brief.md "<summary>"` → discovery never runs → `design-directions` → present → `build-site`.
+- **"I already have the content / a brief — design around it"** → write the brief to a file → `site-create --brief brief.md "<summary>"` (add `--attach logo.svg` for any logo/imagery the user supplied, and say what each file is) → discovery never runs → `design-directions` → present → `build-site`.
 - **"Give me design options for this"** → `site-create --brief ...` → `design-directions --json` → `screenshot` each preview → present in your own UI. Never build until something is chosen.
 - **"Edit my Miles site" / "resume where I left off"** → `site-attach <siteId>` (cross-machine) or `use <siteId>` (local) → `site-state --json` → follow its `next[]` hints.
 - **"Make it a WordPress theme"** → `connect-browser` → `convert-theme` → `export --type theme`.
@@ -96,7 +97,8 @@ Each arrow is one primitive; reorder or skip according to what you already have:
 
 ```text
 auth → account-status                     # headroom before committing
-site-create "<description>"               # or --brief file to skip discovery
+site-create "<description>"               # --brief skips discovery; --attach
+                                          # sends the user's logo/imagery
   loop: say "<user's answer>"             # relay interview; approve brief
 connect-browser --open                    # user watching? open the live canvas
 design-directions --json → screenshot     # inspect, recommend, let user pick

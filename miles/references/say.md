@@ -7,11 +7,12 @@ miles say "<message>"
 miles say --file <path>     # for $, quotes, backticks, Markdown, long answers
 miles say --stdin
 miles say --no-wait "<message>"
+miles say "Use the attached photo in the hero" --attach ./team.jpg
 ```
 
 (`reply` is the legacy alias.)
 
-By default it sends the message, streams progress, and prints Miles' settled response. Use `--file` whenever the text contains shell-sensitive characters — write the exact text to a temp file rather than fighting quoting.
+By default it sends the message, streams progress, and prints Miles' settled response. Use `--file` whenever the text contains shell-sensitive characters — write the exact text to a temp file rather than fighting quoting. `--attach <path>` (repeatable) uploads a brand asset and hands it to Miles with the message — say what the file is so Miles uses it correctly ([upload-assets.md](upload-assets.md)).
 
 ## Headless vs browser
 

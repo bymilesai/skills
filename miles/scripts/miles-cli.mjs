@@ -114,6 +114,7 @@ const JSON_COMMANDS = new Set([
   'site-pages',
   'usage-history',
   'rename',
+  'history',
 ]);
 
 // Long-running verbs that accept --no-wait (fire the turn, return a JSON
@@ -3202,6 +3203,12 @@ async function cmdScreenshot(args) {
     exitWithError('No active site. Use `miles site-create` first.', EXIT_PRECONDITION);
   }
 
+  // --live captures the running WordPress frontend through the connected
+  // dashboard instead of rendering a stored preview URL server-side.
+  if (args.includes('--live')) {
+    return cmdScreenshotLive(args, site);
+  }
+
   // Extract the URL: first arg that starts with / or http
   const url = args.find((a) => a.startsWith('/') || a.startsWith('http'));
   if (!url) {
@@ -3302,6 +3309,80 @@ async function cmdScreenshot(args) {
       targetUrl: url,
       bytes: imageBuffer.byteLength,
       contentType: screenshotContentType,
+    });
+  } else {
+    console.log(filepath);
+  }
+}
+
+/**
+ * Live capture of the running WordPress frontend via the dashboard's
+ * screenshotView client tool. Browser-gated: for Playground sites the
+ * running WordPress exists only in the browser, so a missing connection
+ * fails fast with exit 3. Full-page by default (the whole document, not
+ * just the first viewport); --viewport opts into the faster first-screen
+ * capture.
+ */
+async function cmdScreenshotLive(args, site) {
+  if (!site?.conversationId) {
+    exitWithError(
+      'No active conversation. Use `miles site-create` or `miles site-attach <siteId>` first.',
+      EXIT_PRECONDITION,
+    );
+  }
+
+  const serverUrl = DEFAULT_SERVER_URL;
+  const capabilities = await requirePrimitive('screenshot', serverUrl);
+  if (!capabilities?.primitives?.screenshot?.operations?.live) {
+    exitWithError(
+      'The connected Miles server does not support live screenshots yet. Use `miles screenshot <preview-url>` for stored previews.',
+      EXIT_PRECONDITION,
+      { code: 'primitive_unsupported', primitive: 'screenshot.live' },
+    );
+  }
+
+  let data;
+  try {
+    data = await apiRequest(
+      'POST',
+      `/api/v2/headless/conversations/${site.conversationId}/client-screenshot`,
+      {
+        auth: site.siteToken,
+        serverUrl,
+        body: { fullPage: !args.includes('--viewport') },
+      },
+    );
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 409) {
+      exitWithError(
+        err.data?.error ||
+          'Dashboard connection required for a live screenshot. Run `miles connect-browser`, wait for connected, then retry.',
+        EXIT_NEED_CONNECTION,
+        { code: 'dashboard_connection_required' },
+      );
+    }
+    throw err;
+  }
+
+  if (!data?.success || !data?.image) {
+    exitWithError(data?.error || 'Live screenshot capture failed.', EXIT_ERROR);
+  }
+
+  const imageBuffer = Buffer.from(data.image, 'base64');
+  mkdirSync(SCREENSHOTS_DIR, { recursive: true });
+  const filename = `screenshot-live-${Date.now()}.jpg`;
+  const filepath = join(SCREENSHOTS_DIR, filename);
+  writeFileSync(filepath, imageBuffer);
+
+  if (cliOptions.json) {
+    emitJson({
+      ok: true,
+      path: filepath,
+      live: true,
+      bytes: imageBuffer.byteLength,
+      width: data.width ?? null,
+      height: data.height ?? null,
+      contentType: data.mimeType || 'image/jpeg',
     });
   } else {
     console.log(filepath);
@@ -3676,7 +3757,7 @@ async function cmdSiteAttach(args) {
  * One JSON snapshot of the active site: phase, streaming status, directions,
  * connection state, and suggested next moves. The `git status` of Miles.
  */
-async function cmdSiteState() {
+async function cmdSiteState(args = []) {
   noteActiveRunIfAny();
   const creds = loadCredentials();
   const site = getActiveSite(creds);
@@ -3688,6 +3769,12 @@ async function cmdSiteState() {
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
+
+  // --full swaps the poll-oriented /status summary for the complete derived
+  // state dump: brief text, per-direction detail, session memory blockers.
+  if (args.includes('--full')) {
+    return cmdSiteStateFull(site, serverUrl);
+  }
   const [status, directions, connected] = await Promise.all([
     apiRequest(
       'GET',
@@ -3820,6 +3907,82 @@ async function cmdSiteState() {
     console.log('Next:');
     next.forEach((n) => console.log(`  ${n}`));
   }
+}
+
+/**
+ * The complete derived-state dump behind `site-state --full`. Everything the
+ * server derives from the conversation that an agent can act on: brief text,
+ * per-direction detail, the completion plan, session-memory blockers, and
+ * conversion outcomes. JSON is the primary consumer; the human view renders
+ * the highlights.
+ */
+async function cmdSiteStateFull(site, serverUrl) {
+  const capabilities = await requirePrimitive('site-state', serverUrl);
+  if (!capabilities?.primitives?.['site-state']?.operations?.full) {
+    exitWithError(
+      'The connected Miles server does not support `site-state --full` yet. Use `miles site-state` for the summary.',
+      EXIT_PRECONDITION,
+      { code: 'primitive_unsupported', primitive: 'site-state.full' },
+    );
+  }
+
+  const [state, connected] = await Promise.all([
+    apiRequest(
+      'GET',
+      `/api/v2/headless/conversations/${site.conversationId}/state`,
+      { auth: site.siteToken, serverUrl },
+    ),
+    getDashboardConnectionStatus(site, serverUrl).catch(() => null),
+  ]);
+
+  if (cliOptions.json) {
+    emitJson({
+      siteId: site.id,
+      conversationId: site.conversationId,
+      connection: { kind: 'browser-dashboard', connected },
+      ...state,
+    });
+    return;
+  }
+
+  console.log(`[phase: ${state.phase}]`);
+  console.log(`[status: ${state.status}]`);
+  if (state.title) console.log(`[title: ${state.title}]`);
+  if (state.strategicBrief) {
+    const brief = state.strategicBrief.trim();
+    console.log(`[brief${state.briefApproved ? ' (approved)' : ''}]`);
+    console.log(
+      brief.length > 600 ? `${brief.slice(0, 600)}…` : brief,
+    );
+  }
+  if (state.designDirections?.length) {
+    console.log('[directions]');
+    state.designDirections.forEach((d) => {
+      console.log(
+        `  ${d.number}. ${d.directionName || `Design ${d.number}`} [${d.status}]${
+          state.selectedDirectionId === d.directionId ? ' (selected)' : ''
+        }`,
+      );
+    });
+  }
+  if (state.siteCompletionPlan?.items?.length) {
+    console.log('[plan]');
+    state.siteCompletionPlan.items.forEach((item) => {
+      console.log(`  - [${item.status}] ${item.title}`);
+    });
+  }
+  if (state.conversionFailed && state.conversionError) {
+    console.log(`[conversion failed: ${state.conversionError}]`);
+  }
+  if (state.themeSlug) console.log(`[theme: ${state.themeSlug}]`);
+  if (state.sessionMemory?.length) {
+    console.log('[session memory]');
+    state.sessionMemory.forEach((entry) => {
+      console.log(`  - [${entry.status}] ${entry.key}: ${entry.summary}`);
+    });
+  }
+  console.log(`[messages: ${state.messageCount}]`);
+  console.log('Full detail: miles site-state --full --json');
 }
 
 /**
@@ -3957,6 +4120,73 @@ async function cmdMessages() {
     console.log(msg.text);
     console.log('');
   });
+}
+
+/**
+ * Paginated transcript read, sanitized exactly like the web client's
+ * history view. Defaults to the tail (the most recent turns), which is what
+ * an agent resuming a conversation needs first; page backwards with
+ * --offset. Supersedes `messages` (text-only, unpaginated) when the server
+ * supports it.
+ */
+async function cmdHistory(args) {
+  noteActiveRunIfAny();
+  const creds = loadCredentials();
+  const site = getActiveSite(creds);
+  if (!site?.conversationId) {
+    exitWithError('No active conversation.', EXIT_PRECONDITION);
+  }
+
+  const serverUrl = DEFAULT_SERVER_URL;
+  await requirePrimitive('history', serverUrl);
+
+  const params = new URLSearchParams();
+  const limit = getOptionalCommandFlagValue(args, '--limit');
+  const offset = getOptionalCommandFlagValue(args, '--offset');
+  if (limit) params.set('limit', limit);
+  if (offset !== undefined && offset !== null) params.set('offset', offset);
+  const query = params.size ? `?${params.toString()}` : '';
+
+  const data = await apiRequest(
+    'GET',
+    `/api/v2/headless/conversations/${site.conversationId}/history${query}`,
+    { auth: site.siteToken, serverUrl },
+  );
+
+  if (cliOptions.json) {
+    emitJson({
+      total: data.total,
+      offset: data.offset,
+      limit: data.limit,
+      messages: data.messages || [],
+    });
+    return;
+  }
+
+  console.log(
+    `[messages ${data.offset + 1}-${data.offset + (data.messages?.length || 0)} of ${data.total}]`,
+  );
+  (data.messages || []).forEach((msg) => {
+    const role = msg.role === 'assistant' ? 'Miles' : 'You';
+    const texts = (msg.parts || [])
+      .filter((p) => p?.type === 'text' && typeof p.text === 'string')
+      .map((p) => p.text.trim())
+      .filter(Boolean);
+    const otherParts = (msg.parts || [])
+      .map((p) => p?.type)
+      .filter((t) => t && t !== 'text' && t !== 'step-start');
+    console.log(`[${role}]`);
+    if (texts.length) console.log(texts.join('\n'));
+    if (!texts.length && otherParts.length) {
+      console.log(`(${otherParts.join(', ')})`);
+    }
+    console.log('');
+  });
+  if (data.offset > 0) {
+    console.log(
+      `Earlier messages: miles history --offset ${Math.max(0, data.offset - data.limit)} --limit ${data.limit}`,
+    );
+  }
 }
 
 async function cmdConvertTheme(rawArgs = []) {
@@ -4225,6 +4455,7 @@ const commands = {
   'site-pages': cmdSitePages,
   'usage-history': cmdUsageHistory,
   rename: cmdRename,
+  history: cmdHistory,
 
   // Supporting verbs
   doctor: cmdDoctor,
@@ -4267,7 +4498,11 @@ Sites:
                     [--attach <file>]     HEADLESS  Create site + conversation
   miles site-attach <siteId> [--duplicate]
                                           HEADLESS  Resume any owned site
-  miles site-state [--json]               HEADLESS  Phase, directions, next moves
+  miles site-state [--full] [--json]      HEADLESS  Phase, directions, next moves
+                                                    (--full: brief, plan, memory)
+  miles history [--limit <n>] [--offset <n>]
+                                          HEADLESS  Conversation transcript
+                                                    (paginated, newest by default)
   miles sites [--json]                    HEADLESS  List all sites
   miles use <siteId>                      HEADLESS  Switch active site (local)
 
@@ -4281,6 +4516,8 @@ Design + build:
   miles build-site --design <n>           HEADLESS  Commit a design, build site
   miles screenshot <preview-url> [--full-page]
                                           HEADLESS  Capture a preview JPEG
+  miles screenshot --live [--viewport]    BROWSER   Capture the live WordPress
+                                                    frontend (full-page default)
   miles wait-job [--timeout <s>]          HEADLESS  Wait for the running turn
                                                     (JSON result + exit code)
   miles cancel                            HEADLESS  Stop the running turn

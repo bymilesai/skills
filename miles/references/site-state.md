@@ -43,8 +43,23 @@ miles site-state [--json]
 - `status: "streaming"` means a turn is running: `wait-job` (or `cancel`) before sending anything new.
 - `connection.connected` tells you whether browser-backed work would succeed right now.
 
-Supporting verbs alongside it: `miles status` (smaller, single GET), `miles sites --json` (all sites), `miles site-pages` (built-site file listing), `miles messages` (conversation history — rarely needed since long verbs already print responses).
+Supporting verbs alongside it: `miles status` (smaller, single GET), `miles sites --json` (all sites), `miles site-pages` (built-site file listing), `miles history` (paginated transcript — see [history.md](history.md)).
+
+## Full state (`--full`)
+
+```bash
+miles site-state --full --json
+```
+
+The complete derived-state dump, for when the summary isn't enough — typically when resuming a site you don't have context on. Adds, on top of what the summary carries:
+
+- `strategicBrief` + `briefApproved` — the actual brief text Miles is designing against.
+- `designDirections[]` — full per-direction detail (number, id, name, status, previewUrl, selectable), same shape as `design-directions --json`.
+- `sessionMemory[]` — operational notes from past turns: blocked/failed work with `nextRecommendedAction`, what an earlier turn could not finish and why.
+- Conversion outcome fields: `conversionStarted/Complete/Failed`, `conversionError`, `editorUrl`.
+
+It is a pure read of stored conversation state — no credits or undo lookups (use the summary for those, and its `next[]` hints; `--full` carries none).
 
 ## Exit codes
 
-`0` ok · `2` no active conversation · `1` failed.
+`0` ok · `2` no active conversation / server lacks the requested read · `1` failed.

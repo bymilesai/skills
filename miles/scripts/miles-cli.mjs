@@ -110,6 +110,10 @@ const JSON_COMMANDS = new Set([
   'export',
   'export-theme',
   'export-site',
+  'undo',
+  'site-pages',
+  'usage-history',
+  'rename',
 ]);
 
 // Long-running verbs that accept --no-wait (fire the turn, return a JSON
@@ -1871,6 +1875,208 @@ async function cmdCancel() {
 }
 
 /**
+ * Undo the last agent turn: restores the site to the checkpoint captured
+ * before the turn AND truncates the chat history to that boundary. One
+ * level only — the checkpoint covers the most recent turn, and a
+ * successful undo consumes it. `miles site-state --json` reports
+ * `undoAvailable` so you can check before calling.
+ */
+async function cmdUndo() {
+  const creds = loadCredentials();
+  const site = getActiveSite(creds);
+  if (!site?.conversationId) {
+    exitWithError('No active conversation.', EXIT_PRECONDITION);
+  }
+
+  const serverUrl = DEFAULT_SERVER_URL;
+  await requirePrimitive('undo', serverUrl);
+
+  let data;
+  try {
+    data = await apiRequest(
+      'POST',
+      `/api/v2/headless/conversations/${site.conversationId}/revert`,
+      { auth: site.siteToken, serverUrl },
+    );
+  } catch (err) {
+    // 404 no-checkpoint / 410 checkpoint-corrupt mean there is nothing to
+    // undo — a missing precondition, not an internal error.
+    if (err instanceof ApiError && (err.status === 404 || err.status === 410)) {
+      exitWithError(err.message, EXIT_PRECONDITION, {
+        code: err.data?.kind || 'no_checkpoint',
+      });
+    }
+    throw err;
+  }
+
+  if (cliOptions.json) {
+    emitJson({
+      ok: true,
+      kind: data.kind,
+      snapshotVersion: data.snapshotVersion,
+      truncatedMessages: data.truncatedMessages,
+      browserRefreshRequired: Boolean(data.browserRefreshRequired),
+    });
+    return;
+  }
+  console.log('Reverted the site and chat to before the last turn.');
+  if (data.browserRefreshRequired) {
+    console.log(
+      '[note: if a dashboard tab is open, reload it to see the restored site]',
+    );
+  }
+}
+
+/**
+ * Enumerate the built static site's files, or fetch one file's content.
+ * Listing and fetching are fully headless (the files live in storage).
+ */
+async function cmdSitePages(args) {
+  const creds = loadCredentials();
+  const site = getActiveSite(creds);
+  if (!site?.conversationId) {
+    exitWithError('No active conversation.', EXIT_PRECONDITION);
+  }
+
+  const serverUrl = DEFAULT_SERVER_URL;
+  await requirePrimitive('site-pages', serverUrl);
+
+  const outputPath = getOptionalCommandFlagValue(args, '--output');
+  const path = args.find((a) => !a.startsWith('--') && a !== outputPath);
+
+  if (!path) {
+    const data = await apiRequest(
+      'GET',
+      `/api/v2/headless/conversations/${site.conversationId}/site-pages`,
+      { auth: site.siteToken, serverUrl },
+    );
+    if (cliOptions.json) {
+      emitJson({ slug: data.slug, files: data.files || [] });
+      return;
+    }
+    console.log(`[slug: ${data.slug}]`);
+    (data.files || []).forEach((f) => {
+      console.log(`  ${f.path}  (${f.mimeType}, ${f.sizeBytes} bytes)`);
+    });
+    return;
+  }
+
+  // Fetch one file. Binary-safe: write to --output when given, else print
+  // text content to stdout.
+  const endpoint = `${serverUrl}/api/v2/headless/conversations/${site.conversationId}/site-pages/${path
+    .split('/')
+    .map(encodeURIComponent)
+    .join('/')}`;
+  const response = await fetch(endpoint, {
+    headers: { Authorization: `Bearer ${site.siteToken}` },
+  });
+  if (!response.ok) {
+    let detail = null;
+    try {
+      detail = await response.json();
+    } catch {
+      // Non-JSON error body.
+    }
+    exitWithError(
+      detail?.error || `Failed to fetch ${path} (HTTP ${response.status})`,
+      response.status === 404 ? EXIT_PRECONDITION : EXIT_ERROR,
+      detail,
+    );
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (outputPath) {
+    writeFileSync(outputPath, buffer);
+    if (cliOptions.json) {
+      emitJson({ ok: true, path: outputPath, bytes: buffer.byteLength });
+      return;
+    }
+    console.log(outputPath);
+    return;
+  }
+  process.stdout.write(buffer);
+}
+
+/**
+ * Account-scoped credit transaction history (requires the API key — site
+ * tokens are conversation-scoped and cannot read account billing).
+ */
+async function cmdUsageHistory(args) {
+  const creds = loadCredentials();
+  if (!creds.apiKey) {
+    exitWithError(
+      'Not logged in. Run `miles auth login` first (usage history needs the account API key).',
+      EXIT_PRECONDITION,
+    );
+  }
+
+  const serverUrl = DEFAULT_SERVER_URL;
+  await requirePrimitive('usage-history', serverUrl);
+
+  const params = new URLSearchParams();
+  const limit = getOptionalCommandFlagValue(args, '--limit');
+  const offset = getOptionalCommandFlagValue(args, '--offset');
+  const type = getOptionalCommandFlagValue(args, '--type');
+  if (limit) params.set('limit', limit);
+  if (offset) params.set('offset', offset);
+  if (type) params.set('type', type);
+  const query = params.toString() ? `?${params.toString()}` : '';
+
+  const data = await apiRequest(
+    'GET',
+    `/api/v2/headless/account/transactions${query}`,
+    { auth: creds.apiKey, serverUrl },
+  );
+
+  if (cliOptions.json) {
+    emitJson(data);
+    return;
+  }
+  (data.transactions || []).forEach((tx) => {
+    const sign = tx.isDeduction ? '-' : '+';
+    console.log(
+      `${tx.createdAt}  ${sign}${tx.amountCredits} credits  [${tx.type}]  ${tx.description || ''}  (balance: ${tx.balanceAfterCredits})`,
+    );
+  });
+  if (data.pagination?.hasMore) {
+    console.log(
+      `[more available: rerun with --offset ${(data.pagination.offset || 0) + (data.pagination.limit || 50)}]`,
+    );
+  }
+}
+
+/**
+ * Rename the active conversation (1-100 chars). Returns the theme slug so a
+ * connected agent can also update the WordPress theme display name.
+ */
+async function cmdRename(args) {
+  const creds = loadCredentials();
+  const site = getActiveSite(creds);
+  if (!site?.conversationId) {
+    exitWithError('No active conversation.', EXIT_PRECONDITION);
+  }
+
+  const title = args.find((a) => !a.startsWith('--'));
+  if (!title) {
+    exitWithError('Usage: miles rename "New site name"', EXIT_PRECONDITION);
+  }
+
+  const serverUrl = DEFAULT_SERVER_URL;
+  await requirePrimitive('rename', serverUrl);
+
+  const data = await apiRequest(
+    'PATCH',
+    `/api/v2/headless/conversations/${site.conversationId}/title`,
+    { auth: site.siteToken, serverUrl, body: { title } },
+  );
+
+  if (cliOptions.json) {
+    emitJson({ ok: true, title: data.title, themeSlug: data.themeSlug });
+    return;
+  }
+  console.log(`Renamed to: ${data.title}`);
+}
+
+/**
  * Format a progress data part into a human-readable status string.
  * The server returns the latest raw data part from Miles' message stream.
  */
@@ -3010,7 +3216,10 @@ async function cmdScreenshot(args) {
   // previews can lag readability by a few seconds; when the renderer reports
   // the target document 404'd, retry briefly before reporting failure.
   const encodedUrl = encodeURIComponent(url);
-  const endpoint = `${serverUrl}/api/v2/headless/screenshot?url=${encodedUrl}`;
+  // --full-page stitches the whole document (footers, below-the-fold), not
+  // just the first viewport.
+  const fullPage = args.includes('--full-page');
+  const endpoint = `${serverUrl}/api/v2/headless/screenshot?url=${encodedUrl}${fullPage ? '&fullPage=true' : ''}`;
 
   const SCREENSHOT_RETRY_DELAYS_MS = [3000, 8000];
   let response;
@@ -3495,30 +3704,56 @@ async function cmdSiteState() {
 
   const phase = status.phase || null;
   const streaming = status.status === 'streaming';
-  const next = [];
-  if (streaming) {
-    next.push('miles wait-job');
-  } else if (status.status === 'aborted' || status.status === 'failed') {
-    next.push(
-      'miles say "<continue, retry, or redirect the work>"  (last run did not finish)',
-    );
-  } else if (phase === 'discovery' || phase === 'brief_review') {
-    next.push('miles say "<answer or feedback>"');
-  } else if (phase === 'design_directions_ready') {
-    next.push('miles design-directions --json');
-    next.push('miles build-site --design <number>');
-  } else if (
-    phase === 'site_preview' ||
-    phase === 'site_generation' ||
-    status.siteReady
-  ) {
-    next.push('miles say "<describe an edit>"');
-    next.push('miles export --type html');
-    next.push('miles convert-theme  (needs connect-browser first)');
+
+  // The server derives next[] (bare primitive names) authoritatively —
+  // streaming/unsettled precedence, undo availability, the real phase
+  // machine. The CLI only maps names to display hints. Client-side
+  // fallback exists for older servers that don't send next[].
+  const NEXT_MOVE_HINTS = {
+    say: 'miles say "<answer, feedback, or edit>"',
+    'design-directions': 'miles design-directions --json',
+    'build-site': 'miles build-site --design <number>',
+    'wait-job': 'miles wait-job',
+    export: 'miles export --type html|theme',
+    'convert-theme': 'miles convert-theme  (needs connect-browser first)',
+    cancel: 'miles cancel',
+    undo: 'miles undo  (revert the last turn)',
+  };
+  let next;
+  if (Array.isArray(status.next)) {
+    next = status.next.map((n) => NEXT_MOVE_HINTS[n] ?? `miles ${n}`);
+  } else {
+    next = [];
+    if (streaming) {
+      next.push('miles wait-job');
+    } else if (status.status === 'aborted' || status.status === 'failed') {
+      next.push(
+        'miles say "<continue, retry, or redirect the work>"  (last run did not finish)',
+      );
+    } else if (phase === 'discovery' || phase === 'brief_review') {
+      next.push('miles say "<answer or feedback>"');
+    } else if (phase === 'design_directions_ready') {
+      next.push('miles design-directions --json');
+      next.push('miles build-site --design <number>');
+    } else if (phase === 'site_preview' || status.siteReady) {
+      next.push('miles say "<describe an edit>"');
+      next.push('miles export --type html');
+      next.push('miles convert-theme  (needs connect-browser first)');
+    }
+    if (phase === 'complete' || status.siteReady) {
+      next.push('miles export --type theme');
+    }
   }
-  if (phase === 'complete' || status.siteReady) {
-    next.push('miles export --type theme');
-  }
+
+  const plan = status.siteCompletionPlan || null;
+  const planSummary = plan?.items?.length
+    ? {
+        total: plan.items.length,
+        completed: plan.items.filter((i) => i.status === 'completed').length,
+        pending: plan.items.filter((i) => i.status === 'pending').length,
+        failed: plan.items.filter((i) => i.status === 'failed').length,
+      }
+    : null;
 
   const payload = {
     siteId: site.id,
@@ -3540,6 +3775,18 @@ async function cmdSiteState() {
       kind: 'browser-dashboard',
       connected,
     },
+    storageSlug: status.storageSlug || null,
+    themeSlug: status.themeSlug || null,
+    siteCompletionPlan: plan,
+    credits: status.credits || null,
+    undoAvailable: Boolean(status.undoAvailable),
+    // Pass-through of server-derived context (present when applicable):
+    // the registered logo, files in scope, analyzed reference sites, and
+    // conversation length. Useful for verifying what Miles is working from.
+    userLogo: status.userLogo || null,
+    uploadedFiles: status.uploadedFiles || null,
+    siteAnalyses: status.siteAnalyses || null,
+    messageCount: status.messageCount ?? null,
     next,
   };
 
@@ -3557,6 +3804,18 @@ async function cmdSiteState() {
   console.log(
     `[browser: ${connected === null ? 'unknown' : connected ? 'connected' : 'not connected'}]`,
   );
+  if (planSummary) {
+    console.log(
+      `[plan: ${planSummary.completed}/${planSummary.total} done${planSummary.failed ? `, ${planSummary.failed} failed` : ''}]`,
+    );
+    plan.items.forEach((item) => {
+      console.log(`  - [${item.status}] ${item.title}`);
+    });
+  }
+  if (payload.undoAvailable) console.log('[undo: available]');
+  if (payload.credits) {
+    console.log(`[credits: ${payload.credits.usagePercent}% of period used]`);
+  }
   if (next.length) {
     console.log('Next:');
     next.forEach((n) => console.log(`  ${n}`));
@@ -3572,14 +3831,82 @@ async function cmdExport(args) {
   const flagType = getOptionalCommandFlagValue(args, '--type');
   const positional = args.find((a) => a === 'html' || a === 'theme');
   const type = flagType || positional || 'html';
+  const downloadPath = getOptionalCommandFlagValue(args, '--download');
 
   if (type === 'html') return cmdExportSite();
-  if (type === 'theme') return cmdExportTheme();
+  if (type === 'theme') {
+    if (downloadPath) return cmdDownloadTheme(downloadPath);
+    return cmdExportTheme();
+  }
 
   exitWithError(
     `Unknown export type: ${type}. Supported types: html, theme.`,
     EXIT_PRECONDITION,
   );
+}
+
+/**
+ * One-step theme ZIP download with the site token. The bytes come from the
+ * WordPress plugin, so Playground sites need a connected dashboard — the
+ * server fails closed with 409 (exit 3) when it is missing.
+ */
+async function cmdDownloadTheme(downloadPath) {
+  const creds = loadCredentials();
+  const site = getActiveSite(creds);
+  if (!site?.conversationId) {
+    exitWithError('No active conversation.', EXIT_PRECONDITION);
+  }
+
+  const serverUrl = DEFAULT_SERVER_URL;
+  const capabilities = await requirePrimitive('export', serverUrl);
+  if (!capabilities?.primitives?.export?.operations?.['theme-download']) {
+    exitWithError(
+      'The connected Miles server does not support one-step theme download yet. Use `miles export --type theme` for the download URL.',
+      EXIT_PRECONDITION,
+      { code: 'primitive_unsupported', primitive: 'export.theme-download' },
+    );
+  }
+
+  const endpoint = `${serverUrl}/api/v2/headless/conversations/${site.conversationId}/download-theme`;
+  const response = await fetch(endpoint, {
+    headers: { Authorization: `Bearer ${site.siteToken}` },
+  });
+
+  if (response.status === 409) {
+    let detail = null;
+    try {
+      detail = await response.json();
+    } catch {
+      // Non-JSON body.
+    }
+    exitWithError(
+      detail?.error ||
+        'Dashboard connection required to download the theme ZIP. Run `miles connect-browser`, wait for connected, then retry.',
+      EXIT_NEED_CONNECTION,
+      { code: 'dashboard_connection_required' },
+    );
+  }
+  if (!response.ok) {
+    let detail = null;
+    try {
+      detail = await response.json();
+    } catch {
+      // Non-JSON body.
+    }
+    exitWithError(
+      detail?.error || `Theme download failed (HTTP ${response.status})`,
+      EXIT_ERROR,
+      detail,
+    );
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  writeFileSync(downloadPath, buffer);
+  if (cliOptions.json) {
+    emitJson({ ok: true, path: downloadPath, bytes: buffer.byteLength });
+    return;
+  }
+  console.log(downloadPath);
 }
 
 /**
@@ -3894,6 +4221,10 @@ const commands = {
   'connect-browser': cmdConnectBrowser,
   'convert-theme': cmdConvertTheme,
   cancel: cmdCancel,
+  undo: cmdUndo,
+  'site-pages': cmdSitePages,
+  'usage-history': cmdUsageHistory,
+  rename: cmdRename,
 
   // Supporting verbs
   doctor: cmdDoctor,
@@ -3948,10 +4279,17 @@ Design + build:
                                                     prints reusable refs
   miles design-directions [--json]        HEADLESS  List design directions
   miles build-site --design <n>           HEADLESS  Commit a design, build site
-  miles screenshot <preview-url>          HEADLESS  Capture a preview JPEG
+  miles screenshot <preview-url> [--full-page]
+                                          HEADLESS  Capture a preview JPEG
   miles wait-job [--timeout <s>]          HEADLESS  Wait for the running turn
                                                     (JSON result + exit code)
   miles cancel                            HEADLESS  Stop the running turn
+  miles undo                              HEADLESS  Revert the last turn (site
+                                                    + chat, one level)
+  miles site-pages [path] [--output <f>]  HEADLESS  List built-site files, or
+                                                    fetch one file's content
+  miles rename "New name"                 HEADLESS  Rename the site/conversation
+  miles usage-history [--limit <n>]       HEADLESS  Credit transaction history
 
 WordPress:
   miles connect-browser [--open] [--wait] BROWSER   Dashboard URL + connection
@@ -3960,6 +4298,8 @@ WordPress:
 Export:
   miles export [--type html|theme]        HEADLESS  Deliverable URLs (theme zip
                                                     download needs the browser)
+  miles export --type theme --download <file>
+                                          BROWSER   Stream the theme ZIP to disk
 
 * say is headless before the site is built; edits on a built WordPress site
   need the browser connection and fail fast with exit 3 when it is missing.

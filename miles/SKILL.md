@@ -46,10 +46,14 @@ This is the complete v0 contract. Do not invent other commands. HEADLESS = works
 | `miles design-directions --json` | HEADLESS | List generated design directions with ids + previews | [design-directions.md](references/design-directions.md) |
 | `miles build-site --design <n>` | HEADLESS | Commit a design → full HTML site build | [build-site.md](references/build-site.md) |
 | `miles wait-job` / `miles cancel` | HEADLESS | Wait for / stop the running turn (JSON + exit codes) | [wait-job.md](references/wait-job.md) |
-| `miles site-state --json` | HEADLESS | Phase, directions, connection, suggested next moves | [site-state.md](references/site-state.md) |
+| `miles undo` | HEADLESS | Revert the last turn: site + chat together, one level | [undo.md](references/undo.md) |
+| `miles site-state --json` | HEADLESS | Phase, directions, connection, site plan, suggested next moves | [site-state.md](references/site-state.md) |
 | `miles site-attach <siteId> [--duplicate]` | HEADLESS | Resume any owned site; fork before risky changes | [site-attach.md](references/site-attach.md) |
-| `miles screenshot <preview-url>` | HEADLESS | Capture any preview to a local JPEG | [screenshot.md](references/screenshot.md) |
-| `miles export [--type html\|theme]` | HEADLESS* | Deliverable URLs (theme zip download is browser-backed) | [export.md](references/export.md) |
+| `miles site-pages [path]` | HEADLESS | List built-site files, or fetch one file's content | [site-pages.md](references/site-pages.md) |
+| `miles screenshot <preview-url> [--full-page]` | HEADLESS | Capture any preview to a local JPEG | [screenshot.md](references/screenshot.md) |
+| `miles export [--type html\|theme] [--download <file>]` | HEADLESS* | Deliverable URLs; `--download` streams the theme ZIP (browser-backed) | [export.md](references/export.md) |
+| `miles rename "<name>"` | HEADLESS | Rename the site's conversation | [rename.md](references/rename.md) |
+| `miles usage-history` | HEADLESS | Credit transaction history for the account | [usage-history.md](references/usage-history.md) |
 | `miles connect-browser [--open] [--wait]` | — | The one explicit browser gate: authenticated dashboard URL + connection state | [connect-browser.md](references/connect-browser.md) |
 | `miles convert-theme` | BROWSER | HTML site → WordPress block theme | [convert-theme.md](references/convert-theme.md) |
 
@@ -86,8 +90,9 @@ State is derived from the conversation and monotonic — you can enter at whatev
 - **"I already have the content / a brief — design around it"** → write the brief to a file → `site-create --brief brief.md "<summary>"` (add `--attach logo.svg` for any logo/imagery the user supplied, and say what each file is) → discovery never runs → `design-directions` → present → `build-site`.
 - **"Give me design options for this"** → `site-create --brief ...` → `design-directions --json` → `screenshot` each preview → present in your own UI. Never build until something is chosen.
 - **"Edit my Miles site" / "resume where I left off"** → `site-attach <siteId>` (cross-machine) or `use <siteId>` (local) → `site-state --json` → follow its `next[]` hints.
+- **"What should we work on next?"** → `site-state --json` → read `siteCompletionPlan` → present the pending/failed items and let the user pick → `say` the chosen work.
 - **"Make it a WordPress theme"** → `connect-browser` → `convert-theme` → `export --type theme`.
-- **"Try something risky on an existing site"** → `site-attach <siteId> --duplicate` first; conversation state has no undo — the fork is the branch.
+- **"Undo that last change"** → `miles undo` reverts the most recent turn (site + chat together, one level). For anything deeper, `site-attach <siteId> --duplicate` first — the fork is the branch.
 
 Judgment that holds across all entries: check `account-status` headroom before firing a build; directions before build (users react to options faster than they articulate preferences); content before layout; present design choices to the user rather than choosing silently, unless they explicitly delegated the decision.
 

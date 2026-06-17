@@ -106,6 +106,7 @@ const JSON_COMMANDS = new Set([
   'balance',
   'messages',
   'wait-job',
+  'approval-respond',
   'cancel',
   'export',
   'export-theme',
@@ -1816,14 +1817,18 @@ async function cmdWaitJob(args) {
       continue;
     }
 
+    const approvalRequired = sanitizeApprovalRequired(data.approvalRequired);
     const result = {
-      ok: data.outcome
-        ? data.outcome === 'completed'
-        : data.status !== 'failed',
+      ok: approvalRequired
+        ? false
+        : data.outcome
+          ? data.outcome === 'completed'
+          : data.status !== 'failed',
       status: data.status,
       outcome: data.outcome || null,
       outcomeUnresolved: data.outcomeUnresolved || undefined,
       outcomeReason: data.outcomeReason || undefined,
+      approvalRequired: approvalRequired || undefined,
       phase: data.phase || null,
       milesMessage: data.milesMessage || null,
       question: data.question || null,
@@ -1837,7 +1842,7 @@ async function cmdWaitJob(args) {
     clearActiveRun();
     writeLastResponse(formatWaitResponse(data));
     emitJson(result);
-    process.exit(outcomeExitCode(data.outcome));
+    process.exit(outcomeExitCode(approvalRequired ? 'blocked' : data.outcome));
   }
 
   emitJson({
@@ -1846,6 +1851,76 @@ async function cmdWaitJob(args) {
     error: `Turn still running after ${Math.round(maxWait / 1000)}s. Run miles wait-job again to keep waiting, or miles cancel to stop the run.`,
   });
   process.exit(EXIT_ERROR);
+}
+
+function findApprovalShortcutFlag(args) {
+  return args.find((arg) =>
+    ['--yes', '-y', '--force', '--auto', '--approve', '--decline'].includes(arg),
+  );
+}
+
+/**
+ * Explicitly answer a live-protection grant. This is intentionally separate
+ * from `say`: ordinary chat text must never approve protected live-site writes.
+ */
+async function cmdApprovalRespond(args) {
+  noteActiveRunIfAny();
+  const shortcutFlag = findApprovalShortcutFlag(args);
+  if (shortcutFlag) {
+    exitWithError(
+      `Usage: ${shortcutFlag} is not allowed for approval responses. Ask the user, then pass the exact response with --response approved|declined.`,
+      EXIT_PRECONDITION,
+    );
+  }
+
+  const grantId = getCommandFlagValue(args, '--grant');
+  const response = getCommandFlagValue(args, '--response');
+  if (!grantId || !response) {
+    exitWithError(
+      'Usage: miles approval-respond --grant <id> --response approved|declined',
+      EXIT_PRECONDITION,
+    );
+  }
+  if (response !== 'approved' && response !== 'declined') {
+    exitWithError(
+      'Usage: --response must be either approved or declined.',
+      EXIT_PRECONDITION,
+    );
+  }
+
+  const creds = loadCredentials();
+  const site = getActiveSite(creds);
+  if (!site?.conversationId) {
+    exitWithError('No active conversation.', EXIT_PRECONDITION);
+  }
+
+  const serverUrl = DEFAULT_SERVER_URL;
+  await requirePrimitive('approval-respond', serverUrl);
+
+  const start = await apiRequest(
+    'POST',
+    `/api/v2/headless/conversations/${site.conversationId}/approval-response`,
+    {
+      auth: site.siteToken,
+      body: { grantId, response },
+      serverUrl,
+    },
+  );
+
+  writeActiveRun({
+    verb: 'approval-respond',
+    siteId: site.id,
+    conversationId: site.conversationId,
+  });
+
+  if (cliOptions.json) {
+    return cmdWaitJob([]);
+  }
+
+  const settled = await doWait(creds, site.conversationId, serverUrl, undefined, {
+    sinceMessageId: start?.sinceMessageId,
+  });
+  exitWithTurnOutcome(settled);
 }
 
 /**
@@ -2205,6 +2280,70 @@ function sanitizeProgressText(value) {
   }
 
   return text || null;
+}
+
+function sanitizeApprovalRequired(approval) {
+  if (!approval || typeof approval !== 'object') return null;
+
+  const grantId =
+    typeof approval.grantId === 'string' ? approval.grantId : null;
+  const summary = sanitizeProgressText(approval.summary);
+  if (!grantId || !summary) return null;
+
+  const actions = Array.isArray(approval.actions)
+    ? approval.actions
+        .map((action) => {
+          if (!action || typeof action !== 'object') return null;
+          const actionSummary = sanitizeProgressText(action.summary);
+          if (!actionSummary) return null;
+          const item = { summary: actionSummary };
+          if (typeof action.scope === 'string') {
+            const scope = sanitizeProgressText(action.scope);
+            if (scope) item.scope = scope;
+          }
+          return item;
+        })
+        .filter(Boolean)
+    : [];
+
+  return {
+    type: 'live_protection',
+    grantId,
+    summary,
+    actions,
+    ...(typeof approval.category === 'string'
+      ? { category: approval.category }
+      : {}),
+    ...(Number.isInteger(approval.riskTier)
+      ? { riskTier: approval.riskTier }
+      : {}),
+    ...(typeof approval.timestamp === 'number'
+      ? { timestamp: approval.timestamp }
+      : {}),
+    ...(approval.firstWrite === true ? { firstWrite: true } : {}),
+  };
+}
+
+function appendApprovalRequiredLines(lines, approval) {
+  const clean = sanitizeApprovalRequired(approval);
+  if (!clean) return;
+
+  lines.push('');
+  lines.push('[approval_required]');
+  lines.push(`grant: ${clean.grantId}`);
+  lines.push(`summary: ${clean.summary}`);
+  if (clean.category) lines.push(`category: ${clean.category}`);
+  if (clean.riskTier) lines.push(`risk_tier: ${clean.riskTier}`);
+  if (clean.actions.length) {
+    lines.push('actions:');
+    clean.actions.forEach((action) => {
+      const prefix = action.scope ? `${action.scope}: ` : '';
+      lines.push(`  - ${prefix}${action.summary}`);
+    });
+  }
+  lines.push(
+    '[note: Ask the user to approve or decline this specific protected change. Do not infer approval from the original request, silence, "continue", or a broad yes.]',
+  );
 }
 
 function formatActionProgress(text, elapsed) {
@@ -2794,6 +2933,8 @@ function formatWaitResponse(data) {
   }
   lines.push(`[phase: ${data.phase}]`);
 
+  appendApprovalRequiredLines(lines, data.approvalRequired);
+
   if (data.milesMessage) {
     lines.push('');
     lines.push(data.milesMessage);
@@ -2891,6 +3032,7 @@ async function cmdStatus() {
       directionCount: data.directionCount || 0,
       selectedDirectionId: data.selectedDirectionId || null,
       siteReady: Boolean(data.siteReady),
+      approvalRequired: sanitizeApprovalRequired(data.approvalRequired) || null,
       activeSite: getActiveSiteSummary(creds),
     });
     return;
@@ -2904,6 +3046,9 @@ async function cmdStatus() {
   if (data.selectedDirectionId)
     console.log(`[selected_direction: ${data.selectedDirectionId}]`);
   if (data.siteReady) console.log('[site_ready: true]');
+  const approvalLines = [];
+  appendApprovalRequiredLines(approvalLines, data.approvalRequired);
+  approvalLines.forEach((line) => console.log(line));
 
   // Provide actionable hints based on current phase
   if (
@@ -3801,6 +3946,8 @@ async function cmdSiteState(args = []) {
     'design-directions': 'miles design-directions --json',
     'build-site': 'miles build-site --design <number>',
     'wait-job': 'miles wait-job',
+    'approval-respond':
+      'miles approval-respond --grant <id> --response approved|declined  (only after explicit user approval or refusal)',
     export: 'miles export --type html|theme',
     'convert-theme': 'miles convert-theme  (needs connect-browser first)',
     cancel: 'miles cancel',
@@ -3833,6 +3980,7 @@ async function cmdSiteState(args = []) {
   }
 
   const plan = status.siteCompletionPlan || null;
+  const approvalRequired = sanitizeApprovalRequired(status.approvalRequired);
   const planSummary = plan?.items?.length
     ? {
         total: plan.items.length,
@@ -3866,6 +4014,7 @@ async function cmdSiteState(args = []) {
     themeSlug: status.themeSlug || null,
     siteCompletionPlan: plan,
     credits: status.credits || null,
+    approvalRequired,
     undoAvailable: Boolean(status.undoAvailable),
     // Pass-through of server-derived context (present when applicable):
     // the registered logo, files in scope, analyzed reference sites, and
@@ -3903,6 +4052,9 @@ async function cmdSiteState(args = []) {
   if (payload.credits) {
     console.log(`[credits: ${payload.credits.usagePercent}% of period used]`);
   }
+  const approvalLines = [];
+  appendApprovalRequiredLines(approvalLines, payload.approvalRequired);
+  approvalLines.forEach((line) => console.log(line));
   if (next.length) {
     console.log('Next:');
     next.forEach((n) => console.log(`  ${n}`));
@@ -3941,6 +4093,8 @@ async function cmdSiteStateFull(site, serverUrl) {
       conversationId: site.conversationId,
       connection: { kind: 'browser-dashboard', connected },
       ...state,
+      approvalRequired:
+        sanitizeApprovalRequired(state.approvalRequired) || null,
     });
     return;
   }
@@ -3981,6 +4135,9 @@ async function cmdSiteStateFull(site, serverUrl) {
       console.log(`  - [${entry.status}] ${entry.key}: ${entry.summary}`);
     });
   }
+  const approvalLines = [];
+  appendApprovalRequiredLines(approvalLines, state.approvalRequired);
+  approvalLines.forEach((line) => console.log(line));
   console.log(`[messages: ${state.messageCount}]`);
   console.log('Full detail: miles site-state --full --json');
 }
@@ -4443,6 +4600,7 @@ const commands = {
   'design-directions': cmdDesignDirections,
   'build-site': cmdBuildSite,
   'wait-job': cmdWaitJob,
+  'approval-respond': cmdApprovalRespond,
   'site-state': cmdSiteState,
   'site-attach': cmdSiteAttach,
   screenshot: cmdScreenshot,
@@ -4520,6 +4678,10 @@ Design + build:
                                                     frontend (full-page default)
   miles wait-job [--timeout <s>]          HEADLESS  Wait for the running turn
                                                     (JSON result + exit code)
+  miles approval-respond --grant <id> --response approved|declined
+                                          HEADLESS  Answer a protected live-site
+                                                    approval after explicit user
+                                                    consent/refusal
   miles cancel                            HEADLESS  Stop the running turn
   miles undo                              HEADLESS  Revert the last turn (site
                                                     + chat, one level)
@@ -4545,8 +4707,8 @@ Long verbs accept --no-wait to return a JSON handle immediately (requires a
 server with cancel support). Pair with wait-job and cancel.
 
 Exit codes: 0 ok | 1 failed/aborted | 2 precondition | 3 need connection
-(open connect-browser url, wait for connected, retry once) | 4 blocked or
-declined by user | 5 capacity/already running.
+(open connect-browser url, wait for connected, retry once) | 4 blocked,
+approval required, or declined by user | 5 capacity/already running.
 
 Options:
   --json                            Emit JSON for inspection commands`);
@@ -4581,6 +4743,9 @@ function apiErrorExitCode(err) {
   const code = err.data?.code;
   if (code === 'dashboard_connection_required') return EXIT_NEED_CONNECTION;
   if (code === 'conversation_execution_locked') return EXIT_CAPACITY;
+  if (code === 'approval_response_required') return EXIT_BLOCKED;
+  if (code === 'approval_not_active') return EXIT_PRECONDITION;
+  if (code === 'approval_not_answerable') return EXIT_BLOCKED;
   if (code === 'CONTENT_POLICY_VIOLATION') return EXIT_BLOCKED;
   if (err.status === 429 || err.status === 503) return EXIT_CAPACITY;
   if (err.status === 401) return EXIT_PRECONDITION;
@@ -4600,11 +4765,17 @@ handler(args).catch((err) => {
         remediation: err.remediation,
       });
     } else if (err instanceof ApiError) {
+      const approvalRequired =
+        sanitizeApprovalRequired(err.data?.approvalRequired) || undefined;
+      const detail = err.data
+        ? { ...err.data, approvalRequired }
+        : null;
       emitJson({
         ok: false,
         error: err.message,
         status: err.status,
-        detail: err.data || null,
+        approvalRequired,
+        detail,
       });
     } else {
       emitJson({
@@ -4629,6 +4800,9 @@ handler(args).catch((err) => {
     );
   } else if (err instanceof ApiError) {
     console.error(`Error: ${err.message}`);
+    const approvalLines = [];
+    appendApprovalRequiredLines(approvalLines, err.data?.approvalRequired);
+    approvalLines.forEach((line) => console.error(line));
     if (err.data?.details) {
       console.error(`Details: ${JSON.stringify(err.data.details)}`);
     }

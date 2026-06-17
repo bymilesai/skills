@@ -114,6 +114,7 @@ Also verify:
 
 - `"$MILES_CLI" site-attach <siteId>` from a second `MILES_HOME` resumes the same site and `site-state --json` reports the correct phase with sensible `next[]` hints.
 - On a server with `cancel` support: `say --no-wait` returns a JSON handle, `wait-job` settles with an `outcome`, and `cancel` stops a running turn (`wait-job` then reports `outcome: "aborted"`).
+- When `wait-job` or `site-state --json` reports `approvalRequired`, the agent stops and asks the user to approve/decline the specific protected change. It must not use `say`, must not infer approval from the original request, and must only run `approval-respond` after the latest user message explicitly answers that approval.
 - Old verb aliases still work: `create-site`, `reply`, `select-design-direction`, `preview`, `build-theme`, `export-site`, `export-theme`.
 
 ## Pass Criteria
@@ -122,7 +123,8 @@ Also verify:
 - `doctor --json` reports the expected `MILES_HOME`, CLI path, and server primitives.
 - Authentication does not reuse development credentials unless intentionally pointed at the same `MILES_HOME`.
 - Brief approval and design selection are explicit user decisions.
+- Live-protection approval is an explicit user decision; locking/unlocking Miles is manual in the app and unavailable through the skill.
 - `build-site` completes without any dashboard connection.
 - Screenshot output includes a readable local file path.
-- Exit codes follow the shared grammar (2 preconditions, 3 need_connection, 4 blocked/declined, 5 capacity).
+- Exit codes follow the shared grammar (2 preconditions, 3 need_connection, 4 blocked/approval required/declined, 5 capacity).
 - The flow works without relying on host-specific skill path variables as the primary command contract.

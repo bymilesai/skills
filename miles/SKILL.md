@@ -46,6 +46,7 @@ This is the complete v0 contract. Do not invent other commands. HEADLESS = works
 | `miles design-directions --json` | HEADLESS | List generated design directions with ids + previews | [design-directions.md](references/design-directions.md) |
 | `miles build-site --design <n>` | HEADLESS | Commit a design → full HTML site build | [build-site.md](references/build-site.md) |
 | `miles wait-job` / `miles cancel` | HEADLESS | Wait for / stop the running turn (JSON + exit codes) | [wait-job.md](references/wait-job.md) |
+| `miles approval-respond --grant <id> --response approved\|declined` | HEADLESS | Answer a protected live-site approval after explicit user consent/refusal | [live-protection.md](references/live-protection.md) |
 | `miles undo` | HEADLESS | Revert the last turn: site + chat together, one level | [undo.md](references/undo.md) |
 | `miles site-state [--full] --json` | HEADLESS | Phase, directions, connection, site plan, suggested next moves; `--full` adds brief text, direction detail, session memory | [site-state.md](references/site-state.md) |
 | `miles site-attach <siteId> [--duplicate]` | HEADLESS | Resume any owned site; fork before risky changes | [site-attach.md](references/site-attach.md) |
@@ -73,7 +74,7 @@ Every verb shares one exit-code grammar. Branch on codes, not prose:
 - `1` — failed or aborted (read the error, do not blindly retry)
 - `2` — precondition missing (not logged in, no active site, unsupported primitive, bad usage)
 - `3` — need_connection: open the URL from `connect-browser --json`, wait for `connected: true`, retry the same command once
-- `4` — blocked or declined: the requested work did NOT happen
+- `4` — blocked, approval required, or declined: the requested work did NOT happen
 - `5` — capacity: another turn is already running, or the server is saturated; wait, then retry
 
 Settled turns also carry an `outcome` (`completed | blocked | declined | aborted | need_connection | capacity | failed`) in `wait-job` JSON and as `[outcome: ...]` in streamed output. **Never assume success because a command printed text.** A `declined` outcome means the user said no — do not retry it or route around it. Details: [outcomes.md](references/outcomes.md).
@@ -83,6 +84,8 @@ Settled turns also carry an `outcome` (`completed | blocked | declined | aborted
 Everything up to and including the built HTML site is headless: discovery, brief, design directions, the full site build, screenshots, HTML export. The browser fault line sits exactly between "built HTML site" and "WordPress": theme conversion and edits to a converted WordPress site run through a connected dashboard browser.
 
 `connect-browser` is the single, explicit, queryable gate — never a mid-command surprise. Commands that need it fail fast with exit 3; you connect and retry once. Do not pre-emptively open the dashboard for headless work; do open it when the user wants to watch design generation or builds live (it is the best progress surface). Per-host browser tool mapping and connection recovery: [browser.md](references/browser.md).
+
+Live-protection approvals are a separate safety gate from browser connection. When `wait-job`, `status`, or `site-state` returns `approvalRequired`, stop and ask the user to approve or decline that specific protected change. **Never answer it with `say`, and never infer approval from the original task, silence, "continue", or a broad yes.** Only after the latest user message explicitly approves or declines the specific pending change may you run `miles approval-respond --grant <id> --response approved|declined`. Locking or unlocking Miles itself is not available through this skill; tell the user to use the Miles app control. Details: [live-protection.md](references/live-protection.md).
 
 ## Pick Your Entry Point
 
@@ -165,6 +168,7 @@ Do not assume the frontmatter hooks ran: non-Claude hosts may ignore them, so wa
 
 - `site-create`, `say`, `build-site`, `wait`, and `convert-theme` print Miles' settled response to stdout (and to a hook relay file that some hosts deliver as extra context). Go straight to the next action; do not re-run `messages` or `status` to re-read what you already have.
 - When Miles asks a question (`[question: ...]`), relay it to the user with their native question UI when available, or a compact Markdown card; the question must be visible in your final response for that turn. When the user answers, `say` their answer through unchanged. Relay mechanics and templates: [full-workflow.md](references/full-workflow.md).
+- When Miles returns `[approval_required]` or `approvalRequired`, relay the protected-change summary and ask for approval or decline. This is not a normal chat question: do not use `say`; use [live-protection.md](references/live-protection.md).
 - When the brief arrives (`phase: brief_review`), show the user the FULL brief plus an approve/request-changes choice as your final response. Never summarize it away — it is the blueprint for the whole site.
 - When directions are ready, inspect them (connected dashboard if open, otherwise `screenshot` each preview), give a recommendation tied to the brief with short notes per direction, and let the user choose. Only claim you visually inspected something that actually loaded.
 - Progress: relay short `Miles: <action>` milestone lines, not raw logs or paragraphs — see Long-Running Commands above for keeping them visible on your host.

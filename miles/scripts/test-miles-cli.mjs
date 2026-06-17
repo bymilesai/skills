@@ -1215,6 +1215,269 @@ try {
     'wait-job should report the declined outcome as structured JSON',
   );
 
+  // wait-job surfaces live-protection approvals as blocked structured state,
+  // with sensitive/internal action details sanitized from public output.
+  const approvalWaitHome = makeTempDir();
+  writeFileSync(
+    join(approvalWaitHome, 'credentials.json'),
+    JSON.stringify({
+      activeSite: 'site-approval',
+      sites: {
+        'site-approval': {
+          siteToken: 'site-token',
+          conversationId: 'conversation-approval',
+          dashboardUrl: 'https://beta.bymiles.ai/sites/site-approval',
+        },
+      },
+    }),
+  );
+  const approvalWaitMock = await startMockServer((req, res) => {
+    req.on('data', () => {});
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          status: 'waiting_for_input',
+          outcome: 'blocked',
+          outcomeUnresolved: ['Approval required: Publish content changes'],
+          phase: 'complete',
+          approvalRequired: {
+            type: 'live_protection',
+            grantId: 'grant-approval',
+            category: 'content.publish',
+            riskTier: 2,
+            summary:
+              'Publish content changes with ?token=example-value in the source URL',
+            actions: [
+              {
+                scope: 'content.publish',
+                summary:
+                  'Publish edited page via /wp/v2/pages/42?token=example-value',
+                method: 'POST',
+                path: '/wp/v2/pages/42?token=example-value',
+              },
+            ],
+            timestamp: 1_234_567_890,
+          },
+        }),
+      );
+    });
+  });
+  const approvalWaitResult = await runAsync(['wait-job'], {
+    milesHome: approvalWaitHome,
+    env: { MILES_SERVER_URL: approvalWaitMock.url },
+  });
+  assert(
+    approvalWaitResult.status === 4,
+    `wait-job should exit 4 when approval is required\nstatus: ${approvalWaitResult.status}\nstdout:\n${approvalWaitResult.stdout}`,
+  );
+  const approvalWaitJson = JSON.parse(approvalWaitResult.stdout);
+  assert(
+    approvalWaitJson.ok === false &&
+      approvalWaitJson.approvalRequired?.grantId === 'grant-approval',
+    'wait-job should include sanitized approval metadata',
+  );
+  assert(
+    approvalWaitJson.approvalRequired.actions[0].scope === 'content.publish',
+    'wait-job should preserve safe approval action scope',
+  );
+  assert(
+    !approvalWaitResult.stdout.includes('example-value') &&
+      !approvalWaitResult.stdout.includes('"path"') &&
+      !approvalWaitResult.stdout.includes('"method"'),
+    'wait-job approval JSON should not expose secrets or raw HTTP details',
+  );
+
+  // site-state carries the same approval metadata and points agents at the
+  // explicit response primitive rather than ordinary say.
+  const approvalStateHome = makeTempDir();
+  writeFileSync(
+    join(approvalStateHome, 'credentials.json'),
+    JSON.stringify({
+      activeSite: 'site-approval-state',
+      sites: {
+        'site-approval-state': {
+          siteToken: 'site-token',
+          conversationId: 'conversation-approval-state',
+          dashboardUrl: 'https://beta.bymiles.ai/sites/site-approval-state',
+        },
+      },
+    }),
+  );
+  const approvalStateMock = await startMockServer((req, res) => {
+    req.on('data', () => {});
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      if (req.url.includes('/status')) {
+        res.end(
+          JSON.stringify({
+            status: 'waiting_for_input',
+            phase: 'complete',
+            conversationStatus: 'waiting_for_user_input',
+            next: ['approval-respond'],
+            approvalRequired: {
+              type: 'live_protection',
+              grantId: 'grant-state',
+              summary: 'Publish content changes',
+              actions: [{ summary: 'Publish edited page' }],
+            },
+          }),
+        );
+        return;
+      }
+      if (req.url.includes('/design-directions')) {
+        res.end(JSON.stringify({ directions: [] }));
+        return;
+      }
+      if (req.url.includes('/ws-status')) {
+        res.end(JSON.stringify({ connected: false }));
+        return;
+      }
+      res.end(JSON.stringify({}));
+    });
+  });
+  const { result: approvalStateResult, json: approvalState } =
+    await runJsonAsync(['site-state', '--json'], {
+      milesHome: approvalStateHome,
+      env: { MILES_SERVER_URL: approvalStateMock.url },
+    });
+  assert(
+    approvalStateResult.status === 0,
+    'site-state --json should succeed while approval is pending',
+  );
+  assert(
+    approvalState.approvalRequired?.grantId === 'grant-state',
+    'site-state should expose the active approval grant',
+  );
+  assert(
+    approvalState.next.some((hint) => hint.includes('approval-respond')) &&
+      !approvalState.next.some((hint) => hint.startsWith('miles say')),
+    'site-state next[] should route approval through approval-respond, not say',
+  );
+
+  // approval-respond is an explicit grant response primitive. It cannot be
+  // shortened to automation-style --yes/--force flags.
+  const shortcutResult = run([
+    'approval-respond',
+    '--grant',
+    'grant-approval',
+    '--response',
+    'approved',
+    '--yes',
+  ]);
+  assert(
+    shortcutResult.status === 2,
+    'approval-respond should reject auto-approval shortcut flags',
+  );
+  assertIncludes(
+    shortcutResult.stderr,
+    'not allowed',
+    'approval-respond shortcut rejection should explain the guard',
+  );
+
+  const approvalRespondHome = makeTempDir();
+  writeFileSync(
+    join(approvalRespondHome, 'credentials.json'),
+    JSON.stringify({
+      activeSite: 'site-respond',
+      sites: {
+        'site-respond': {
+          siteToken: 'site-token',
+          conversationId: 'conversation-respond',
+          dashboardUrl: 'https://beta.bymiles.ai/sites/site-respond',
+        },
+      },
+    }),
+  );
+  const approvalRespondRequests = [];
+  const approvalRespondMock = await startMockServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => {
+      approvalRespondRequests.push({
+        method: req.method,
+        url: req.url,
+        body: body ? JSON.parse(body) : null,
+      });
+
+      if (req.url === '/api/v2/headless/capabilities') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            primitives: {
+              'approval-respond': { tier: 'plumbing', connection: 'none' },
+            },
+          }),
+        );
+        return;
+      }
+      if (
+        req.url ===
+        '/api/v2/headless/conversations/conversation-respond/approval-response'
+      ) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            conversationId: 'conversation-respond',
+            status: 'streaming',
+            sinceMessageId: 'assistant-approval',
+          }),
+        );
+        return;
+      }
+      if (req.url.includes('/wait')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            status: 'completed',
+            outcome: 'completed',
+            phase: 'complete',
+            milesMessage: 'Done.',
+          }),
+        );
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+  });
+  const { result: approvalRespondResult, json: approvalRespondJson } =
+    await runJsonAsync(
+      [
+        'approval-respond',
+        '--grant',
+        'grant-approval',
+        '--response',
+        'approved',
+        '--json',
+      ],
+      {
+        milesHome: approvalRespondHome,
+        env: { MILES_SERVER_URL: approvalRespondMock.url },
+      },
+    );
+  assert(
+    approvalRespondResult.status === 0,
+    `approval-respond should settle after posting the grant response\nstdout:\n${approvalRespondResult.stdout}\nstderr:\n${approvalRespondResult.stderr}`,
+  );
+  assert(
+    approvalRespondJson.outcome === 'completed',
+    'approval-respond --json should reuse the settled wait-job payload',
+  );
+  assert(
+    approvalRespondRequests.some(
+      (request) =>
+        request.method === 'POST' &&
+        request.url ===
+          '/api/v2/headless/conversations/conversation-respond/approval-response' &&
+        request.body?.grantId === 'grant-approval' &&
+        request.body?.response === 'approved',
+    ),
+    'approval-respond should post the exact grant id and explicit response',
+  );
+
   // cancel is gated on the capabilities handshake: a server without the
   // cancel primitive must produce exit 2, not a confusing 404.
   const legacyHome = makeTempDir();

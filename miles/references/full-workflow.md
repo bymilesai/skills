@@ -78,7 +78,7 @@ Evaluate visual hierarchy, tone match with the brief, layout quality, imagery, p
 
 ## Edits on the built site
 
-Send focused `say` requests directly; the CLI fails fast with exit 3 when an edit needs the dashboard — connect ([browser.md](browser.md)) and retry once. For straightforward visual edits skip long preflights: identify the target, apply, verify desktop and mobile. After `convert-theme`, finish with `export --type theme`.
+Send focused `say` requests directly; the CLI fails fast with exit 3 when an edit needs the dashboard — connect ([browser.md](browser.md)) and retry once. If the edit hits live protection, `approvalRequired` is returned and the protected work has not happened: ask the user, then use `approval-respond` only after explicit approval/refusal ([live-protection.md](live-protection.md)). For straightforward visual edits skip long preflights: identify the target, apply, verify desktop and mobile. After `convert-theme`, finish with `export --type theme`.
 
 ## Progress visibility
 
@@ -106,7 +106,7 @@ Done:
 
 ## Long-running command transport by host
 
-Signals worth filtering for: `Miles:` lines, `[phase: …]`, `[status: …]`, `[outcome: …]`, `[question: …]`, `[directions]`, `[site_ready: true]`, `[warning:`, `[error:`, `No credits`.
+Signals worth filtering for: `Miles:` lines, `[phase: …]`, `[status: …]`, `[outcome: …]`, `[approval_required]`, `[question: …]`, `[directions]`, `[site_ready: true]`, `[warning:`, `[error:`, `No credits`.
 
 **Codex**: run long commands normally with a 10-minute timeout — live stdout shows in its activity surface.
 
@@ -122,7 +122,7 @@ Each `wait-job` call returns within ~60s with either the settled JSON result or 
 ```bash
 log="${TMPDIR:-/tmp}/miles-$(date +%s)-build.log"
 "$MILES_CLI" build-site --design 2 2>&1 | tee "$log"
-tail -f "$log" | grep --line-buffered -E "Miles:|\[phase:|\[status:|\[outcome:|\[question:|\[directions\]|\[site_ready: true\]|\[warning:|\[error:|No credits|complete|failed"
+tail -f "$log" | grep --line-buffered -E "Miles:|\[phase:|\[status:|\[outcome:|\[approval_required\]|\[question:|\[directions\]|\[site_ready: true\]|\[warning:|\[error:|No credits|complete|failed"
 ```
 
 **Cursor / OpenCode**: use the native streaming job surface when it shows live stdout; otherwise the fire-and-poll pattern above, or background + temp-log, polling the log when no monitor tool exists.

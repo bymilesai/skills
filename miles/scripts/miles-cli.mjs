@@ -11,15 +11,18 @@ import {
   accessSync,
   chmodSync,
   constants,
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
   renameSync,
+  rmSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'fs';
 import { homedir } from 'os';
-import { basename, dirname, join, resolve } from 'path';
+import { basename, delimiter, dirname, join, resolve } from 'path';
 import { execFileSync } from 'child_process';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
@@ -59,6 +62,11 @@ const SCREENSHOTS_DIR = join(CREDENTIALS_DIR, 'screenshots');
 // Ignore in-flight markers older than this — no Miles run takes an hour.
 const ACTIVE_RUN_MAX_AGE_MS = 60 * 60 * 1000;
 const DEFAULT_SERVER_URL = process.env.MILES_SERVER_URL || 'https://api.bymiles.ai';
+const MILES_PLUGIN_MANIFEST_URL =
+  process.env.MILES_PLUGIN_MANIFEST_URL ||
+  'https://releases.bymiles.ai/plugin/updates.json';
+const MILES_PLUGIN_DOWNLOAD_URL = process.env.MILES_PLUGIN_DOWNLOAD_URL || '';
+const MILES_PLUGIN_SOURCE = process.env.MILES_PLUGIN_SOURCE || '';
 const REQUIRED_EGRESS = [
   '*.bymiles.ai',
   'start.bymiles.ai',
@@ -96,6 +104,8 @@ const JSON_COMMANDS = new Set([
   'status',
   'site-state',
   'site-attach',
+  'wordpress-detect',
+  'wordpress-setup',
   'design-directions',
   'screenshot',
   'upload-assets',
@@ -441,7 +451,14 @@ function parsePositiveSecondsFlag(args, flag) {
 
 function getDashboardUrl(site) {
   if (!site?.dashboardUrl) return null;
-  return `${site.dashboardUrl}?agent=true`;
+  try {
+    const parsed = new URL(site.dashboardUrl);
+    parsed.searchParams.set('agent', 'true');
+    return parsed.toString();
+  } catch {
+    const separator = site.dashboardUrl.includes('?') ? '&' : '?';
+    return `${site.dashboardUrl}${separator}agent=true`;
+  }
 }
 
 function getDashboardRedirectPath(dashboardUrl) {
@@ -484,6 +501,13 @@ async function getDashboardOpenUrl(creds, site, serverUrl) {
     return {
       dashboardUrl: null,
       url: null,
+      authenticated: false,
+    };
+  }
+  if (site.connection?.kind === 'local-wordpress') {
+    return {
+      dashboardUrl,
+      url: dashboardUrl,
       authenticated: false,
     };
   }
@@ -557,6 +581,8 @@ function getActiveSiteSummary(creds) {
     name: site.name || null,
     conversationId: site.conversationId || null,
     dashboardUrl: site.dashboardUrl || null,
+    siteUrl: site.siteUrl || null,
+    connection: site.connection || null,
   };
 }
 
@@ -3550,6 +3576,714 @@ async function cmdScreenshotLive(args, site) {
   }
 }
 
+function existingDirectory(path) {
+  try {
+    return existsSync(path) && statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function existingFile(path) {
+  try {
+    return existsSync(path) && statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function looksLikeWordPressRoot(dir) {
+  return (
+    existingFile(join(dir, 'wp-config.php')) &&
+    existingDirectory(join(dir, 'wp-content')) &&
+    existingDirectory(join(dir, 'wp-admin'))
+  );
+}
+
+function findWordPressRoot(startPath = process.cwd()) {
+  let current = resolve(expandHomePath(startPath));
+  if (existingFile(current)) current = dirname(current);
+
+  while (true) {
+    if (looksLikeWordPressRoot(current)) return current;
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+function executableOnPath(name) {
+  const pathEntries = (process.env.PATH || '').split(delimiter).filter(Boolean);
+  for (const entry of pathEntries) {
+    const candidate = join(entry, name);
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Keep looking.
+    }
+  }
+  return null;
+}
+
+function resolveWpCli(args = []) {
+  const explicit =
+    getOptionalCommandFlagValue(args, '--wp-cli') || process.env.WP_CLI;
+  if (explicit) {
+    const resolved = resolve(expandHomePath(explicit));
+    try {
+      accessSync(resolved, constants.X_OK);
+      return { available: true, path: resolved };
+    } catch {
+      return {
+        available: false,
+        path: resolved,
+        error: 'Configured WP-CLI path is not executable.',
+      };
+    }
+  }
+
+  const found = executableOnPath('wp');
+  return found
+    ? { available: true, path: found }
+    : { available: false, path: null, error: 'WP-CLI was not found on PATH.' };
+}
+
+function runWpCli(wpCli, root, args, options = {}) {
+  return execFileSync(wpCli, [`--path=${root}`, ...args], {
+    encoding: 'utf8',
+    input: options.input,
+    stdio: options.stdio || [options.input ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+    env: process.env,
+  }).trim();
+}
+
+function tryRunWpCli(wpCli, root, args) {
+  try {
+    return { ok: true, output: runWpCli(wpCli, root, args) };
+  } catch (err) {
+    return {
+      ok: false,
+      status: err.status ?? 1,
+      output: String(err.stdout || '').trim(),
+      error: String(err.stderr || err.message || '').trim(),
+    };
+  }
+}
+
+function getWpOption(wpCli, root, name) {
+  const result = tryRunWpCli(wpCli, root, ['option', 'get', name]);
+  return result.ok ? result.output : null;
+}
+
+function normalizeUrlNoSlash(value) {
+  if (!value) return value;
+  return String(value).replace(/\/+$/, '');
+}
+
+function localMilesDashboardUrl(siteUrl) {
+  const base = normalizeUrlNoSlash(siteUrl);
+  return base ? `${base}/wp-admin/admin.php?page=miles` : null;
+}
+
+function isPrivateIPv4(hostname) {
+  const parts = hostname.split('.').map((part) => Number(part));
+  if (
+    parts.length !== 4 ||
+    parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
+  ) {
+    return false;
+  }
+
+  const [first, second] = parts;
+  return (
+    first === 10 ||
+    first === 127 ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168)
+  );
+}
+
+function isLocalWordPressUrl(value) {
+  try {
+    const parsed = new URL(value);
+    const hostname = parsed.hostname.toLowerCase();
+    return (
+      (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+      (hostname === 'localhost' ||
+        hostname === '::1' ||
+        hostname === '[::1]' ||
+        hostname.endsWith('.localhost') ||
+        hostname.endsWith('.local') ||
+        hostname.endsWith('.test') ||
+        hostname.endsWith('.ddev.site') ||
+        hostname.endsWith('.lndo.site') ||
+        isPrivateIPv4(hostname))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isAutoConfigurableLocalWordPressUrl(value) {
+  try {
+    const parsed = new URL(value);
+    const hostname = parsed.hostname.toLowerCase();
+    return (
+      (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+      (hostname === 'localhost' ||
+        hostname === '127.0.0.1' ||
+        hostname === '::1' ||
+        hostname === '[::1]' ||
+        hostname.endsWith('.localhost') ||
+        hostname.endsWith('.test') ||
+        hostname.endsWith('.ddev.site') ||
+        hostname.endsWith('.lndo.site'))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function findLocalMilesPluginSource(startPath = process.cwd()) {
+  const candidates = [];
+  if (MILES_PLUGIN_SOURCE) {
+    candidates.push(resolve(expandHomePath(MILES_PLUGIN_SOURCE)));
+  }
+
+  let current = resolve(expandHomePath(startPath));
+  if (existingFile(current)) current = dirname(current);
+  while (true) {
+    candidates.push(join(current, 'packages', 'miles-plugin'));
+    candidates.push(join(current, 'miles-plugin'));
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  for (const candidate of candidates) {
+    if (
+      existingDirectory(candidate) &&
+      existingFile(join(candidate, 'miles.php'))
+    ) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function readMilesPluginVersionFromFile(pluginDir) {
+  try {
+    const contents = readFileSync(join(pluginDir, 'miles.php'), 'utf8');
+    return contents.match(/Version:\s*([^\n]+)/)?.[1]?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function copyMilesPluginSource(sourceDir, wordpressRoot) {
+  const pluginsDir = join(wordpressRoot, 'wp-content', 'plugins');
+  const targetDir = join(pluginsDir, 'miles');
+  mkdirSync(pluginsDir, { recursive: true });
+  rmSync(targetDir, { recursive: true, force: true });
+  cpSync(sourceDir, targetDir, {
+    recursive: true,
+    force: true,
+    filter: (src) => {
+      const name = basename(src);
+      return ![
+        '.git',
+        'node_modules',
+        'dist',
+        '.DS_Store',
+        '.wordpress-org',
+      ].includes(name);
+    },
+  });
+  return targetDir;
+}
+
+async function fetchJson(url) {
+  let response;
+  try {
+    response = await fetch(url);
+  } catch (err) {
+    throw new Error(`Could not fetch ${url}: ${err.message}`);
+  }
+  if (!response.ok) {
+    throw new Error(`Could not fetch ${url}: HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+async function getPluginDownloadUrl() {
+  if (MILES_PLUGIN_DOWNLOAD_URL) return MILES_PLUGIN_DOWNLOAD_URL;
+  const manifest = await fetchJson(MILES_PLUGIN_MANIFEST_URL);
+  return (
+    manifest.download_url ||
+    manifest.downloadUrl ||
+    manifest.zip_url ||
+    manifest.zipUrl ||
+    null
+  );
+}
+
+function detectWordPress(args = [], options = {}) {
+  const startPath =
+    getOptionalCommandFlagValue(args, '--path') ||
+    getOptionalCommandFlagValue(args, '--root') ||
+    process.cwd();
+  const active = options.active === true;
+  const root = findWordPressRoot(startPath);
+  const wpCli = resolveWpCli(args);
+  const pluginSource = findLocalMilesPluginSource(startPath);
+
+  if (!root) {
+    return {
+      found: false,
+      detectionMode: active ? 'active' : 'passive',
+      searchedFrom: resolve(expandHomePath(startPath)),
+      wpCli,
+      plugin: {
+        source: pluginSource,
+        sourceVersion: pluginSource
+          ? readMilesPluginVersionFromFile(pluginSource)
+          : null,
+      },
+      next: ['No local WordPress install detected; use `miles site-create`.'],
+    };
+  }
+
+  const pluginDir = join(root, 'wp-content', 'plugins', 'miles');
+  const detection = {
+    found: true,
+    detectionMode: active ? 'active' : 'passive',
+    root,
+    wpCli,
+    site: {
+      url: null,
+      name: null,
+      adminEmail: null,
+      wordpressVersion: null,
+      environment: null,
+      dashboardUrl: null,
+    },
+    plugin: {
+      installed: existingFile(join(pluginDir, 'miles.php')),
+      active: false,
+      version: readMilesPluginVersionFromFile(pluginDir),
+      source: pluginSource,
+      sourceVersion: pluginSource
+        ? readMilesPluginVersionFromFile(pluginSource)
+        : null,
+    },
+    next: [
+      'Ask the user whether to use Miles cloud, this local WordPress install, or a remote WordPress site.',
+    ],
+  };
+
+  if (active && wpCli.available) {
+    const coreInstalled = tryRunWpCli(wpCli.path, root, [
+      'core',
+      'is-installed',
+    ]);
+    detection.wpCli.coreInstalled = coreInstalled.ok;
+    if (!coreInstalled.ok) {
+      detection.wpCli.coreInstalledError =
+        coreInstalled.error || coreInstalled.output || 'WordPress is not installed.';
+    } else {
+      detection.site.url = normalizeUrlNoSlash(
+        getWpOption(wpCli.path, root, 'siteurl'),
+      );
+      detection.site.name = getWpOption(wpCli.path, root, 'blogname');
+      detection.site.adminEmail = getWpOption(wpCli.path, root, 'admin_email');
+      detection.site.wordpressVersion =
+        tryRunWpCli(wpCli.path, root, ['core', 'version']).output || null;
+      detection.site.environment =
+        tryRunWpCli(wpCli.path, root, [
+          'eval',
+          'echo wp_get_environment_type();',
+        ]).output || null;
+      detection.site.dashboardUrl = localMilesDashboardUrl(detection.site.url);
+      detection.plugin.installed =
+        tryRunWpCli(wpCli.path, root, ['plugin', 'is-installed', 'miles']).ok ||
+        detection.plugin.installed;
+      detection.plugin.active = tryRunWpCli(wpCli.path, root, [
+        'plugin',
+        'is-active',
+        'miles',
+      ]).ok;
+      detection.plugin.version =
+        tryRunWpCli(wpCli.path, root, [
+          'plugin',
+          'get',
+          'miles',
+          '--field=version',
+        ]).output ||
+        detection.plugin.version ||
+        null;
+    }
+  }
+
+  return detection;
+}
+
+async function cmdWordPressDetect(args = []) {
+  const detection = detectWordPress(args);
+  if (cliOptions.json) {
+    emitJson({ ok: true, localWordPress: detection });
+    return;
+  }
+
+  if (!detection.found) {
+    console.log('No local WordPress install detected. Use `miles site-create`.');
+    return;
+  }
+
+  console.log(`WordPress root: ${detection.root}`);
+  if (detection.site.url) console.log(`Site URL: ${detection.site.url}`);
+  console.log(
+    `WP-CLI: ${
+      detection.wpCli.available ? detection.wpCli.path : detection.wpCli.error
+    }`,
+  );
+  console.log(
+    `Miles plugin: ${
+      detection.plugin.active
+        ? 'active'
+        : detection.plugin.installed
+          ? 'installed'
+          : 'not installed'
+    }`,
+  );
+  console.log(
+    'Ask the user whether to use Miles cloud, this local WordPress install, or a remote WordPress site.',
+  );
+}
+
+async function ensureMilesPluginInstalled(detection, args = []) {
+  const actions = [];
+  if (!detection.wpCli.available) {
+    if (!detection.plugin.installed && detection.plugin.source) {
+      const targetDir = copyMilesPluginSource(
+        detection.plugin.source,
+        detection.root,
+      );
+      actions.push({
+        action: 'copied-plugin',
+        source: detection.plugin.source,
+        targetDir,
+      });
+      return {
+        ok: false,
+        actions,
+        reason:
+          'WP-CLI is not available, so the plugin was copied but could not be activated or connected automatically.',
+      };
+    }
+    return {
+      ok: false,
+      actions,
+      reason:
+        'WP-CLI is required to activate and connect the local plugin automatically.',
+    };
+  }
+
+  const wpCli = detection.wpCli.path;
+  if (!detection.plugin.installed) {
+    if (detection.plugin.source) {
+      const targetDir = copyMilesPluginSource(
+        detection.plugin.source,
+        detection.root,
+      );
+      actions.push({
+        action: 'copied-plugin',
+        source: detection.plugin.source,
+        targetDir,
+      });
+    } else {
+      const pluginUrl =
+        getOptionalCommandFlagValue(args, '--plugin-url') ||
+        (await getPluginDownloadUrl().catch(() => null));
+      if (!pluginUrl) {
+        return {
+          ok: false,
+          actions,
+          reason:
+            'No local Miles plugin source or plugin download URL was available.',
+        };
+      }
+      runWpCli(wpCli, detection.root, [
+        'plugin',
+        'install',
+        pluginUrl,
+        '--activate',
+        '--force',
+      ]);
+      actions.push({ action: 'installed-plugin', source: pluginUrl });
+      return { ok: true, actions };
+    }
+  }
+
+  const activate = tryRunWpCli(wpCli, detection.root, [
+    'plugin',
+    'activate',
+    'miles',
+  ]);
+  if (!activate.ok) {
+    return {
+      ok: false,
+      actions,
+      reason:
+        activate.error || activate.output || 'Failed to activate the Miles plugin.',
+    };
+  }
+  actions.push({ action: 'activated-plugin' });
+  return { ok: true, actions };
+}
+
+function wordpressApplicationPasswordsAvailable(detection) {
+  if (!detection.wpCli.available) return false;
+  const result = tryRunWpCli(detection.wpCli.path, detection.root, [
+    'eval',
+    'echo wp_is_application_passwords_available() ? "1" : "0";',
+  ]);
+  return result.ok && result.output.trim() === '1';
+}
+
+function ensureLocalApplicationPasswordsAvailable(detection) {
+  const actions = [];
+  if (wordpressApplicationPasswordsAvailable(detection)) {
+    return { ok: true, actions };
+  }
+
+  if (!isLocalWordPressUrl(detection.site.url)) {
+    return {
+      ok: false,
+      actions,
+      reason:
+        'WordPress application passwords are unavailable. Enable HTTPS or configure this WordPress install as a local environment before connecting Miles.',
+    };
+  }
+
+  if (!isAutoConfigurableLocalWordPressUrl(detection.site.url)) {
+    return {
+      ok: false,
+      actions,
+      reason:
+        'WordPress application passwords are unavailable. This site URL looks like a LAN, shared, or custom local host, so Miles will not change wp-config.php automatically. Configure WP_ENVIRONMENT_TYPE=local yourself if this is a safe local development install, then rerun setup.',
+    };
+  }
+
+  const configured = tryRunWpCli(detection.wpCli.path, detection.root, [
+    'config',
+    'set',
+    'WP_ENVIRONMENT_TYPE',
+    'local',
+    '--type=constant',
+  ]);
+  if (!configured.ok) {
+    return {
+      ok: false,
+      actions,
+      reason:
+        configured.error ||
+        configured.output ||
+        'Could not set WP_ENVIRONMENT_TYPE=local in wp-config.php.',
+    };
+  }
+  actions.push({ action: 'configured-local-environment' });
+
+  if (!wordpressApplicationPasswordsAvailable(detection)) {
+    return {
+      ok: false,
+      actions,
+      reason:
+        'WordPress application passwords are still unavailable after configuring WP_ENVIRONMENT_TYPE=local.',
+    };
+  }
+
+  return { ok: true, actions };
+}
+
+async function runMilesLocalSetup(detection, bootstrap, args = []) {
+  const credentialsJson = JSON.stringify({
+    siteId: bootstrap.siteId,
+    sharedSecret: bootstrap.sharedSecret,
+    serverUrl: bootstrap.serverUrl,
+    accountId: bootstrap.accountId,
+    accountEmail: bootstrap.accountEmail,
+  });
+
+  const wpArgs = [
+    'miles',
+    'local-setup',
+    '--credentials-stdin',
+    '--yes',
+    '--format=json',
+  ];
+  const adminUser = getOptionalCommandFlagValue(args, '--admin-user');
+  if (adminUser) wpArgs.push(`--admin-user=${adminUser}`);
+
+  const output = runWpCli(detection.wpCli.path, detection.root, wpArgs, {
+    input: credentialsJson,
+  });
+  return output ? JSON.parse(output) : { success: true };
+}
+
+async function cmdWordPressSetup(args = []) {
+  const mode = getOptionalCommandFlagValue(args, '--use');
+  if (mode === 'cloud') {
+    const payload = {
+      ok: true,
+      mode: 'cloud',
+      next: ['Use `miles site-create "<description>"` to create a Miles cloud site.'],
+    };
+    if (cliOptions.json) emitJson(payload);
+    else console.log(payload.next[0]);
+    return;
+  }
+  if (mode !== 'local') {
+    exitWithError(
+      'Usage: wordpress-setup requires an explicit --use local or --use cloud choice.',
+      EXIT_PRECONDITION,
+    );
+  }
+
+  const detection = detectWordPress(args, { active: true });
+  if (!detection.found) {
+    const payload = {
+      ok: true,
+      mode: 'cloud',
+      localWordPress: detection,
+      next: ['No local WordPress install detected; use `miles site-create`.'],
+    };
+    if (cliOptions.json) emitJson(payload);
+    else console.log(payload.next[0]);
+    return;
+  }
+
+  const creds = loadCredentials();
+  if (!creds.apiKey) {
+    exitWithError(
+      'Not logged in. Run `miles auth login` to get a device login code.',
+      EXIT_PRECONDITION,
+    );
+  }
+
+  const installResult = await ensureMilesPluginInstalled(detection, args);
+  if (!installResult.ok) {
+    const pluginUrl =
+      getOptionalCommandFlagValue(args, '--plugin-url') ||
+      MILES_PLUGIN_DOWNLOAD_URL ||
+      MILES_PLUGIN_MANIFEST_URL;
+    const payload = {
+      ok: false,
+      mode: 'local',
+      localWordPress: detection,
+      actions: installResult.actions,
+      reason: installResult.reason,
+      pluginUrl,
+      next: [
+        'Install and activate the Miles plugin in this WordPress admin, or install WP-CLI and rerun `miles wordpress-setup --use local --json`.',
+      ],
+    };
+    if (cliOptions.json) emitJson(payload);
+    else {
+      console.log(installResult.reason);
+      console.log(`Plugin link: ${pluginUrl}`);
+    }
+    process.exit(EXIT_PRECONDITION);
+  }
+
+  let refreshed = detectWordPress(args, { active: true });
+  const appPasswordResult = ensureLocalApplicationPasswordsAvailable(refreshed);
+  if (!appPasswordResult.ok) {
+    const payload = {
+      ok: false,
+      mode: 'local',
+      localWordPress: refreshed,
+      actions: [...installResult.actions, ...appPasswordResult.actions],
+      reason: appPasswordResult.reason,
+      next: [
+        'Enable WordPress application passwords for this local install, then rerun `miles wordpress-setup --use local --json`.',
+      ],
+    };
+    if (cliOptions.json) emitJson(payload);
+    else console.log(appPasswordResult.reason);
+    process.exit(EXIT_PRECONDITION);
+  }
+
+  refreshed = detectWordPress(args, { active: true });
+  const siteUrl = refreshed.site.url;
+  if (!siteUrl) {
+    exitWithError(
+      'Could not read the local WordPress site URL with WP-CLI.',
+      EXIT_PRECONDITION,
+    );
+  }
+
+  const bootstrap = await apiRequest(
+    'POST',
+    '/api/v2/headless/wordpress-sites/bootstrap',
+    {
+      auth: creds.apiKey,
+      serverUrl: DEFAULT_SERVER_URL,
+      body: {
+        siteUrl,
+        siteName: refreshed.site.name || undefined,
+        adminEmail: refreshed.site.adminEmail || undefined,
+        wordpressVersion: refreshed.site.wordpressVersion || undefined,
+        pluginVersion: refreshed.plugin.version || undefined,
+        environment: refreshed.site.environment || 'local',
+        localDashboardUrl:
+          refreshed.site.dashboardUrl || localMilesDashboardUrl(siteUrl),
+      },
+    },
+  );
+
+  const setupResult = await runMilesLocalSetup(refreshed, bootstrap, args);
+
+  if (!creds.sites) creds.sites = {};
+  creds.sites[bootstrap.siteId] = {
+    siteToken: bootstrap.siteToken,
+    name: bootstrap.siteName || refreshed.site.name || siteUrl,
+    conversationId: null,
+    dashboardUrl:
+      bootstrap.localDashboardUrl ||
+      refreshed.site.dashboardUrl ||
+      localMilesDashboardUrl(siteUrl),
+    siteUrl,
+    cloudDashboardUrl: bootstrap.dashboardUrl,
+    localWordPressRoot: refreshed.root,
+    connection: { kind: 'local-wordpress' },
+  };
+  creds.activeSite = bootstrap.siteId;
+  saveCredentials(creds);
+
+  const payload = {
+    ok: true,
+    mode: 'local',
+    siteId: bootstrap.siteId,
+    siteUrl,
+    dashboardUrl: creds.sites[bootstrap.siteId].dashboardUrl,
+    cloudDashboardUrl: bootstrap.dashboardUrl,
+    relinked: bootstrap.relinked,
+    actions: [...installResult.actions, ...appPasswordResult.actions],
+    setup: setupResult,
+    activeSite: getActiveSiteSummary(creds),
+    next: ['Run `miles connect-browser --open` to open the local Miles admin page.'],
+  };
+
+  if (cliOptions.json) {
+    emitJson(payload);
+    return;
+  }
+
+  console.log(`Connected local WordPress site: ${siteUrl}`);
+  console.log(`Miles admin: ${payload.dashboardUrl}`);
+}
+
 async function cmdSites() {
   noteActiveRunIfAny();
   const creds = loadCredentials();
@@ -3684,7 +4418,7 @@ async function cmdConnectBrowser(args = []) {
       dashboardUrl: dashboard.dashboardUrl,
       authenticated: dashboard.authenticated,
       connected,
-      connection: { kind: 'browser-dashboard' },
+      connection: site.connection || { kind: 'browser-dashboard' },
       activeSite: getActiveSiteSummary(creds),
     };
     if (connectionStatusError) {
@@ -4619,6 +5353,8 @@ const commands = {
   'approval-respond': cmdApprovalRespond,
   'site-state': cmdSiteState,
   'site-attach': cmdSiteAttach,
+  'wordpress-detect': cmdWordPressDetect,
+  'wordpress-setup': cmdWordPressSetup,
   screenshot: cmdScreenshot,
   'upload-assets': cmdUploadAssets,
   export: cmdExport,
@@ -4672,6 +5408,9 @@ Sites:
                     [--attach <file>]     HEADLESS  Create site + conversation
   miles site-attach <siteId> [--duplicate]
                                           HEADLESS  Resume any owned site
+  miles wordpress-detect [--path <dir>]   HEADLESS  Detect local WordPress
+  miles wordpress-setup --use local       HEADLESS  Connect local WordPress
+                    [--path <dir>]                  when user chooses it
   miles site-state [--full] [--json]      HEADLESS  Phase, directions, next moves
                                                     (--full: brief, plan, memory)
   miles history [--limit <n>] [--offset <n>]

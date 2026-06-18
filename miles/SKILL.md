@@ -50,6 +50,8 @@ This is the complete v0 contract. Do not invent other commands. HEADLESS = works
 | `miles undo` | HEADLESS | Revert the last turn: site + chat together, one level | [undo.md](references/undo.md) |
 | `miles site-state [--full] --json` | HEADLESS | Phase, directions, connection, site plan, suggested next moves; `--full` adds brief text, direction detail, session memory | [site-state.md](references/site-state.md) |
 | `miles site-attach <siteId> [--duplicate]` | HEADLESS | Resume any owned site; fork before risky changes | [site-attach.md](references/site-attach.md) |
+| `miles wordpress-detect --json` | HEADLESS | Detect a local WordPress install in/above the current folder | This file |
+| `miles wordpress-setup --use local --json` | HEADLESS | Install/activate/connect Miles on a chosen local WordPress install | This file |
 | `miles site-pages [path]` | HEADLESS | List built-site files, or fetch one file's content | [site-pages.md](references/site-pages.md) |
 | `miles history [--limit <n>] [--offset <n>]` | HEADLESS | Paginated conversation transcript, newest turns by default | [history.md](references/history.md) |
 | `miles screenshot <preview-url> [--full-page]` | HEADLESS | Capture any preview to a local JPEG | [screenshot.md](references/screenshot.md) |
@@ -86,6 +88,28 @@ Everything up to and including the built HTML site is headless: discovery, brief
 `connect-browser` is the single, explicit, queryable gate — never a mid-command surprise. Commands that need it fail fast with exit 3; you connect and retry once. Do not pre-emptively open the dashboard for headless work; do open it when the user wants to watch design generation or builds live (it is the best progress surface). Per-host browser tool mapping and connection recovery: [browser.md](references/browser.md).
 
 Live-protection approvals are a separate safety gate from browser connection. When `wait-job`, `status`, or `site-state` returns `approvalRequired`, stop and ask the user to approve or decline that specific protected change. **Never answer it with `say`, and never infer approval from the original task, silence, "continue", or a broad yes.** Only after the latest user message explicitly approves or declines the specific pending change may you run `miles approval-respond --grant <id> --response approved|declined`. Locking or unlocking Miles itself is not available through this skill; tell the user to use the Miles app control. Details: [live-protection.md](references/live-protection.md).
+
+## WordPress Site Choice
+
+When the user wants to use WordPress, first decide the WordPress target with the user. The safe default is Miles cloud unless the user explicitly chooses a local or remote WordPress site.
+
+You may run the passive local shape check before asking:
+
+```bash
+"$MILES_CLI" wordpress-detect --json
+```
+
+This command must be treated as passive only: it can inspect filenames and report whether the current folder looks like WordPress, but it must not execute WordPress, WP-CLI, PHP, plugins, themes, or database-backed checks. If `localWordPress.found` is `false`, continue with the normal cloud flow (`site-create`). If it is `true`, ask the user one direct question: use Miles cloud, this local WordPress install, or a remote WordPress site? Do not assume local just because it was detected.
+
+When the user chooses local, run:
+
+```bash
+"$MILES_CLI" wordpress-setup --use local --json
+```
+
+The setup command is the explicit local-consent boundary. It may run WP-CLI in the selected folder, copy a local Miles plugin source into `wp-content/plugins/miles`, activate it with WP-CLI, configure `WP_ENVIRONMENT_TYPE=local` for clearly local/dev URLs when application passwords need it, ask the Miles API for local-site credentials, hand those credentials to `wp miles local-setup`, and save the local WordPress admin page as the active Miles surface. If WP-CLI is missing, it may copy the plugin files but must ask the user to activate/connect in WordPress admin or install WP-CLI before retrying. Do not write plugin options or secrets yourself.
+
+For a WordPress site on a remote domain, do not try to install or bootstrap it from the filesystem. Provide the Miles plugin link from `wordpress-setup` output or the release manifest, ask the user to install it manually, and use the plugin's pairing flow after it is installed.
 
 ## Pick Your Entry Point
 

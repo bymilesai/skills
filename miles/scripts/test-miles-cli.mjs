@@ -312,6 +312,16 @@ try {
   );
   assertIncludes(
     helpResult.stdout,
+    'miles wordpress-detect [--path <dir>]',
+    'help should document local WordPress detection',
+  );
+  assertIncludes(
+    helpResult.stdout,
+    'miles wordpress-setup --use local',
+    'help should document local WordPress setup',
+  );
+  assertIncludes(
+    helpResult.stdout,
     'miles cancel',
     'help should document turn cancellation',
   );
@@ -319,6 +329,149 @@ try {
     helpResult.stdout,
     'Exit codes: 0 ok | 1 failed/aborted | 2 precondition | 3 need connection',
     'help should document the shared exit-code grammar',
+  );
+
+  const missingWpCli = join(makeTempDir(), 'missing-wp');
+  const noWordPressDir = makeTempDir();
+  const noWordPressDetect = runJson([
+    'wordpress-detect',
+    '--json',
+    '--path',
+    noWordPressDir,
+    '--wp-cli',
+    missingWpCli,
+  ]);
+  assert(
+    noWordPressDetect.result.status === 0,
+    'wordpress-detect should succeed when no local WordPress install exists',
+  );
+  assert(
+    noWordPressDetect.json.localWordPress.found === false,
+    'wordpress-detect should report found false outside WordPress',
+  );
+  assert(
+    noWordPressDetect.json.localWordPress.wpCli.available === false,
+    'wordpress-detect should report unavailable configured WP-CLI',
+  );
+
+  const noWordPressSetup = runJson([
+    'wordpress-setup',
+    '--use',
+    'local',
+    '--json',
+    '--path',
+    noWordPressDir,
+    '--wp-cli',
+    missingWpCli,
+  ]);
+  assert(
+    noWordPressSetup.result.status === 0,
+    'wordpress-setup should fall back to cloud guidance without requiring auth when no WordPress install is present',
+  );
+  assert(
+    noWordPressSetup.json.mode === 'cloud',
+    'wordpress-setup no-WordPress fallback should use cloud mode',
+  );
+
+  const fakeWpRoot = makeTempDir();
+  mkdirSync(join(fakeWpRoot, 'wp-admin'), { recursive: true });
+  mkdirSync(join(fakeWpRoot, 'wp-content', 'themes', 'demo'), {
+    recursive: true,
+  });
+  writeFileSync(join(fakeWpRoot, 'wp-config.php'), "<?php\n");
+  const fakeWpDetect = runJson([
+    'wordpress-detect',
+    '--json',
+    '--path',
+    join(fakeWpRoot, 'wp-content', 'themes', 'demo'),
+    '--wp-cli',
+    missingWpCli,
+  ]);
+  assert(
+    fakeWpDetect.result.status === 0,
+    'wordpress-detect should succeed inside a WordPress tree',
+  );
+  assert(
+    fakeWpDetect.json.localWordPress.found === true &&
+      fakeWpDetect.json.localWordPress.root === fakeWpRoot,
+    'wordpress-detect should walk up to the WordPress root',
+  );
+  assert(
+    fakeWpDetect.json.localWordPress.next.some((item) =>
+      item.includes('Ask the user'),
+    ),
+    'wordpress-detect should remind agents to ask which WordPress target to use',
+  );
+  assert(
+    fakeWpDetect.json.localWordPress.detectionMode === 'passive',
+    'wordpress-detect should report passive detection mode',
+  );
+
+  const executableWpCliDir = makeTempDir();
+  const executableWpCli = join(executableWpCliDir, 'wp');
+  const wpCliMarker = join(executableWpCliDir, 'executed');
+  writeFileSync(
+    executableWpCli,
+    `#!/bin/sh\nprintf executed > "${wpCliMarker}"\nexit 1\n`,
+    { mode: 0o755 },
+  );
+  const passiveDetectWithExecutableWpCli = runJson([
+    'wordpress-detect',
+    '--json',
+    '--path',
+    fakeWpRoot,
+    '--wp-cli',
+    executableWpCli,
+  ]);
+  assert(
+    passiveDetectWithExecutableWpCli.result.status === 0,
+    'wordpress-detect should succeed without executing configured WP-CLI',
+  );
+  assert(
+    !existsSync(wpCliMarker),
+    'wordpress-detect must not execute WP-CLI before user chooses local setup',
+  );
+  assert(
+    passiveDetectWithExecutableWpCli.json.localWordPress.site.url === null,
+    'passive wordpress-detect should not read database-backed site details',
+  );
+
+  const fakePluginSource = makeTempDir();
+  writeFileSync(
+    join(fakePluginSource, 'miles.php'),
+    "<?php\n/*\nPlugin Name: Miles\nVersion: 9.9.9-test\n*/\n",
+  );
+  const localCopyHome = makeTempDir();
+  mkdirSync(localCopyHome, { recursive: true });
+  writeFileSync(
+    join(localCopyHome, 'credentials.json'),
+    JSON.stringify({ apiKey: 'mk_live_test_key' }),
+    { mode: 0o600 },
+  );
+  const localCopySetup = runJson([
+    'wordpress-setup',
+    '--use',
+    'local',
+    '--json',
+    '--path',
+    fakeWpRoot,
+    '--wp-cli',
+    missingWpCli,
+  ], {
+    milesHome: localCopyHome,
+    env: { MILES_PLUGIN_SOURCE: fakePluginSource },
+  });
+  assert(
+    localCopySetup.result.status === 2,
+    'wordpress-setup should stop after copying when WP-CLI is unavailable',
+  );
+  assert(
+    localCopySetup.json.actions.some((action) => action.action === 'copied-plugin'),
+    'wordpress-setup should report the copied plugin action',
+  );
+  assert(
+    existsSync(join(fakeWpRoot, 'wp-content', 'plugins', 'miles', 'miles.php')),
+    'wordpress-setup should copy local plugin files into wp-content/plugins/miles',
   );
 
   const doctorHome = makeTempDir();

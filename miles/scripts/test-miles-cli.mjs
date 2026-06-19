@@ -473,6 +473,170 @@ try {
     existsSync(join(fakeWpRoot, 'wp-content', 'plugins', 'miles', 'miles.php')),
     'wordpress-setup should copy local plugin files into wp-content/plugins/miles',
   );
+  assert(
+    localCopySetup.json.actions.some(
+      (action) => action.action === 'copied-plugin' && !action.replaced,
+    ),
+    'wordpress-setup should report when plugin copy did not replace an existing directory',
+  );
+
+  const stalePluginRoot = makeTempDir();
+  mkdirSync(join(stalePluginRoot, 'wp-admin'), { recursive: true });
+  mkdirSync(join(stalePluginRoot, 'wp-content', 'plugins', 'miles'), {
+    recursive: true,
+  });
+  writeFileSync(join(stalePluginRoot, 'wp-config.php'), "<?php\n");
+  writeFileSync(
+    join(stalePluginRoot, 'wp-content', 'plugins', 'miles', 'local-note.txt'),
+    'stale local plugin directory',
+  );
+  const localReplaceSetup = runJson([
+    'wordpress-setup',
+    '--use',
+    'local',
+    '--json',
+    '--path',
+    stalePluginRoot,
+    '--wp-cli',
+    missingWpCli,
+  ], {
+    milesHome: localCopyHome,
+    env: { MILES_PLUGIN_SOURCE: fakePluginSource },
+  });
+  assert(
+    localReplaceSetup.json.actions.some(
+      (action) => action.action === 'copied-plugin' && action.replaced === true,
+    ),
+    'wordpress-setup should report when plugin copy replaces an existing directory',
+  );
+
+  const fakeFullSetupWpCliDir = makeTempDir();
+  const fakeFullSetupWpCli = join(fakeFullSetupWpCliDir, 'wp');
+  const fakeFullSetupWpLog = join(fakeFullSetupWpCliDir, 'wp.log');
+  writeFileSync(
+    fakeFullSetupWpCli,
+    `#!/bin/sh
+path=""
+if [ "$#" -gt 0 ]; then
+  case "$1" in
+    --path=*) path="\${1#--path=}" ; shift ;;
+  esac
+fi
+cmd="$*"
+printf '%s\\n' "$cmd" >> "$WP_LOG"
+case "$cmd" in
+  "core is-installed") exit 0 ;;
+  "option get siteurl") printf '%s\\n' 'http://localhost:9988' ;;
+  "option get blogname") printf '%s\\n' 'Local Test Site' ;;
+  "option get admin_email") printf '%s\\n' 'admin@example.test' ;;
+  "core version") printf '%s\\n' '6.5.0' ;;
+  "eval echo wp_get_environment_type();") printf '%s\\n' 'local' ;;
+  "plugin is-installed miles")
+    test -f "$path/wp-content/plugins/miles/miles.php"
+    ;;
+  "plugin is-active miles")
+    test -f "$path/wp-content/plugins/miles/miles.php"
+    ;;
+  "plugin get miles --field=version") printf '%s\\n' '9.9.9-test' ;;
+  "plugin activate miles") exit 0 ;;
+  "eval echo wp_is_application_passwords_available() ? \\"1\\" : \\"0\\";") printf '%s\\n' '1' ;;
+  "miles local-setup --credentials-stdin --yes --format=json")
+    printf '%s\\n' 'notice sharedSecret=should-not-leak'
+    printf '%s\\n' '{"success":true,"sharedSecret":"should-not-leak","message":"Connected with ?token=should-not-leak"}'
+    ;;
+  *) printf 'unexpected wp command: %s\\n' "$cmd" >&2; exit 1 ;;
+esac
+`,
+    { mode: 0o755 },
+  );
+  const fullSetupHome = makeTempDir();
+  writeFileSync(
+    join(fullSetupHome, 'credentials.json'),
+    JSON.stringify({ apiKey: 'mk_live_test_key' }),
+    { mode: 0o600 },
+  );
+  let fullSetupBootstrapPayload = null;
+  const fullSetupMock = await startMockServer((req, res) => {
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => {
+      if (
+        req.method === 'POST' &&
+        req.url === '/api/v2/headless/wordpress-sites/bootstrap'
+      ) {
+        fullSetupBootstrapPayload = JSON.parse(body || '{}');
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            siteId: 'local-site-1',
+            siteToken: 'site-token-1',
+            sharedSecret: 'server-secret-1',
+            serverUrl: fullSetupMock.url,
+            accountId: 'account-1',
+            accountEmail: 'user@example.test',
+            siteName: 'Local Test Site',
+            dashboardUrl: 'https://example.invalid/sites/local-site-1',
+            localDashboardUrl:
+              'http://localhost:9988/wp-admin/admin.php?page=miles',
+            relinked: false,
+          }),
+        );
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+  });
+  const fullSetupResult = await runAsync([
+    'wordpress-setup',
+    '--use',
+    'local',
+    '--json',
+    '--path',
+    fakeWpRoot,
+    '--wp-cli',
+    fakeFullSetupWpCli,
+  ], {
+    milesHome: fullSetupHome,
+    timeout: 30000,
+    env: {
+      MILES_PLUGIN_SOURCE: fakePluginSource,
+      MILES_SERVER_URL: fullSetupMock.url,
+      WP_LOG: fakeFullSetupWpLog,
+    },
+  });
+  let fullSetupJson;
+  try {
+    fullSetupJson = JSON.parse(fullSetupResult.stdout);
+  } catch (err) {
+    throw new Error(
+      `Expected JSON stdout for full wordpress-setup: ${err.message}\nstatus: ${fullSetupResult.status}\nsignal: ${fullSetupResult.signal}\nerror: ${fullSetupResult.error?.message ?? 'none'}\nstdout:\n${fullSetupResult.stdout}\nstderr:\n${fullSetupResult.stderr}\nwp log:\n${
+        existsSync(fakeFullSetupWpLog)
+          ? readFileSync(fakeFullSetupWpLog, 'utf8')
+          : '<missing>'
+      }`,
+    );
+  }
+  assert(fullSetupResult.status === 0, 'wordpress-setup full local setup should succeed');
+  assert(
+    fullSetupBootstrapPayload?.siteUrl === 'http://localhost:9988',
+    'wordpress bootstrap should use the local site URL from WP-CLI',
+  );
+  assert(
+    fullSetupJson.setup.success === true,
+    'wordpress-setup should preserve sanitized setup success',
+  );
+  assert(
+    fullSetupJson.setup.message === 'Connected with ?token=[redacted]',
+    'wordpress-setup should sanitize plugin setup messages before JSON output',
+  );
+  assert(
+    !JSON.stringify(fullSetupJson).includes('should-not-leak'),
+    'wordpress-setup JSON output must not include plugin-returned secrets',
+  );
 
   const doctorHome = makeTempDir();
   const { result: doctorResult, json: doctor } = runJson(['doctor', '--json'], {

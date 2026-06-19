@@ -50,6 +50,7 @@ The JSON always includes the private `deviceCode` — treat the whole response a
 
 Miles may fail closed when an account key, site token, plugin pairing, or site principal is expired, revoked, suspended, or needs repair. Treat those as safety decisions, not transient transport errors.
 
+- Branch on structured JSON fields when the CLI provides them (`status`, `code`, `repair`, or equivalent recovery metadata). If a failure only has plain error text, surface it to the user instead of guessing, looping, or editing credentials directly.
 - Account auth failures: run `miles auth status`. If the account is logged out or the API key was revoked, start a fresh device-code login. Do not reuse copied API keys, ask the user to paste secrets into chat, or clear credentials unless the CLI explicitly tells you to re-authenticate.
 - Site-token failures on a known Miles site: run `miles sites --json` if needed, then `miles site-attach <siteId>` to mint a fresh site token before retrying once.
 - Plugin/site repair failures: if the error says repair is available, tell the user Miles needs the WordPress plugin or site connection repaired in the Miles or WordPress UI, then retry only after the repair is complete. If the error says repair is not available, stop and report that this connection cannot be repaired automatically.

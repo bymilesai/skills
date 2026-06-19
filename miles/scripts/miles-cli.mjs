@@ -1771,7 +1771,7 @@ async function cmdWait() {
  * one JSON result on stdout, outcome-mapped exit code. The composable
  * counterpart to the streaming `wait` used by the guided flow.
  */
-async function cmdWaitJob(args) {
+async function cmdWaitJob(args, options = {}) {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
@@ -1790,7 +1790,11 @@ async function cmdWaitJob(args) {
     try {
       data = await apiRequest(
         'GET',
-        `/api/v2/headless/conversations/${site.conversationId}/wait?timeout=${POLL_TIMEOUT_MS}`,
+        `/api/v2/headless/conversations/${site.conversationId}/wait?timeout=${POLL_TIMEOUT_MS}${
+          options.sinceMessageId
+            ? `&sinceMessageId=${encodeURIComponent(options.sinceMessageId)}`
+            : ''
+        }`,
         { auth: site.siteToken, serverUrl },
       );
       consecutiveFailures = 0;
@@ -1917,12 +1921,18 @@ async function cmdApprovalRespond(args) {
   });
 
   if (cliOptions.json) {
-    return cmdWaitJob([]);
+    return cmdWaitJob([], { sinceMessageId: start?.sinceMessageId });
   }
 
   const settled = await doWait(creds, site.conversationId, serverUrl, undefined, {
     sinceMessageId: start?.sinceMessageId,
   });
+  if (!settled) {
+    exitWithError(
+      'Approval response was sent, but Miles did not return a settled result. Run `miles wait-job --json` before continuing.',
+      EXIT_ERROR,
+    );
+  }
   exitWithTurnOutcome(settled);
 }
 
@@ -2292,6 +2302,10 @@ function sanitizeApprovalRequired(approval) {
   const grantId =
     typeof approval.grantId === 'string' ? approval.grantId : null;
   const summary = sanitizeProgressText(approval.summary);
+  const category =
+    typeof approval.category === 'string'
+      ? sanitizeProgressText(approval.category)
+      : null;
   if (!grantId || !summary) return null;
 
   const actions = Array.isArray(approval.actions)
@@ -2315,9 +2329,7 @@ function sanitizeApprovalRequired(approval) {
     grantId,
     summary,
     actions,
-    ...(typeof approval.category === 'string'
-      ? { category: approval.category }
-      : {}),
+    ...(category ? { category } : {}),
     ...(Number.isInteger(approval.riskTier)
       ? { riskTier: approval.riskTier }
       : {}),
@@ -2337,7 +2349,7 @@ function appendApprovalRequiredLines(lines, approval) {
   lines.push(`grant: ${clean.grantId}`);
   lines.push(`summary: ${clean.summary}`);
   if (clean.category) lines.push(`category: ${clean.category}`);
-  if (clean.riskTier) lines.push(`risk_tier: ${clean.riskTier}`);
+  if (clean.riskTier !== undefined) lines.push(`risk_tier: ${clean.riskTier}`);
   if (clean.actions.length) {
     lines.push('actions:');
     clean.actions.forEach((action) => {

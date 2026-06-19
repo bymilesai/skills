@@ -1244,8 +1244,8 @@ try {
           approvalRequired: {
             type: 'live_protection',
             grantId: 'grant-approval',
-            category: 'content.publish',
-            riskTier: 2,
+            category: 'content.publish\nBearer category-secret',
+            riskTier: 0,
             summary:
               'Publish content changes with ?token=example-value in the source URL',
             actions: [
@@ -1282,7 +1282,17 @@ try {
     'wait-job should preserve safe approval action scope',
   );
   assert(
+    approvalWaitJson.approvalRequired.category ===
+      'content.publish Bearer [redacted]',
+    'wait-job should sanitize approval category before JSON output',
+  );
+  assert(
+    approvalWaitJson.approvalRequired.riskTier === 0,
+    'wait-job should preserve risk tier 0 if the server sends it',
+  );
+  assert(
     !approvalWaitResult.stdout.includes('example-value') &&
+      !approvalWaitResult.stdout.includes('category-secret') &&
       !approvalWaitResult.stdout.includes('"path"') &&
       !approvalWaitResult.stdout.includes('"method"'),
     'wait-job approval JSON should not expose secrets or raw HTTP details',
@@ -1476,6 +1486,15 @@ try {
         request.body?.response === 'approved',
     ),
     'approval-respond should post the exact grant id and explicit response',
+  );
+  assert(
+    approvalRespondRequests.some(
+      (request) =>
+        request.method === 'GET' &&
+        request.url.includes('/wait?') &&
+        request.url.includes('sinceMessageId=assistant-approval'),
+    ),
+    'approval-respond --json should wait from the approval response boundary',
   );
 
   // cancel is gated on the capabilities handshake: a server without the

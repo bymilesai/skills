@@ -3792,8 +3792,9 @@ function copyMilesPluginSource(sourceDir, wordpressRoot) {
     force: true,
     filter: (src) => {
       const name = basename(src);
+      if (name === '.env' || name.startsWith('.env.')) return false;
+      if (name === '.git' || name.startsWith('.git')) return false;
       return ![
-        '.git',
         'node_modules',
         'dist',
         '.DS_Store',
@@ -4174,6 +4175,23 @@ function sanitizeLocalSetupResult(setup) {
   return result;
 }
 
+function sanitizeLocalSetupFailure(err) {
+  const raw =
+    typeof err?.stderr === 'string' && err.stderr.trim()
+      ? err.stderr
+      : err?.message || 'Unknown setup error.';
+  const scrubbed = String(raw)
+    .replace(
+      /\b(sharedSecret|shared_secret|appPassword|applicationPassword|password|token|secret)=\S+/gi,
+      '$1=[redacted]',
+    )
+    .replace(
+      /\b(sharedSecret|shared_secret|appPassword|applicationPassword|password|token|secret):\s*\S+/gi,
+      '$1: [redacted]',
+    );
+  return sanitizeProgressText(scrubbed) || 'Unknown setup error.';
+}
+
 async function cmdWordPressSetup(args = []) {
   const mode = getOptionalCommandFlagValue(args, '--use');
   if (mode === 'cloud') {
@@ -4293,7 +4311,7 @@ async function cmdWordPressSetup(args = []) {
     setupResult = await runMilesLocalSetup(refreshed, bootstrap, args);
   } catch (err) {
     throw new Error(
-      `Local WordPress plugin setup failed after Miles created site ${bootstrap.siteId}. Rerun \`miles wordpress-setup --use local --json\` to relink and finish setup. ${err.message}`,
+      `Local WordPress plugin setup failed after Miles created site ${bootstrap.siteId}. Rerun \`miles wordpress-setup --use local --json\` to relink and finish setup. ${sanitizeLocalSetupFailure(err)}`,
     );
   }
 

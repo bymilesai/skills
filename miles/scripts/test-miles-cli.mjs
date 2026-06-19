@@ -441,6 +441,8 @@ try {
     join(fakePluginSource, 'miles.php'),
     "<?php\n/*\nPlugin Name: Miles\nVersion: 9.9.9-test\n*/\n",
   );
+  writeFileSync(join(fakePluginSource, '.env.local'), 'SHOULD_NOT_COPY=1\n');
+  writeFileSync(join(fakePluginSource, '.gitignore'), "*.log\n");
   const localCopyHome = makeTempDir();
   mkdirSync(localCopyHome, { recursive: true });
   writeFileSync(
@@ -472,6 +474,15 @@ try {
   assert(
     existsSync(join(fakeWpRoot, 'wp-content', 'plugins', 'miles', 'miles.php')),
     'wordpress-setup should copy local plugin files into wp-content/plugins/miles',
+  );
+  assert(
+    !existsSync(
+      join(fakeWpRoot, 'wp-content', 'plugins', 'miles', '.env.local'),
+    ) &&
+      !existsSync(
+        join(fakeWpRoot, 'wp-content', 'plugins', 'miles', '.gitignore'),
+      ),
+    'wordpress-setup should not copy env or git metadata files into the plugin directory',
   );
   assert(
     localCopySetup.json.actions.some(
@@ -541,6 +552,10 @@ case "$cmd" in
   "plugin activate miles") exit 0 ;;
   "eval echo wp_is_application_passwords_available() ? \\"1\\" : \\"0\\";") printf '%s\\n' '1' ;;
   "miles local-setup --credentials-stdin --yes --format=json")
+    if [ "$FAIL_LOCAL_SETUP" = "1" ]; then
+      printf '%s\\n' 'sharedSecret=should-not-leak' >&2
+      exit 1
+    fi
     printf '%s\\n' 'notice sharedSecret=should-not-leak'
     printf '%s\\n' '{"success":true,"sharedSecret":"should-not-leak","message":"Connected with ?token=should-not-leak"}'
     ;;
@@ -636,6 +651,46 @@ esac
   assert(
     !JSON.stringify(fullSetupJson).includes('should-not-leak'),
     'wordpress-setup JSON output must not include plugin-returned secrets',
+  );
+
+  const failedSetupHome = makeTempDir();
+  writeFileSync(
+    join(failedSetupHome, 'credentials.json'),
+    JSON.stringify({ apiKey: 'mk_live_test_key' }),
+    { mode: 0o600 },
+  );
+  const failedSetupResult = await runAsync([
+    'wordpress-setup',
+    '--use',
+    'local',
+    '--json',
+    '--path',
+    fakeWpRoot,
+    '--wp-cli',
+    fakeFullSetupWpCli,
+  ], {
+    milesHome: failedSetupHome,
+    timeout: 30000,
+    env: {
+      FAIL_LOCAL_SETUP: '1',
+      MILES_PLUGIN_SOURCE: fakePluginSource,
+      MILES_SERVER_URL: fullSetupMock.url,
+      WP_LOG: fakeFullSetupWpLog,
+    },
+  });
+  const failedSetupJson = JSON.parse(failedSetupResult.stdout);
+  assert(
+    failedSetupResult.status === 1,
+    'wordpress-setup should fail when plugin local setup fails after bootstrap',
+  );
+  assertIncludes(
+    failedSetupJson.error,
+    'local-site-1',
+    'wordpress-setup failure should surface the bootstrapped site id for retry/relink',
+  );
+  assert(
+    !failedSetupJson.error.includes('should-not-leak'),
+    'wordpress-setup failure output must sanitize WP-CLI stderr',
   );
 
   const doctorHome = makeTempDir();

@@ -23,6 +23,7 @@ By default it sends the message, streams progress, and prints Miles' settled res
 
 ## Judgment
 
+- Use `say` only to continue the active site's conversation. Do not send "build a new website", "start a different site", or "replace this with a new project" through `say` unless the user explicitly wants to transform the active site. For a separate deliverable, switch to `site-create`; for a risky redesign of a site they care about, consider `site-attach <siteId> --duplicate` first.
 - Pass the user's words through unchanged. If they answered "2", send the exact option text for 2; if they wrote a custom answer, send it verbatim. Miles calibrates tone from their phrasing.
 - For edits: send a focused, specific request ("remove the card around the Visit section and make its background edge-to-edge") rather than a vague one ("improve the visit area").
 - After an edit settles, check the outcome. `[outcome: declined]` means the user (or a confirmation step) said no — do not resend or rephrase to route around it.

@@ -46,6 +46,17 @@ The JSON always includes the private `deviceCode` — treat the whole response a
 { "ok": false, "status": "invalid_request", "error": "..." }
 ```
 
+## Auth, repair, and revocation recovery
+
+Miles may fail closed when an account key, site token, plugin pairing, or site principal is expired, revoked, suspended, or needs repair. Treat those as safety decisions, not transient transport errors.
+
+- Account auth failures: run `miles auth status`. If the account is logged out or the API key was revoked, start a fresh device-code login. Do not reuse copied API keys, ask the user to paste secrets into chat, or clear credentials unless the CLI explicitly tells you to re-authenticate.
+- Site-token failures on a known Miles site: run `miles sites --json` if needed, then `miles site-attach <siteId>` to mint a fresh site token before retrying once.
+- Plugin/site repair failures: if the error says repair is available, tell the user Miles needs the WordPress plugin or site connection repaired in the Miles or WordPress UI, then retry only after the repair is complete. If the error says repair is not available, stop and report that this connection cannot be repaired automatically.
+- Unknown, revoked, or suspended site principals: do not re-pair or clear local state as a guess. Attach a valid owned site, ask the user to reconnect the site in the UI, or stop when the server says access is denied.
+- Suspended account or billing/credit blocks: stop and surface the message. Do not retry with another site, another token, or a different route.
+- Any explicit authorization denial means the user or server declined the action. Report it and stop that branch of work.
+
 ## Hard rules
 
 - Never wait inside `auth login` — it must return a code before any polling happens.

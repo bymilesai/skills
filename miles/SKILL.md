@@ -116,6 +116,7 @@ For a WordPress site on a remote domain, do not try to install or bootstrap it f
 State is derived from the conversation and monotonic — you can enter at whatever job matches what you already have. The interview is one primitive among many, not the container.
 
 - **"Build me a website" (user present, wants the experience)** → run the full guided workflow: relay Miles' interview to the user, show the brief, present directions, build. Load [full-workflow.md](references/full-workflow.md) — it carries the relay rules, brief-review template, and progress style.
+- **"Build me a new website" while another Miles site is active** → do **not** send that prompt through `say` on the current site. Ask one short clarification if intent is ambiguous; if they want a separate deliverable, use `site-create`. If they want to redesign the current site, say that plainly and consider `site-attach <siteId> --duplicate` before risky changes.
 - **"I already have the content / a brief — design around it"** → write the brief to a file → `site-create --brief brief.md "<summary>"` (add `--attach logo.svg` for any logo/imagery the user supplied, and say what each file is) → discovery never runs → `design-directions` → present → `build-site`.
 - **"Give me design options for this"** → `site-create --brief ...` → `design-directions --json` → `screenshot` each preview → present in your own UI. Never build until something is chosen.
 - **"Edit my Miles site" / "resume where I left off"** → `site-attach <siteId>` (cross-machine) or `use <siteId>` (local) → `site-state --json` → follow its `next[]` hints. When you need the full picture (brief text, what was discussed), add `site-state --full --json` and `history`.
@@ -124,7 +125,7 @@ State is derived from the conversation and monotonic — you can enter at whatev
 - **"Undo that last change"** → `miles undo` reverts the most recent turn (site + chat together, one level). For anything deeper, `site-attach <siteId> --duplicate` first — the fork is the branch.
 - **"Show me how the site looks now" (after conversion)** → `screenshot --live` captures the running WordPress frontend through the connected dashboard; stored-preview screenshots only show the pre-conversion HTML site.
 
-Judgment that holds across all entries: check `account-status` headroom before firing a build; directions before build (users react to options faster than they articulate preferences); content before layout; present design choices to the user rather than choosing silently, unless they explicitly delegated the decision.
+Judgment that holds across all entries: protect the active site from intent drift; check `account-status` headroom before firing a build; directions before build (users react to options faster than they articulate preferences); content before layout; present design choices to the user rather than choosing silently, unless they explicitly delegated the decision.
 
 ## The Full Workflow as a Chain
 
@@ -195,6 +196,7 @@ Do not assume the frontmatter hooks ran: non-Claude hosts may ignore them, so wa
 - When Miles returns `[approval_required]` or `approvalRequired`, relay the protected-change summary and ask for approval or decline. This is not a normal chat question: do not use `say`; use [live-protection.md](references/live-protection.md).
 - When the brief arrives (`phase: brief_review`), show the user the FULL brief plus an approve/request-changes choice as your final response. Never summarize it away — it is the blueprint for the whole site.
 - When directions are ready, inspect them (connected dashboard if open, otherwise `screenshot` each preview), give a recommendation tied to the brief with short notes per direction, and let the user choose. Only claim you visually inspected something that actually loaded.
+- When Miles returns a consent, terms, risk, backup, or destructive-confirmation blocker, show the user the actual user-facing risk/confirmation text, ask for an explicit decision, and treat "no" as final. Do not approve on behalf of the user, collapse legal/safety wording into a vague summary, or retry with different phrasing to bypass the blocker.
 - Progress: relay short `Miles: <action>` milestone lines, not raw logs or paragraphs — see Long-Running Commands above for keeping them visible on your host.
 - Credits: surface `[warning: ...]` immediately; on `[error: ...]` about credits, stop and tell the user to top up. `account-status --json` reads balance any time.
 

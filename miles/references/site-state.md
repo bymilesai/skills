@@ -44,6 +44,7 @@ miles site-state [--json]
 - `status: "streaming"` means a turn is running: `wait-job` (or `cancel`) before sending anything new.
 - `approvalRequired` means live protection is waiting for the user. The only legal next write is `approval-respond` after explicit approval/refusal for that specific change; do not use `say` ([live-protection.md](live-protection.md)).
 - `connection.connected` tells you whether browser-backed work would succeed right now.
+- If `sessionMemory[]`, `next[]`, or a recent outcome mentions repair, revoked auth, suspended access, terms, backup acknowledgement, or a destructive confirmation, resolve that blocker first. Do not keep sending normal chat turns over it.
 
 Supporting verbs alongside it: `miles status` (smaller, single GET), `miles sites --json` (all sites), `miles site-pages` (built-site file listing), `miles history` (paginated transcript — see [history.md](history.md)).
 

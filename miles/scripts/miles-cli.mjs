@@ -654,7 +654,7 @@ function outcomeExitCode(outcome) {
  * one; silent no-op (exit 0 at process end) otherwise.
  */
 function exitWithTurnOutcome(data) {
-  const code = outcomeExitCode(data?.outcome);
+  const code = outcomeExitCode(data?.approvalRequired ? 'blocked' : data?.outcome);
   if (code !== EXIT_OK) process.exit(code);
 }
 
@@ -1854,9 +1854,12 @@ async function cmdWaitJob(args) {
 }
 
 function findApprovalShortcutFlag(args) {
-  return args.find((arg) =>
-    ['--yes', '-y', '--force', '--auto', '--approve', '--decline'].includes(arg),
-  );
+  return args.find((arg) => {
+    const [flag] = arg.split('=');
+    return ['--yes', '-y', '--force', '--auto', '--approve', '--decline'].includes(
+      flag,
+    );
+  });
 }
 
 /**
@@ -2252,6 +2255,7 @@ function formatProgress(progress, elapsed) {
 
 function sanitizeProgressText(value) {
   if (typeof value !== 'string') return null;
+  // Server-side summaries are the source of truth; this client scrubber is a display backstop.
   let text = value
     .replace(/[\r\n\t]+/g, ' ')
     .replace(/\s+/g, ' ')

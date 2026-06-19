@@ -52,7 +52,7 @@ Miles may fail closed when an account key, site token, plugin pairing, or site p
 
 - Branch on structured JSON fields when the CLI provides them (`status`, `code`, `repair`, or equivalent recovery metadata). If a failure only has plain error text, surface it to the user instead of guessing, looping, or editing credentials directly.
 - Account auth failures: run `miles auth status`. If the account is logged out or the API key was revoked, start a fresh device-code login. Do not reuse copied API keys, ask the user to paste secrets into chat, or clear credentials unless the CLI explicitly tells you to re-authenticate.
-- Site-token failures on a known Miles site: run `miles sites --json` if needed, then `miles site-attach <siteId>` to mint a fresh site token before retrying once.
+- Site-token failures on a known Miles site: run `miles sites --json` if needed, then `miles site-attach <siteId>` to mint a fresh site token before making one deliberate retry of the original command. Do not stack this with other retries.
 - Plugin/site repair failures: if the error says repair is available, tell the user Miles needs the WordPress plugin or site connection repaired in the Miles or WordPress UI, then retry only after the repair is complete. If the error says repair is not available, stop and report that this connection cannot be repaired automatically.
 - Unknown, revoked, or suspended site principals: do not re-pair or clear local state as a guess. Attach a valid owned site, ask the user to reconnect the site in the UI, or stop when the server says access is denied.
 - Suspended account or billing/credit blocks: stop and surface the message. Do not retry with another site, another token, or a different route.

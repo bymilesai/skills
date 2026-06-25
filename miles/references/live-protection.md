@@ -30,7 +30,7 @@ miles approval-respond --grant <approval-id> --response approved
 miles approval-respond --grant <approval-id> --response declined
 ```
 
-`approval-respond` waits for the resumed turn to settle and maps the final outcome with the normal exit codes. With `--json`, it returns the settled `wait-job` payload.
+`approval-respond` waits for the resumed turn to settle and maps the final outcome with the normal exit codes. With `--json`, it returns the settled `wait-job` payload. The grant response itself is headless, but the protected work that resumes can still be browser-backed; if it exits `3`, connect the dashboard and retry once.
 
 ## Consent Rules
 

@@ -13,9 +13,14 @@ miles site-state [--json]
   "phase": "design_directions_ready",
   "status": "idle",
   "conversationStatus": "waiting_for_user_input",
+  "code": null,
+  "errorId": null,
+  "recovery": null,
   "siteReady": false,
   "selectedDirectionId": null,
   "directionCount": 4,
+  "directionTotal": 4,
+  "progress": null,
   "directions": [ { "number": 1, "directionId": "…", "name": "…", "previewUrl": "…" } ],
   "connection": { "kind": "browser-dashboard", "connected": false },
   "storageSlug": "kiln-site",
@@ -29,6 +34,8 @@ miles site-state [--json]
   "credits": { "usagePercent": 50, "topUpCredits": 25 },
   "approvalRequired": null,
   "undoAvailable": true,
+  "undoTurnIndex": 12,
+  "isSiteBuildingActive": false,
   "next": [
     "miles design-directions --json",
     "miles build-site --design <number>"
@@ -42,6 +49,7 @@ miles site-state [--json]
 - `undoAvailable: true` means `miles undo` can revert the last turn (see [undo.md](undo.md)).
 - `credits.usagePercent` is the account's period usage — mention it to the user when it is high; never silently stop work over it.
 - `status: "streaming"` means a turn is running: `wait-job` (or `cancel`) before sending anything new.
+- `code`, `errorId`, `recovery[]`, and `progress` are server-derived troubleshooting fields. Read them before deciding whether to retry, reconnect, repair auth, or ask the user.
 - `approvalRequired` means live protection is waiting for the user. The only legal next write is `approval-respond` after explicit approval/refusal for that specific change; do not use `say` ([live-protection.md](live-protection.md)).
 - `connection.connected` tells you whether browser-backed work would succeed right now.
 - If `sessionMemory[]`, `next[]`, or a recent outcome mentions repair, revoked auth, suspended access, terms, backup acknowledgement, or a destructive confirmation, resolve that blocker first. Do not keep sending normal chat turns over it.

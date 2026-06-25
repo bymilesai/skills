@@ -39,16 +39,25 @@ Polls the running turn over REST. Progress lines go to **stderr**; the single se
   "status": "completed",
   "outcome": "completed",
   "phase": "site_preview",
+  "code": null,
+  "errorId": null,
+  "recovery": null,
   "milesMessage": "…",
   "question": null,
   "brief": null,
   "approvalRequired": null,
   "directions": [ { "number": 1, "directionId": "…", "previewUrl": "…" } ],
+  "directionCount": 3,
+  "directionTotal": 3,
   "selectedDirectionId": null,
   "siteReady": false,
+  "dashboardUrl": "https://start.bymiles.ai/…",
+  "sessionMemory": null,
   "credits": { "usagePercent": 42, "topUpCredits": 0 }
 }
 ```
+
+On failed, blocked, or approval-required results, read `code`, `errorId`, `recovery[]`, `sessionMemory[]`, `approvalRequired`, and `dashboardUrl` before choosing a next step. These fields are server-derived recovery guidance, not decoration.
 
 On timeout it exits 1 with `status: "running"` — the turn is still going; run `wait-job` again to keep waiting or `cancel` to stop it. A `question` in the result means Miles needs ordinary input: relay it, then `say` the answer.
 

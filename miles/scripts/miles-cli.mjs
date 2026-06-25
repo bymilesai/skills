@@ -1860,14 +1860,21 @@ async function cmdWaitJob(args, options = {}) {
       outcomeReason: data.outcomeReason || undefined,
       approvalRequired: approvalRequired || undefined,
       phase: data.phase || null,
+      code: data.code || undefined,
+      errorId: data.errorId || undefined,
+      recovery: data.recovery || undefined,
       milesMessage: data.milesMessage || null,
       question: data.question || null,
       brief: data.brief || null,
       directions: data.directions || undefined,
+      directionCount: data.directionCount ?? undefined,
+      directionTotal: data.directionTotal ?? undefined,
       selectedDirectionId: data.selectedDirectionId || null,
       siteReady: Boolean(data.siteReady),
+      dashboardUrl: data.dashboardUrl || undefined,
       error: data.error || undefined,
       credits: data.credits || undefined,
+      sessionMemory: data.sessionMemory || undefined,
     };
     clearActiveRun();
     writeLastResponse(formatWaitResponse(data));
@@ -2974,6 +2981,13 @@ function formatWaitResponse(data) {
     }
   }
   lines.push(`[phase: ${data.phase}]`);
+  if (data.code) lines.push(`[code: ${data.code}]`);
+  if (data.errorId) lines.push(`[error_id: ${data.errorId}]`);
+  if (Array.isArray(data.recovery) && data.recovery.length) {
+    for (const item of data.recovery) {
+      lines.push(`[recovery: ${item}]`);
+    }
+  }
 
   appendApprovalRequiredLines(lines, data.approvalRequired);
 
@@ -3034,6 +3048,29 @@ function formatWaitResponse(data) {
     lines.push(
       '[edit: To make changes to this WordPress site, run: miles say "describe your changes"]',
     );
+  }
+
+  if (!data.siteReady && data.dashboardUrl) {
+    lines.push(`[dashboard: ${data.dashboardUrl}]`);
+  }
+
+  if (Array.isArray(data.sessionMemory) && data.sessionMemory.length) {
+    lines.push('');
+    lines.push('[session_memory]');
+    for (const entry of data.sessionMemory) {
+      const key = entry?.key || 'entry';
+      const status = entry?.status || 'unknown';
+      const summary = entry?.summary || entry?.nextRecommendedAction || '';
+      lines.push(`  - [${status}] ${key}${summary ? `: ${summary}` : ''}`);
+      if (Array.isArray(entry?.unresolved)) {
+        for (const item of entry.unresolved) {
+          lines.push(`    unresolved: ${item}`);
+        }
+      }
+      if (entry?.nextRecommendedAction) {
+        lines.push(`    next: ${entry.nextRecommendedAction}`);
+      }
+    }
   }
 
   if (data.credits && data.credits.usagePercent >= 95) {
@@ -4231,6 +4268,7 @@ async function cmdWordPressSetup(args = []) {
       EXIT_PRECONDITION,
     );
   }
+  await requirePrimitive('wordpress-bootstrap', DEFAULT_SERVER_URL);
 
   const installResult = await ensureMilesPluginInstalled(detection, args);
   if (!installResult.ok) {
@@ -4818,9 +4856,14 @@ async function cmdSiteState(args = []) {
     status: status.status,
     conversationStatus: status.conversationStatus || null,
     error: status.error || undefined,
+    code: status.code || undefined,
+    errorId: status.errorId || undefined,
+    recovery: status.recovery || undefined,
     siteReady: Boolean(status.siteReady),
     selectedDirectionId: status.selectedDirectionId || null,
     directionCount: status.directionCount || 0,
+    directionTotal: status.directionTotal ?? null,
+    progress: status.progress || null,
     directions: (directions?.directions || []).map((h) => ({
       number: h.number,
       directionId: h.directionId || null,
@@ -4837,6 +4880,8 @@ async function cmdSiteState(args = []) {
     credits: status.credits || null,
     approvalRequired,
     undoAvailable: Boolean(status.undoAvailable),
+    undoTurnIndex: status.undoTurnIndex ?? null,
+    isSiteBuildingActive: Boolean(status.isSiteBuildingActive),
     // Pass-through of server-derived context (present when applicable):
     // the registered logo, files in scope, analyzed reference sites, and
     // conversation length. Useful for verifying what Miles is working from.
@@ -5413,7 +5458,7 @@ const { command, args } = parsed;
 cliOptions = parsed.options;
 
 const commands = {
-  // v0 primitive grammar
+  // Public command grammar
   auth: cmdAuth,
   'account-status': cmdAccountStatus,
   'site-create': cmdCreateSite,
@@ -5479,8 +5524,8 @@ Sites:
                     [--attach <file>]     HEADLESS  Create site + conversation
   miles site-attach <siteId> [--duplicate]
                                           HEADLESS  Resume any owned site
-  miles wordpress-detect [--path <dir>]   HEADLESS  Detect local WordPress
-  miles wordpress-setup --use local       HEADLESS  Connect local WordPress
+  miles wordpress-detect [--path <dir>]   LOCAL     Detect local WordPress
+  miles wordpress-setup --use local       LOCAL     Connect local WordPress
                     [--path <dir>]                  when user chooses it
   miles site-state [--full] [--json]      HEADLESS  Phase, directions, next moves
                                                     (--full: brief, plan, memory)
@@ -5504,8 +5549,8 @@ Design + build:
                                                     frontend (full-page default)
   miles wait-job [--timeout <s>]          HEADLESS  Wait for the running turn
                                                     (JSON result + exit code)
-  miles approval-respond --grant <id> --response approved|declined
-                                          HEADLESS  Answer a protected live-site
+  miles approval-respond --grant <id> --response approved|declined  CONDITIONAL
+                                                    Answer a protected live-site
                                                     approval after explicit user
                                                     consent/refusal
   miles cancel                            HEADLESS  Stop the running turn

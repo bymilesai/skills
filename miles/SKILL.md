@@ -32,11 +32,11 @@ MILES_CLI="${MILES_CLI:-$MILES_SKILL_DIR/scripts/miles}"
 
 Set the Bash timeout to 10 minutes (600000ms) for long-running commands — site building and theme conversion take minutes. Use `MILES_HOME=/path/to/isolated/state` for a clean test environment (default `~/.miles`).
 
-## The Primitive Menu
+## Command Surface
 
-This is the complete v0 contract. Do not invent other commands. HEADLESS = works with no browser. BROWSER = needs a connected dashboard via `connect-browser` first. Reference files in `references/` carry each primitive's flags, JSON schema, and judgment — load them when you use the primitive.
+This is the supported public command surface. Do not invent other commands. HEADLESS = works with no browser. CONDITIONAL = can finish headlessly only when the underlying turn is not browser-backed. BROWSER = needs a connected dashboard via `connect-browser` first. LOCAL = filesystem helper; any Miles server operation inside it is still capability-gated. Reference files in `references/` carry each command's flags, JSON schema, and judgment — load them when you use the command.
 
-| Primitive | Mode | What it does | Reference |
+| Command | Mode | What it does | Reference |
 |---|---|---|---|
 | `miles auth [login\|poll\|status\|logout]` | HEADLESS | Device-code login lifecycle | [auth.md](references/auth.md) |
 | `miles account-status --json` | HEADLESS | Plan, credits, site count — headroom check | [account-status.md](references/account-status.md) |
@@ -46,12 +46,12 @@ This is the complete v0 contract. Do not invent other commands. HEADLESS = works
 | `miles design-directions --json` | HEADLESS | List generated design directions with ids + previews | [design-directions.md](references/design-directions.md) |
 | `miles build-site --design <n>` | HEADLESS | Commit a design → full HTML site build | [build-site.md](references/build-site.md) |
 | `miles wait-job` / `miles cancel` | HEADLESS | Wait for / stop the running turn (JSON + exit codes) | [wait-job.md](references/wait-job.md) |
-| `miles approval-respond --grant <id> --response approved\|declined` | HEADLESS | Answer a protected live-site approval after explicit user consent/refusal | [live-protection.md](references/live-protection.md) |
+| `miles approval-respond --grant <id> --response approved\|declined` | CONDITIONAL | Answer a protected live-site approval after explicit user consent/refusal | [live-protection.md](references/live-protection.md) |
 | `miles undo` | HEADLESS | Revert the last turn: site + chat together, one level | [undo.md](references/undo.md) |
 | `miles site-state [--full] --json` | HEADLESS | Phase, directions, connection, site plan, suggested next moves; `--full` adds brief text, direction detail, session memory | [site-state.md](references/site-state.md) |
 | `miles site-attach <siteId> [--duplicate]` | HEADLESS | Resume any owned site; fork before risky changes | [site-attach.md](references/site-attach.md) |
-| `miles wordpress-detect --json` | HEADLESS | Detect a local WordPress install in/above the current folder | This file |
-| `miles wordpress-setup --use local --json` | HEADLESS | Install/activate/connect Miles on a chosen local WordPress install | This file |
+| `miles wordpress-detect --json` | LOCAL | Passively detect a local WordPress install in/above the current folder | [wordpress-detect.md](references/wordpress-detect.md) |
+| `miles wordpress-setup --use local --json` | LOCAL | Install/activate/connect Miles on a chosen local WordPress install | [wordpress-setup.md](references/wordpress-setup.md) |
 | `miles site-pages [path]` | HEADLESS | List built-site files, or fetch one file's content | [site-pages.md](references/site-pages.md) |
 | `miles history [--limit <n>] [--offset <n>]` | HEADLESS | Paginated conversation transcript, newest turns by default | [history.md](references/history.md) |
 | `miles screenshot <preview-url> [--full-page]` | HEADLESS | Capture any preview to a local JPEG | [screenshot.md](references/screenshot.md) |
@@ -64,9 +64,9 @@ This is the complete v0 contract. Do not invent other commands. HEADLESS = works
 
 Supporting verbs: `doctor`, `status`, `sites`, `use`, `messages`, `balance`, `wait`. Earlier verb names (`create-site`, `reply`, `select-design-direction`, `preview`, `build-theme`, `export-site`, `export-theme`, `login`, `whoami`, `logout`) still work as aliases.
 
-\* `say` is headless through discovery, brief, and pre-build feedback. Edits on a built WordPress site are browser-backed: the CLI fails fast with exit 3 when the connection is missing. `export --type html` is fully headless.
+\* `say` is headless through discovery, brief, and pre-build feedback. Edits on a built WordPress site are browser-backed: the CLI fails fast with exit 3 when the connection is missing. `approval-respond` can answer the grant headlessly, but the resumed protected work may still need the dashboard. `export --type html` is fully headless.
 
-The CLI checks the connected server's supported primitives automatically (`miles doctor --json` shows them under `server.primitives`). If a primitive is missing there, the server predates it — do not work around it; tell the user.
+The CLI checks the connected server's supported primitives automatically (`miles doctor --json` shows them under `server.primitives`). If a server-backed primitive is missing there, the server predates it — do not work around it; tell the user. `wordpress-setup --use local` specifically requires `wordpress-bootstrap`; before the beta server includes that primitive, it exits 2 rather than touching a local WordPress install.
 
 ## Exit Codes and Outcomes
 
@@ -99,7 +99,7 @@ You may run the passive local shape check before asking:
 "$MILES_CLI" wordpress-detect --json
 ```
 
-This command must be treated as passive only: it can inspect filenames and report whether the current folder looks like WordPress, but it must not execute WordPress, WP-CLI, PHP, plugins, themes, or database-backed checks. If `localWordPress.found` is `false`, continue with the normal cloud flow (`site-create`). If it is `true`, ask the user one direct question: use Miles cloud, this local WordPress install, or a remote WordPress site? Do not assume local just because it was detected.
+This command must be treated as passive only: it can inspect filenames and report whether the current folder looks like WordPress, but it must not execute WordPress, WP-CLI, PHP, plugins, themes, or database-backed checks. If `localWordPress.found` is `false`, continue with the normal cloud flow (`site-create`). If it is `true`, ask the user one direct question: use Miles cloud, this local WordPress install, or a remote WordPress site? Do not assume local just because it was detected. Details: [wordpress-detect.md](references/wordpress-detect.md).
 
 When the user chooses local, run:
 
@@ -107,7 +107,7 @@ When the user chooses local, run:
 "$MILES_CLI" wordpress-setup --use local --json
 ```
 
-The setup command is the explicit local-consent boundary. It may run WP-CLI in the selected folder, copy a local Miles plugin source into `wp-content/plugins/miles`, activate it with WP-CLI, configure `WP_ENVIRONMENT_TYPE=local` for clearly local/dev URLs when application passwords need it, ask the Miles API for local-site credentials, hand those credentials to `wp miles local-setup`, and save the local WordPress admin page as the active Miles surface. If WP-CLI is missing, it may copy the plugin files but must ask the user to activate/connect in WordPress admin or install WP-CLI before retrying. Do not write plugin options or secrets yourself.
+The setup command is the explicit local-consent boundary. It requires server `wordpress-bootstrap` support before copying or activating anything. It may run WP-CLI in the selected folder, copy a local Miles plugin source into `wp-content/plugins/miles`, activate it with WP-CLI, configure `WP_ENVIRONMENT_TYPE=local` for clearly local/dev URLs when application passwords need it, ask the Miles API for local-site credentials, hand those credentials to `wp miles local-setup`, and save the local WordPress admin page as the active Miles surface. If WP-CLI is missing, it may copy the plugin files but must ask the user to activate/connect in WordPress admin or install WP-CLI before retrying. Do not write plugin options or secrets yourself. Details: [wordpress-setup.md](references/wordpress-setup.md).
 
 For a WordPress site on a remote domain, do not try to install or bootstrap it from the filesystem. Provide the Miles plugin link from `wordpress-setup` output or the release manifest, ask the user to install it manually, and use the plugin's pairing flow after it is installed.
 

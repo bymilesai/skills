@@ -192,6 +192,15 @@ function startMockServer(handler) {
   });
 }
 
+function sendCapabilities(res, primitives = {}) {
+  res.writeHead(200, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({ primitives }));
+}
+
+const WORDPRESS_BOOTSTRAP_PRIMITIVE = {
+  'wordpress-bootstrap': { tier: 'plumbing', connection: 'none' },
+};
+
 function sendSandboxNetworkBlock(res) {
   res.writeHead(403, { 'content-type': 'text/plain' });
   res.end(
@@ -312,13 +321,18 @@ try {
   );
   assertIncludes(
     helpResult.stdout,
-    'miles wordpress-detect [--path <dir>]',
+    'miles wordpress-detect [--path <dir>]   LOCAL',
     'help should document local WordPress detection',
   );
   assertIncludes(
     helpResult.stdout,
-    'miles wordpress-setup --use local',
+    'miles wordpress-setup --use local       LOCAL',
     'help should document local WordPress setup',
+  );
+  assertIncludes(
+    helpResult.stdout,
+    'miles approval-respond --grant <id> --response approved|declined  CONDITIONAL',
+    'help should document approval response as conditionally browser-backed',
   );
   assertIncludes(
     helpResult.stdout,
@@ -443,6 +457,68 @@ try {
   );
   writeFileSync(join(fakePluginSource, '.env.local'), 'SHOULD_NOT_COPY=1\n');
   writeFileSync(join(fakePluginSource, '.gitignore'), "*.log\n");
+
+  const unsupportedBootstrapMock = await startMockServer((req, res) => {
+    req.on('data', () => {});
+    req.on('end', () => {
+      if (req.url === '/api/v2/headless/capabilities') {
+        sendCapabilities(res, {});
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+  });
+  const unsupportedBootstrapHome = makeTempDir();
+  writeFileSync(
+    join(unsupportedBootstrapHome, 'credentials.json'),
+    JSON.stringify({ apiKey: 'mk_live_test_key' }),
+    { mode: 0o600 },
+  );
+  const unsupportedBootstrapSetup = await runJsonAsync(
+    [
+      'wordpress-setup',
+      '--use',
+      'local',
+      '--json',
+      '--path',
+      fakeWpRoot,
+      '--wp-cli',
+      missingWpCli,
+    ],
+    {
+      milesHome: unsupportedBootstrapHome,
+      env: {
+        MILES_PLUGIN_SOURCE: fakePluginSource,
+        MILES_SERVER_URL: unsupportedBootstrapMock.url,
+      },
+    },
+  );
+  assert(
+    unsupportedBootstrapSetup.result.status === 2,
+    'wordpress-setup should refuse local setup when wordpress-bootstrap is unsupported',
+  );
+  assert(
+    unsupportedBootstrapSetup.json.detail?.code === 'primitive_unsupported' &&
+      unsupportedBootstrapSetup.json.detail?.primitive === 'wordpress-bootstrap',
+    'wordpress-setup unsupported-server JSON should name wordpress-bootstrap',
+  );
+  assert(
+    !existsSync(join(fakeWpRoot, 'wp-content', 'plugins', 'miles', 'miles.php')),
+    'wordpress-setup unsupported-server gate must not copy plugin files',
+  );
+
+  const wordpressBootstrapMock = await startMockServer((req, res) => {
+    req.on('data', () => {});
+    req.on('end', () => {
+      if (req.url === '/api/v2/headless/capabilities') {
+        sendCapabilities(res, WORDPRESS_BOOTSTRAP_PRIMITIVE);
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+  });
   const localCopyHome = makeTempDir();
   mkdirSync(localCopyHome, { recursive: true });
   writeFileSync(
@@ -450,19 +526,25 @@ try {
     JSON.stringify({ apiKey: 'mk_live_test_key' }),
     { mode: 0o600 },
   );
-  const localCopySetup = runJson([
-    'wordpress-setup',
-    '--use',
-    'local',
-    '--json',
-    '--path',
-    fakeWpRoot,
-    '--wp-cli',
-    missingWpCli,
-  ], {
-    milesHome: localCopyHome,
-    env: { MILES_PLUGIN_SOURCE: fakePluginSource },
-  });
+  const localCopySetup = await runJsonAsync(
+    [
+      'wordpress-setup',
+      '--use',
+      'local',
+      '--json',
+      '--path',
+      fakeWpRoot,
+      '--wp-cli',
+      missingWpCli,
+    ],
+    {
+      milesHome: localCopyHome,
+      env: {
+        MILES_PLUGIN_SOURCE: fakePluginSource,
+        MILES_SERVER_URL: wordpressBootstrapMock.url,
+      },
+    },
+  );
   assert(
     localCopySetup.result.status === 2,
     'wordpress-setup should stop after copying when WP-CLI is unavailable',
@@ -501,19 +583,25 @@ try {
     join(stalePluginRoot, 'wp-content', 'plugins', 'miles', 'local-note.txt'),
     'stale local plugin directory',
   );
-  const localReplaceSetup = runJson([
-    'wordpress-setup',
-    '--use',
-    'local',
-    '--json',
-    '--path',
-    stalePluginRoot,
-    '--wp-cli',
-    missingWpCli,
-  ], {
-    milesHome: localCopyHome,
-    env: { MILES_PLUGIN_SOURCE: fakePluginSource },
-  });
+  const localReplaceSetup = await runJsonAsync(
+    [
+      'wordpress-setup',
+      '--use',
+      'local',
+      '--json',
+      '--path',
+      stalePluginRoot,
+      '--wp-cli',
+      missingWpCli,
+    ],
+    {
+      milesHome: localCopyHome,
+      env: {
+        MILES_PLUGIN_SOURCE: fakePluginSource,
+        MILES_SERVER_URL: wordpressBootstrapMock.url,
+      },
+    },
+  );
   assert(
     localReplaceSetup.json.actions.some(
       (action) => action.action === 'copied-plugin' && action.replaced === true,
@@ -578,6 +666,10 @@ esac
       body += chunk;
     });
     req.on('end', () => {
+      if (req.url === '/api/v2/headless/capabilities') {
+        sendCapabilities(res, WORDPRESS_BOOTSTRAP_PRIMITIVE);
+        return;
+      }
       if (
         req.method === 'POST' &&
         req.url === '/api/v2/headless/wordpress-sites/bootstrap'
@@ -1568,7 +1660,22 @@ esac
           outcome: 'declined',
           outcomeUnresolved: ['User declined the plugin install'],
           phase: 'complete',
+          code: 'user_declined_plugin_install',
+          errorId: 'err-declined-1',
+          recovery: ['Respect the decline and do not retry.'],
           milesMessage: 'Understood, skipping that.',
+          directionCount: 2,
+          directionTotal: 4,
+          dashboardUrl: 'https://beta.bymiles.ai/sites/site-3',
+          sessionMemory: [
+            {
+              key: 'wp-rest-agent',
+              status: 'blocked',
+              summary: 'Plugin install declined',
+              unresolved: ['User declined the plugin install'],
+              nextRecommendedAction: 'Ask for a different target.',
+            },
+          ],
         }),
       );
     });
@@ -1585,6 +1692,23 @@ esac
   assert(
     waitJobJson.outcome === 'declined' && waitJobJson.ok === false,
     'wait-job should report the declined outcome as structured JSON',
+  );
+  assert(
+    waitJobJson.code === 'user_declined_plugin_install' &&
+      waitJobJson.errorId === 'err-declined-1',
+    'wait-job should pass through server recovery identifiers',
+  );
+  assert(
+    waitJobJson.recovery?.[0] === 'Respect the decline and do not retry.' &&
+      waitJobJson.sessionMemory?.[0]?.nextRecommendedAction ===
+        'Ask for a different target.',
+    'wait-job should pass through recovery steps and session memory',
+  );
+  assert(
+    waitJobJson.directionCount === 2 &&
+      waitJobJson.directionTotal === 4 &&
+      waitJobJson.dashboardUrl === 'https://beta.bymiles.ai/sites/site-3',
+    'wait-job should pass through progress counts and dashboard URL',
   );
 
   // wait-job surfaces live-protection approvals as blocked structured state,
@@ -1696,6 +1820,13 @@ esac
             status: 'waiting_for_input',
             phase: 'complete',
             conversationStatus: 'waiting_for_user_input',
+            code: 'approval_required',
+            errorId: 'err-approval-state',
+            recovery: ['Ask the user to approve or decline.'],
+            directionTotal: 1,
+            progress: { action: 'Awaiting approval' },
+            undoTurnIndex: 7,
+            isSiteBuildingActive: false,
             next: ['approval-respond'],
             approvalRequired: {
               type: 'live_protection',
@@ -1735,6 +1866,16 @@ esac
     approvalState.next.some((hint) => hint.includes('approval-respond')) &&
       !approvalState.next.some((hint) => hint.startsWith('miles say')),
     'site-state next[] should route approval through approval-respond, not say',
+  );
+  assert(
+    approvalState.code === 'approval_required' &&
+      approvalState.errorId === 'err-approval-state' &&
+      approvalState.recovery?.[0] === 'Ask the user to approve or decline.' &&
+      approvalState.directionTotal === 1 &&
+      approvalState.progress?.action === 'Awaiting approval' &&
+      approvalState.undoTurnIndex === 7 &&
+      approvalState.isSiteBuildingActive === false,
+    'site-state should pass through recovery and status detail fields',
   );
 
   // approval-respond is an explicit grant response primitive. It cannot be
@@ -1789,7 +1930,7 @@ esac
         res.end(
           JSON.stringify({
             primitives: {
-              'approval-respond': { tier: 'plumbing', connection: 'none' },
+              'approval-respond': { tier: 'plumbing', connection: 'conditional' },
             },
           }),
         );

@@ -20,6 +20,8 @@ The brief is the blueprint Miles designs from. Include what the site is for, who
 
 ## Judgment
 
+- This is the primitive that starts a fresh site deliverable. If a site is already active and the user asks for a "new site", "different website", "start over", or another independent build, use `site-create` instead of sending the request through `say` on the active site. To branch an existing site, use `site-attach <siteId> --duplicate`.
+- If the user may mean a redesign of the active site rather than a new deliverable, ask one direct clarification before spending credits or changing the current site.
 - With `--brief`, this command immediately starts design-direction generation — a multi-minute run. Before firing: set up your host's progress transport (SKILL.md "Long-Running Commands"), tell the user it takes several minutes, and if they are present open the dashboard (`connect-browser --open`) right after the handle exists so they watch the directions appear.
 - User present and wanting the experience → no `--brief`; relay the interview ([full-workflow.md](full-workflow.md)).
 - User supplied content/brief → write it to a temp file, use `--brief`. Do not answer interview questions yourself from content you were given; inject it as the brief instead.

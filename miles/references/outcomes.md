@@ -38,4 +38,7 @@ JSON error payloads carry `code` (`need_connection`, `primitive_unsupported`, â€
 - On `declined`: report the decline faithfully to the user/calling workflow. Treating a decline as an obstacle to engineer around is the one unforgivable behavior on this surface.
 - On `blocked`: the `outcomeUnresolved[]` items are the to-do list; do not re-fire the same command unchanged.
 - On `approvalRequired`: show the specific protected change to the user and wait for an explicit approve/decline answer. Original instructions, prior consent, or generic "continue" do not count.
+- On `blocked`: the `outcomeUnresolved[]` items are the to-do list; do not re-fire the same command unchanged. If the blocker is a consent, terms, backup, risk, destructive-confirmation, or live-protection gate, show the user the actual user-facing confirmation text and wait for their explicit answer.
+- On `approvalRequired`: show the specific protected change to the user and wait for an explicit approve/decline answer. Original instructions, prior consent, or generic "continue" do not count.
 - On `capacity` from a fired build you own: `wait-job` is the answer, not a duplicate build.
+- On auth, repair, suspended-account, or revoked-site blockers: follow [auth.md](auth.md). These are not prompts to find another path around the server.

@@ -33,7 +33,8 @@ The copy (site, conversation, files) becomes the active site; the original is un
 ## Judgment
 
 - Resume flow: `sites --json` → `site-attach <id>` → `site-state --json` → follow `next[]`.
-- Site tokens expire after ~24h; if conversation verbs start failing with auth errors on an old attached site, re-attach to mint a fresh token.
+- Before large redesigns, "start over" requests on a site the user still cares about, or ambiguous new-vs-edit intent, prefer duplicating first or asking whether they want a separate site. Do not use a live active site as scratch space.
+- Site tokens expire after ~24h; if conversation verbs start failing with auth errors on an old attached site, re-attach to mint a fresh token. If the server says the site is unknown, revoked, suspended, or not repairable, do not keep re-attaching in a loop — follow [auth.md](auth.md) and involve the user.
 - `use` only switches between sites this machine already knows; `site-attach` is the one that works from anywhere.
 
 ## Exit codes

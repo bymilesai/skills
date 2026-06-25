@@ -312,6 +312,16 @@ try {
   );
   assertIncludes(
     helpResult.stdout,
+    'miles wordpress-detect [--path <dir>]',
+    'help should document local WordPress detection',
+  );
+  assertIncludes(
+    helpResult.stdout,
+    'miles wordpress-setup --use local',
+    'help should document local WordPress setup',
+  );
+  assertIncludes(
+    helpResult.stdout,
     'miles cancel',
     'help should document turn cancellation',
   );
@@ -319,6 +329,368 @@ try {
     helpResult.stdout,
     'Exit codes: 0 ok | 1 failed/aborted | 2 precondition | 3 need connection',
     'help should document the shared exit-code grammar',
+  );
+
+  const missingWpCli = join(makeTempDir(), 'missing-wp');
+  const noWordPressDir = makeTempDir();
+  const noWordPressDetect = runJson([
+    'wordpress-detect',
+    '--json',
+    '--path',
+    noWordPressDir,
+    '--wp-cli',
+    missingWpCli,
+  ]);
+  assert(
+    noWordPressDetect.result.status === 0,
+    'wordpress-detect should succeed when no local WordPress install exists',
+  );
+  assert(
+    noWordPressDetect.json.localWordPress.found === false,
+    'wordpress-detect should report found false outside WordPress',
+  );
+  assert(
+    noWordPressDetect.json.localWordPress.wpCli.available === false,
+    'wordpress-detect should report unavailable configured WP-CLI',
+  );
+
+  const noWordPressSetup = runJson([
+    'wordpress-setup',
+    '--use',
+    'local',
+    '--json',
+    '--path',
+    noWordPressDir,
+    '--wp-cli',
+    missingWpCli,
+  ]);
+  assert(
+    noWordPressSetup.result.status === 0,
+    'wordpress-setup should fall back to cloud guidance without requiring auth when no WordPress install is present',
+  );
+  assert(
+    noWordPressSetup.json.mode === 'cloud',
+    'wordpress-setup no-WordPress fallback should use cloud mode',
+  );
+
+  const fakeWpRoot = makeTempDir();
+  mkdirSync(join(fakeWpRoot, 'wp-admin'), { recursive: true });
+  mkdirSync(join(fakeWpRoot, 'wp-content', 'themes', 'demo'), {
+    recursive: true,
+  });
+  writeFileSync(join(fakeWpRoot, 'wp-config.php'), "<?php\n");
+  const fakeWpDetect = runJson([
+    'wordpress-detect',
+    '--json',
+    '--path',
+    join(fakeWpRoot, 'wp-content', 'themes', 'demo'),
+    '--wp-cli',
+    missingWpCli,
+  ]);
+  assert(
+    fakeWpDetect.result.status === 0,
+    'wordpress-detect should succeed inside a WordPress tree',
+  );
+  assert(
+    fakeWpDetect.json.localWordPress.found === true &&
+      fakeWpDetect.json.localWordPress.root === fakeWpRoot,
+    'wordpress-detect should walk up to the WordPress root',
+  );
+  assert(
+    fakeWpDetect.json.localWordPress.next.some((item) =>
+      item.includes('Ask the user'),
+    ),
+    'wordpress-detect should remind agents to ask which WordPress target to use',
+  );
+  assert(
+    fakeWpDetect.json.localWordPress.detectionMode === 'passive',
+    'wordpress-detect should report passive detection mode',
+  );
+
+  const executableWpCliDir = makeTempDir();
+  const executableWpCli = join(executableWpCliDir, 'wp');
+  const wpCliMarker = join(executableWpCliDir, 'executed');
+  writeFileSync(
+    executableWpCli,
+    `#!/bin/sh\nprintf executed > "${wpCliMarker}"\nexit 1\n`,
+    { mode: 0o755 },
+  );
+  const passiveDetectWithExecutableWpCli = runJson([
+    'wordpress-detect',
+    '--json',
+    '--path',
+    fakeWpRoot,
+    '--wp-cli',
+    executableWpCli,
+  ]);
+  assert(
+    passiveDetectWithExecutableWpCli.result.status === 0,
+    'wordpress-detect should succeed without executing configured WP-CLI',
+  );
+  assert(
+    !existsSync(wpCliMarker),
+    'wordpress-detect must not execute WP-CLI before user chooses local setup',
+  );
+  assert(
+    passiveDetectWithExecutableWpCli.json.localWordPress.site.url === null,
+    'passive wordpress-detect should not read database-backed site details',
+  );
+
+  const fakePluginSource = makeTempDir();
+  writeFileSync(
+    join(fakePluginSource, 'miles.php'),
+    "<?php\n/*\nPlugin Name: Miles\nVersion: 9.9.9-test\n*/\n",
+  );
+  writeFileSync(join(fakePluginSource, '.env.local'), 'SHOULD_NOT_COPY=1\n');
+  writeFileSync(join(fakePluginSource, '.gitignore'), "*.log\n");
+  const localCopyHome = makeTempDir();
+  mkdirSync(localCopyHome, { recursive: true });
+  writeFileSync(
+    join(localCopyHome, 'credentials.json'),
+    JSON.stringify({ apiKey: 'mk_live_test_key' }),
+    { mode: 0o600 },
+  );
+  const localCopySetup = runJson([
+    'wordpress-setup',
+    '--use',
+    'local',
+    '--json',
+    '--path',
+    fakeWpRoot,
+    '--wp-cli',
+    missingWpCli,
+  ], {
+    milesHome: localCopyHome,
+    env: { MILES_PLUGIN_SOURCE: fakePluginSource },
+  });
+  assert(
+    localCopySetup.result.status === 2,
+    'wordpress-setup should stop after copying when WP-CLI is unavailable',
+  );
+  assert(
+    localCopySetup.json.actions.some((action) => action.action === 'copied-plugin'),
+    'wordpress-setup should report the copied plugin action',
+  );
+  assert(
+    existsSync(join(fakeWpRoot, 'wp-content', 'plugins', 'miles', 'miles.php')),
+    'wordpress-setup should copy local plugin files into wp-content/plugins/miles',
+  );
+  assert(
+    !existsSync(
+      join(fakeWpRoot, 'wp-content', 'plugins', 'miles', '.env.local'),
+    ) &&
+      !existsSync(
+        join(fakeWpRoot, 'wp-content', 'plugins', 'miles', '.gitignore'),
+      ),
+    'wordpress-setup should not copy env or git metadata files into the plugin directory',
+  );
+  assert(
+    localCopySetup.json.actions.some(
+      (action) => action.action === 'copied-plugin' && !action.replaced,
+    ),
+    'wordpress-setup should report when plugin copy did not replace an existing directory',
+  );
+
+  const stalePluginRoot = makeTempDir();
+  mkdirSync(join(stalePluginRoot, 'wp-admin'), { recursive: true });
+  mkdirSync(join(stalePluginRoot, 'wp-content', 'plugins', 'miles'), {
+    recursive: true,
+  });
+  writeFileSync(join(stalePluginRoot, 'wp-config.php'), "<?php\n");
+  writeFileSync(
+    join(stalePluginRoot, 'wp-content', 'plugins', 'miles', 'local-note.txt'),
+    'stale local plugin directory',
+  );
+  const localReplaceSetup = runJson([
+    'wordpress-setup',
+    '--use',
+    'local',
+    '--json',
+    '--path',
+    stalePluginRoot,
+    '--wp-cli',
+    missingWpCli,
+  ], {
+    milesHome: localCopyHome,
+    env: { MILES_PLUGIN_SOURCE: fakePluginSource },
+  });
+  assert(
+    localReplaceSetup.json.actions.some(
+      (action) => action.action === 'copied-plugin' && action.replaced === true,
+    ),
+    'wordpress-setup should report when plugin copy replaces an existing directory',
+  );
+
+  const fakeFullSetupWpCliDir = makeTempDir();
+  const fakeFullSetupWpCli = join(fakeFullSetupWpCliDir, 'wp');
+  const fakeFullSetupWpLog = join(fakeFullSetupWpCliDir, 'wp.log');
+  writeFileSync(
+    fakeFullSetupWpCli,
+    `#!/bin/sh
+path=""
+if [ "$#" -gt 0 ]; then
+  case "$1" in
+    --path=*) path="\${1#--path=}" ; shift ;;
+  esac
+fi
+cmd="$*"
+printf '%s\\n' "$cmd" >> "$WP_LOG"
+case "$cmd" in
+  "core is-installed") exit 0 ;;
+  "option get siteurl") printf '%s\\n' 'http://localhost:9988' ;;
+  "option get blogname") printf '%s\\n' 'Local Test Site' ;;
+  "option get admin_email") printf '%s\\n' 'admin@example.test' ;;
+  "core version") printf '%s\\n' '6.5.0' ;;
+  "eval echo wp_get_environment_type();") printf '%s\\n' 'local' ;;
+  "plugin is-installed miles")
+    test -f "$path/wp-content/plugins/miles/miles.php"
+    ;;
+  "plugin is-active miles")
+    test -f "$path/wp-content/plugins/miles/miles.php"
+    ;;
+  "plugin get miles --field=version") printf '%s\\n' '9.9.9-test' ;;
+  "plugin activate miles") exit 0 ;;
+  "eval echo wp_is_application_passwords_available() ? \\"1\\" : \\"0\\";") printf '%s\\n' '1' ;;
+  "miles local-setup --credentials-stdin --yes --format=json")
+    if [ "$FAIL_LOCAL_SETUP" = "1" ]; then
+      printf '%s\\n' 'sharedSecret=should-not-leak' >&2
+      exit 1
+    fi
+    printf '%s\\n' 'notice sharedSecret=should-not-leak'
+    printf '%s\\n' '{"success":true,"sharedSecret":"should-not-leak","message":"Connected with ?token=should-not-leak"}'
+    ;;
+  *) printf 'unexpected wp command: %s\\n' "$cmd" >&2; exit 1 ;;
+esac
+`,
+    { mode: 0o755 },
+  );
+  const fullSetupHome = makeTempDir();
+  writeFileSync(
+    join(fullSetupHome, 'credentials.json'),
+    JSON.stringify({ apiKey: 'mk_live_test_key' }),
+    { mode: 0o600 },
+  );
+  let fullSetupBootstrapPayload = null;
+  const fullSetupMock = await startMockServer((req, res) => {
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => {
+      if (
+        req.method === 'POST' &&
+        req.url === '/api/v2/headless/wordpress-sites/bootstrap'
+      ) {
+        fullSetupBootstrapPayload = JSON.parse(body || '{}');
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            siteId: 'local-site-1',
+            siteToken: 'site-token-1',
+            sharedSecret: 'server-secret-1',
+            serverUrl: fullSetupMock.url,
+            accountId: 'account-1',
+            accountEmail: 'user@example.test',
+            siteName: 'Local Test Site',
+            dashboardUrl: 'https://example.invalid/sites/local-site-1',
+            localDashboardUrl:
+              'http://localhost:9988/wp-admin/admin.php?page=miles',
+            relinked: false,
+          }),
+        );
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+  });
+  const fullSetupResult = await runAsync([
+    'wordpress-setup',
+    '--use',
+    'local',
+    '--json',
+    '--path',
+    fakeWpRoot,
+    '--wp-cli',
+    fakeFullSetupWpCli,
+  ], {
+    milesHome: fullSetupHome,
+    timeout: 30000,
+    env: {
+      MILES_PLUGIN_SOURCE: fakePluginSource,
+      MILES_SERVER_URL: fullSetupMock.url,
+      WP_LOG: fakeFullSetupWpLog,
+    },
+  });
+  let fullSetupJson;
+  try {
+    fullSetupJson = JSON.parse(fullSetupResult.stdout);
+  } catch (err) {
+    throw new Error(
+      `Expected JSON stdout for full wordpress-setup: ${err.message}\nstatus: ${fullSetupResult.status}\nsignal: ${fullSetupResult.signal}\nerror: ${fullSetupResult.error?.message ?? 'none'}\nstdout:\n${fullSetupResult.stdout}\nstderr:\n${fullSetupResult.stderr}\nwp log:\n${
+        existsSync(fakeFullSetupWpLog)
+          ? readFileSync(fakeFullSetupWpLog, 'utf8')
+          : '<missing>'
+      }`,
+    );
+  }
+  assert(fullSetupResult.status === 0, 'wordpress-setup full local setup should succeed');
+  assert(
+    fullSetupBootstrapPayload?.siteUrl === 'http://localhost:9988',
+    'wordpress bootstrap should use the local site URL from WP-CLI',
+  );
+  assert(
+    fullSetupJson.setup.success === true,
+    'wordpress-setup should preserve sanitized setup success',
+  );
+  assert(
+    fullSetupJson.setup.message === 'Connected with ?token=[redacted]',
+    'wordpress-setup should sanitize plugin setup messages before JSON output',
+  );
+  assert(
+    !JSON.stringify(fullSetupJson).includes('should-not-leak'),
+    'wordpress-setup JSON output must not include plugin-returned secrets',
+  );
+
+  const failedSetupHome = makeTempDir();
+  writeFileSync(
+    join(failedSetupHome, 'credentials.json'),
+    JSON.stringify({ apiKey: 'mk_live_test_key' }),
+    { mode: 0o600 },
+  );
+  const failedSetupResult = await runAsync([
+    'wordpress-setup',
+    '--use',
+    'local',
+    '--json',
+    '--path',
+    fakeWpRoot,
+    '--wp-cli',
+    fakeFullSetupWpCli,
+  ], {
+    milesHome: failedSetupHome,
+    timeout: 30000,
+    env: {
+      FAIL_LOCAL_SETUP: '1',
+      MILES_PLUGIN_SOURCE: fakePluginSource,
+      MILES_SERVER_URL: fullSetupMock.url,
+      WP_LOG: fakeFullSetupWpLog,
+    },
+  });
+  const failedSetupJson = JSON.parse(failedSetupResult.stdout);
+  assert(
+    failedSetupResult.status === 1,
+    'wordpress-setup should fail when plugin local setup fails after bootstrap',
+  );
+  assertIncludes(
+    failedSetupJson.error,
+    'local-site-1',
+    'wordpress-setup failure should surface the bootstrapped site id for retry/relink',
+  );
+  assert(
+    !failedSetupJson.error.includes('should-not-leak'),
+    'wordpress-setup failure output must sanitize WP-CLI stderr',
   );
 
   const doctorHome = makeTempDir();

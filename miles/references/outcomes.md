@@ -9,7 +9,7 @@ Servers that support outcomes attach one to every settled turn — in `wait-job`
 | Outcome | Meaning | What you do |
 |---|---|---|
 | `completed` | The turn finished its work | Continue. A `question` may still need relaying. |
-| `blocked` | The requested work did NOT happen; `outcomeUnresolved[]` says why | Resolve the blocker (often: ask the user), then retry deliberately. |
+| `blocked` | The requested work did NOT happen; `outcomeUnresolved[]` says why | Resolve the blocker (often: ask the user), then retry deliberately. If `approvalRequired` is present, follow [live-protection.md](live-protection.md). |
 | `declined` | The user explicitly said no (e.g. rejected a confirmation) | **Stop.** Do not retry, rephrase, or route around a decline. Mark dependent work moot. |
 | `aborted` | The run was stopped (`cancel`, user stop) | Intentional stop. Confirm next steps with the user. |
 | `need_connection` | The run needed/lost the browser connection | `connect-browser`, wait for `connected: true`, retry once. |
@@ -25,7 +25,7 @@ Older servers send no `outcome` field. Then `status` is your only signal (`faile
 1  failed / aborted / unexpected error
 2  precondition missing (auth, active site, arguments, server support)
 3  need_connection  → connect-browser, wait for connected, retry ONCE
-4  blocked or declined → work did not happen; involve the user
+4  blocked / approval required / declined → work did not happen; involve the user
 5  capacity / already streaming → wait, don't hammer
 ```
 
@@ -37,4 +37,5 @@ JSON error payloads carry `code` (`need_connection`, `primitive_unsupported`, �
 - Exactly one retry after fixing a `need_connection`; if it fails again, surface it.
 - On `declined`: report the decline faithfully to the user/calling workflow. Treating a decline as an obstacle to engineer around is the one unforgivable behavior on this surface.
 - On `blocked`: the `outcomeUnresolved[]` items are the to-do list; do not re-fire the same command unchanged.
+- On `approvalRequired`: show the specific protected change to the user and wait for an explicit approve/decline answer. Original instructions, prior consent, or generic "continue" do not count.
 - On `capacity` from a fired build you own: `wait-job` is the answer, not a duplicate build.

@@ -9,6 +9,7 @@ The handles and state machine every primitive shares.
 | `siteId` | `site-create`, `sites --json`, `site-attach` | `site-attach`, `use` |
 | `conversationId` | site handle (one active conversation per site) | carried implicitly by the active site |
 | `directionId` / `number` | `design-directions --json` | `build-site --design <number>` |
+| `approvalRequired.grantId` | `wait-job`, `status --json`, `site-state --json` | `approval-respond --grant <id> --response approved|declined` |
 | `slug` (storage) | `export --type html` | preview/screenshot paths |
 | `themeSlug` | `export --type theme` | theme download |
 
@@ -32,6 +33,8 @@ converting → complete
 - `complete`: WordPress theme exists. `export --type theme`; further `say` edits are browser-backed.
 
 Two streaming-level fields ride alongside the phase: `status` (`idle | streaming | completed | failed | aborted | waiting_for_input`) and `conversationStatus` (`waiting_for_user_input` when Miles asked something). `status: streaming` means exactly one turn is in flight — sending another message exits 5.
+
+`approvalRequired` can appear alongside any phase when live protection is waiting. It pauses protected work until the user explicitly approves or declines the specific grant. Use `approval-respond`, not `say` ([live-protection.md](live-protection.md)).
 
 ## Things with no undo
 

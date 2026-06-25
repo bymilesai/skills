@@ -42,6 +42,7 @@ Polls the running turn over REST. Progress lines go to **stderr**; the single se
   "milesMessage": "…",
   "question": null,
   "brief": null,
+  "approvalRequired": null,
   "directions": [ { "number": 1, "directionId": "…", "previewUrl": "…" } ],
   "selectedDirectionId": null,
   "siteReady": false,
@@ -49,7 +50,9 @@ Polls the running turn over REST. Progress lines go to **stderr**; the single se
 }
 ```
 
-On timeout it exits 1 with `status: "running"` — the turn is still going; run `wait-job` again to keep waiting or `cancel` to stop it. A `question` in the result means Miles needs input: relay it, then `say` the answer.
+On timeout it exits 1 with `status: "running"` — the turn is still going; run `wait-job` again to keep waiting or `cancel` to stop it. A `question` in the result means Miles needs ordinary input: relay it, then `say` the answer.
+
+If the result contains `approvalRequired`, this is a live-protection gate, not an ordinary question. Stop and ask the user to approve or decline that specific protected change. Do not use `say`; after explicit user approval/refusal, use `miles approval-respond --grant <id> --response approved|declined` ([live-protection.md](live-protection.md)).
 
 `miles wait` is the streaming-text sibling used by the guided flow (recovery after an interrupted long command). `wait-job` is the structured one to build automation on.
 

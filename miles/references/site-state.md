@@ -27,6 +27,7 @@ miles site-state [--json]
     ]
   },
   "credits": { "usagePercent": 50, "topUpCredits": 25 },
+  "approvalRequired": null,
   "undoAvailable": true,
   "next": [
     "miles design-directions --json",
@@ -41,6 +42,7 @@ miles site-state [--json]
 - `undoAvailable: true` means `miles undo` can revert the last turn (see [undo.md](undo.md)).
 - `credits.usagePercent` is the account's period usage — mention it to the user when it is high; never silently stop work over it.
 - `status: "streaming"` means a turn is running: `wait-job` (or `cancel`) before sending anything new.
+- `approvalRequired` means live protection is waiting for the user. The only legal next write is `approval-respond` after explicit approval/refusal for that specific change; do not use `say` ([live-protection.md](live-protection.md)).
 - `connection.connected` tells you whether browser-backed work would succeed right now.
 
 Supporting verbs alongside it: `miles status` (smaller, single GET), `miles sites --json` (all sites), `miles site-pages` (built-site file listing), `miles history` (paginated transcript — see [history.md](history.md)).
@@ -57,6 +59,7 @@ The complete derived-state dump, for when the summary isn't enough — typically
 - `designDirections[]` — full per-direction detail (number, id, name, status, previewUrl, selectable), same shape as `design-directions --json`.
 - `sessionMemory[]` — operational notes from past turns: blocked/failed work with `nextRecommendedAction`, what an earlier turn could not finish and why.
 - Conversion outcome fields: `conversionStarted/Complete/Failed`, `conversionError`, `editorUrl`.
+- `approvalRequired` — the same pending live-protection approval object from the summary, when present.
 
 It is a pure read of stored conversation state — no credits or undo lookups (use the summary for those, and its `next[]` hints; `--full` carries none).
 

@@ -3859,12 +3859,7 @@ function copyMilesPluginSource(sourceDir, wordpressRoot) {
       const name = basename(src);
       if (name === '.env' || name.startsWith('.env.')) return false;
       if (name === '.git' || name.startsWith('.git')) return false;
-      return ![
-        'node_modules',
-        'dist',
-        '.DS_Store',
-        '.wordpress-org',
-      ].includes(name);
+      return !['node_modules', '.DS_Store', '.wordpress-org'].includes(name);
     },
   });
   return { targetDir, replaced };
@@ -4409,14 +4404,14 @@ async function cmdWordPressSetup(args = []) {
     const manualNext = installResult.manualActivationRequired
       ? [
           adminUrls.adminPluginsUrl
-            ? `Open ${adminUrls.adminPluginsUrl} and activate the Miles plugin.`
-            : 'Open the local WordPress Plugins screen and activate the Miles plugin.',
+            ? `Ask the user to open ${adminUrls.adminPluginsUrl}, sign in to WordPress if prompted, and activate the Miles plugin.`
+            : 'Ask the user to open the local WordPress Plugins screen, sign in if prompted, and activate the Miles plugin.',
           adminUrls.milesAdminUrl
-            ? `Then open ${adminUrls.milesAdminUrl} to finish Miles setup in WordPress.`
-            : 'Then open Miles in wp-admin to finish setup.',
+            ? `After the user confirms activation, ask them to open ${adminUrls.milesAdminUrl} and finish Miles setup in WordPress.`
+            : 'After the user confirms activation, ask them to open Miles in wp-admin and finish setup.',
         ]
       : [
-          'Install and activate the Miles plugin in this WordPress admin, then open the Miles plugin page to finish setup.',
+          'Ask the user to install and activate the Miles plugin in this WordPress admin, then open the Miles plugin page to finish setup.',
         ];
     const payload = {
       ok: false,

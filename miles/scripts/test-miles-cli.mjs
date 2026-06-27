@@ -455,6 +455,8 @@ try {
     join(fakePluginSource, 'miles.php'),
     "<?php\n/*\nPlugin Name: Miles\nVersion: 9.9.9-test\n*/\n",
   );
+  mkdirSync(join(fakePluginSource, 'dist'), { recursive: true });
+  writeFileSync(join(fakePluginSource, 'dist', 'manifest.json'), '{}\n');
   writeFileSync(join(fakePluginSource, '.env.local'), 'SHOULD_NOT_COPY=1\n');
   writeFileSync(join(fakePluginSource, '.gitignore'), "*.log\n");
 
@@ -558,6 +560,19 @@ try {
     'wordpress-setup should copy local plugin files into wp-content/plugins/miles',
   );
   assert(
+    existsSync(
+      join(
+        fakeWpRoot,
+        'wp-content',
+        'plugins',
+        'miles',
+        'dist',
+        'manifest.json',
+      ),
+    ),
+    'wordpress-setup should preserve plugin runtime assets from local plugin sources',
+  );
+  assert(
     !existsSync(
       join(fakeWpRoot, 'wp-content', 'plugins', 'miles', '.env.local'),
     ) &&
@@ -577,8 +592,18 @@ try {
     'wordpress-setup should mark manual activation as required after copying without WP-CLI',
   );
   assert(
-    localCopySetup.json.next.some((step) => step.includes('activate the Miles plugin')),
-    'wordpress-setup should tell the agent to activate the copied plugin in wp-admin',
+    localCopySetup.json.next.some(
+      (step) =>
+        step.includes('Ask the user to open') &&
+        step.includes('activate the Miles plugin'),
+    ),
+    'wordpress-setup should ask for user activation in wp-admin when the agent cannot rely on clicks',
+  );
+  assert(
+    localCopySetup.json.next.some((step) =>
+      step.includes('After the user confirms activation'),
+    ),
+    'wordpress-setup should wait for user confirmation before continuing to Miles setup',
   );
 
   const localAppRoot = join(
@@ -668,6 +693,8 @@ try {
     join(fakeZipPluginDir, 'miles.php'),
     "<?php\n/*\nPlugin Name: Miles\nVersion: 8.8.8-zip-test\n*/\n",
   );
+  mkdirSync(join(fakeZipPluginDir, 'dist'), { recursive: true });
+  writeFileSync(join(fakeZipPluginDir, 'dist', 'manifest.json'), '{}\n');
   const fakeZipDir = makeTempDir();
   const fakePluginZip = join(fakeZipDir, 'miles.zip');
   execFileSync('zip', ['-qr', fakePluginZip, 'miles'], {
@@ -729,6 +756,19 @@ try {
     existsSync(join(zipInstallRoot, 'wp-content', 'plugins', 'miles', 'miles.php')),
     'wordpress-setup should install downloaded plugin files into wp-content/plugins/miles',
   );
+  assert(
+    existsSync(
+      join(
+        zipInstallRoot,
+        'wp-content',
+        'plugins',
+        'miles',
+        'dist',
+        'manifest.json',
+      ),
+    ),
+    'wordpress-setup should preserve plugin runtime assets from downloaded plugin ZIPs',
+  );
 
   const ancestorRoot = makeTempDir();
   const ancestorPluginSource = join(
@@ -785,6 +825,19 @@ try {
     ),
     '8.8.8-zip-test',
     'wordpress-setup should install the ZIP plugin rather than an ancestor source',
+  );
+  assert(
+    existsSync(
+      join(
+        ancestorWpRoot,
+        'wp-content',
+        'plugins',
+        'miles',
+        'dist',
+        'manifest.json',
+      ),
+    ),
+    'wordpress-setup should preserve runtime assets when installing the ZIP plugin near an ancestor source tree',
   );
 
   const stalePluginRoot = makeTempDir();

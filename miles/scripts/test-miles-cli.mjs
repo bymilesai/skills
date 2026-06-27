@@ -730,6 +730,63 @@ try {
     'wordpress-setup should install downloaded plugin files into wp-content/plugins/miles',
   );
 
+  const ancestorRoot = makeTempDir();
+  const ancestorPluginSource = join(
+    ancestorRoot,
+    'packages',
+    'miles-plugin',
+  );
+  const ancestorWpRoot = join(ancestorRoot, 'Sites', 'sample-app', 'app', 'public');
+  mkdirSync(ancestorPluginSource, { recursive: true });
+  writeFileSync(
+    join(ancestorPluginSource, 'miles.php'),
+    "<?php\n/*\nPlugin Name: Miles\nVersion: 7.7.7-ancestor-test\n*/\n",
+  );
+  mkdirSync(join(ancestorWpRoot, 'wp-admin'), { recursive: true });
+  mkdirSync(join(ancestorWpRoot, 'wp-content', 'plugins'), {
+    recursive: true,
+  });
+  writeFileSync(join(ancestorWpRoot, 'wp-config.php'), "<?php\n");
+  const ancestorInstallSetup = await runJsonAsync(
+    [
+      'wordpress-setup',
+      '--use',
+      'local',
+      '--json',
+      '--path',
+      ancestorWpRoot,
+      '--wp-cli',
+      missingWpCli,
+      '--plugin-url',
+      `${zipInstallMock.url}/miles.zip`,
+    ],
+    {
+      milesHome: localCopyHome,
+      env: {
+        MILES_PLUGIN_SOURCE: '',
+        MILES_SERVER_URL: zipInstallMock.url,
+      },
+    },
+  );
+  assert(
+    ancestorInstallSetup.json.localWordPress.plugin.source === null,
+    'wordpress-setup should not auto-discover ancestor Miles plugin sources',
+  );
+  assert(
+    ancestorInstallSetup.json.actions.some(
+      (action) => action.action === 'installed-plugin-files',
+    ),
+    'wordpress-setup should use the plugin ZIP when no source override is explicit',
+  );
+  assertIncludes(
+    readFileSync(
+      join(ancestorWpRoot, 'wp-content', 'plugins', 'miles', 'miles.php'),
+      'utf8',
+    ),
+    '8.8.8-zip-test',
+    'wordpress-setup should install the ZIP plugin rather than an ancestor source',
+  );
+
   const stalePluginRoot = makeTempDir();
   mkdirSync(join(stalePluginRoot, 'wp-admin'), { recursive: true });
   mkdirSync(join(stalePluginRoot, 'wp-content', 'plugins', 'miles'), {

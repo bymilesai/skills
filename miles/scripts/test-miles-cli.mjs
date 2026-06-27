@@ -1881,6 +1881,59 @@ esac
     'say should send the message to the active conversation endpoint',
   );
 
+  const jsonReconnectHome = makeTempDir();
+  writeFileSync(
+    join(jsonReconnectHome, 'credentials.json'),
+    JSON.stringify({
+      activeSite: 'site-1',
+      sites: {
+        'site-1': {
+          siteToken: 'site-token',
+          conversationId: 'conversation-1',
+          dashboardUrl: 'https://beta.bymiles.ai/sites/site-1',
+        },
+      },
+    }),
+  );
+  const jsonReconnectMock = await startMockServer((req, res) => {
+    req.on('data', () => {});
+    req.on('end', () => {
+      res.writeHead(409, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          code: 'dashboard_connection_required',
+          error: 'Dashboard connection required.',
+        }),
+      );
+    });
+  });
+  const { result: jsonReconnectResult, json: jsonReconnect } =
+    await runJsonAsync(['--json', 'say', 'Make the form wider'], {
+      milesHome: jsonReconnectHome,
+      env: { MILES_SERVER_URL: jsonReconnectMock.url },
+    });
+  assert(
+    jsonReconnectResult.status === 3,
+    'global --json say should preserve the need_connection exit code',
+  );
+  assert(
+    jsonReconnect.detail?.code === 'need_connection' &&
+      jsonReconnect.detail?.dashboardUrl ===
+        'https://beta.bymiles.ai/sites/site-1?agent=true',
+    'global --json say should return structured recovery details',
+  );
+
+  const { result: commandJsonReconnectResult, json: commandJsonReconnect } =
+    await runJsonAsync(['say', 'Make the form wider', '--json'], {
+      milesHome: jsonReconnectHome,
+      env: { MILES_SERVER_URL: jsonReconnectMock.url },
+    });
+  assert(
+    commandJsonReconnectResult.status === 3 &&
+      commandJsonReconnect.detail?.code === 'need_connection',
+    'command-local say --json should return structured recovery details',
+  );
+
   // build-site must be headless: it must POST select-design-direction without
   // checking the dashboard connection first, and exit with the outcome code.
   const buildHome = makeTempDir();
@@ -1949,6 +2002,27 @@ esac
     buildResult.stdout,
     '[outcome: completed]',
     'build-site should surface the settled turn outcome',
+  );
+
+  const { result: buildJsonResult, json: buildJson } = await runJsonAsync(
+    ['build-site', '--design', '1', '--json'],
+    {
+      milesHome: buildHome,
+      env: { MILES_SERVER_URL: buildMock.url },
+    },
+  );
+  assert(
+    buildJsonResult.status === 0,
+    'build-site --json should complete headlessly',
+  );
+  assert(
+    buildJson.outcome === 'completed' && buildJson.milesMessage === 'Site built.',
+    'build-site --json should return the structured settled wait result',
+  );
+  assert(
+    !buildJsonResult.stdout.includes('Selecting design direction') &&
+      !buildJsonResult.stdout.includes('Design 1 selected.'),
+    'build-site --json should keep progress prose out of stdout',
   );
 
   // wait-job maps blocked/declined outcomes onto exit 4 with JSON on stdout.
@@ -2378,12 +2452,11 @@ esac
 
   const { result: unsupportedJsonResult, json: unsupportedJson } = runJson([
     '--json',
-    'reply',
-    'hello',
+    'hook',
   ]);
   assert(
     unsupportedJsonResult.status === 2,
-    'global --json should be rejected on streaming commands',
+    'global --json should still be rejected on non-JSON helper commands',
   );
   assertIncludes(
     unsupportedJson.error,

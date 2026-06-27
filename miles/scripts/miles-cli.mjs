@@ -104,6 +104,14 @@ const JSON_COMMANDS = new Set([
   'whoami',
   'account-status',
   'status',
+  'site-create',
+  'create-site',
+  'say',
+  'reply',
+  'build-site',
+  'select-design-direction',
+  'convert-theme',
+  'build-theme',
   'site-state',
   'site-attach',
   'wordpress-detect',
@@ -1661,7 +1669,7 @@ async function cmdCreateSite(rawArgs) {
     uploadedFiles = refs.map(toUploadedFileRef);
   }
 
-  if (!noWait) {
+  if (!noWait && !cliOptions.json) {
     console.log('Creating site and starting conversation with Miles...');
   }
 
@@ -1698,6 +1706,10 @@ async function cmdCreateSite(rawArgs) {
       conversationId: data.conversationId,
     });
     return;
+  }
+
+  if (cliOptions.json) {
+    return cmdWaitJob([]);
   }
 
   console.log(`Dashboard: ${data.dashboardUrl}`);
@@ -1774,6 +1786,10 @@ async function cmdSay(rawArgs) {
       conversationId: site.conversationId,
     });
     return;
+  }
+
+  if (cliOptions.json) {
+    return cmdWaitJob([], { sinceMessageId: response?.sinceMessageId });
   }
 
   const settled = await doWait(creds, site.conversationId, serverUrl, undefined, {
@@ -3234,7 +3250,7 @@ async function cmdBuildSite(rawArgs) {
   }
   const directionNumber = parseInt(rawDirectionNumber, 10);
 
-  if (!noWait) {
+  if (!noWait && !cliOptions.json) {
     console.log(
       `Selecting design direction ${directionNumber} and starting the site build...`,
     );
@@ -3266,6 +3282,10 @@ async function cmdBuildSite(rawArgs) {
       conversationId: site.conversationId,
     });
     return;
+  }
+
+  if (cliOptions.json) {
+    return cmdWaitJob([], { sinceMessageId: data?.sinceMessageId });
   }
 
   console.log(data.message);
@@ -5380,8 +5400,8 @@ async function cmdConvertTheme(rawArgs = []) {
     );
   }
 
-  // Keep stdout clean for the JSON handle when --no-wait was requested.
-  const logLine = noWait
+  // Keep stdout clean for JSON output and no-wait handles.
+  const logLine = noWait || cliOptions.json
     ? (line) => console.error(line)
     : (line) => console.log(line);
 
@@ -5442,6 +5462,10 @@ async function cmdConvertTheme(rawArgs = []) {
       conversationId: site.conversationId,
     });
     return;
+  }
+
+  if (cliOptions.json) {
+    return cmdWaitJob([]);
   }
 
   // Wait for completion after the agent has established the dashboard session.
@@ -5729,7 +5753,9 @@ Exit codes: 0 ok | 1 failed/aborted | 2 precondition | 3 need connection
 approval required, or declined by user | 5 capacity/already running.
 
 Options:
-  --json                            Emit JSON for inspection commands`);
+  --json                            Emit JSON for inspection and long-running
+                                    commands (structured handles, errors, and
+                                    settled wait results)`);
   process.exit(0);
 }
 

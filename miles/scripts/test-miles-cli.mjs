@@ -11,7 +11,7 @@ import {
 } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join, resolve } from 'path';
-import { spawn, spawnSync } from 'child_process';
+import { execFileSync, spawn, spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { createServer } from 'http';
 import {
@@ -547,7 +547,7 @@ try {
   );
   assert(
     localCopySetup.result.status === 2,
-    'wordpress-setup should stop after copying when WP-CLI is unavailable',
+    'wordpress-setup should hand off to manual activation when WP-CLI is unavailable',
   );
   assert(
     localCopySetup.json.actions.some((action) => action.action === 'copied-plugin'),
@@ -571,6 +571,123 @@ try {
       (action) => action.action === 'copied-plugin' && !action.replaced,
     ),
     'wordpress-setup should report when plugin copy did not replace an existing directory',
+  );
+  assert(
+    localCopySetup.json.manualActivationRequired === true,
+    'wordpress-setup should mark manual activation as required after copying without WP-CLI',
+  );
+  assert(
+    localCopySetup.json.next.some((step) => step.includes('activate the Miles plugin')),
+    'wordpress-setup should tell the agent to activate the copied plugin in wp-admin',
+  );
+
+  const localAppRoot = join(
+    makeTempDir(),
+    'Local Sites',
+    'andys-coffee',
+    'app',
+    'public',
+  );
+  mkdirSync(join(localAppRoot, 'wp-admin'), { recursive: true });
+  mkdirSync(join(localAppRoot, 'wp-content', 'plugins'), { recursive: true });
+  writeFileSync(join(localAppRoot, 'wp-config.php'), "<?php\n");
+  const localAppSetup = await runJsonAsync(
+    [
+      'wordpress-setup',
+      '--use',
+      'local',
+      '--json',
+      '--path',
+      localAppRoot,
+      '--wp-cli',
+      missingWpCli,
+    ],
+    {
+      milesHome: localCopyHome,
+      env: {
+        MILES_PLUGIN_SOURCE: fakePluginSource,
+        MILES_SERVER_URL: wordpressBootstrapMock.url,
+      },
+    },
+  );
+  assert(
+    localAppSetup.json.adminPluginsUrl ===
+      'http://andys-coffee.local/wp-admin/plugins.php',
+    'wordpress-setup should infer the Local app plugins page URL',
+  );
+  assert(
+    localAppSetup.json.milesAdminUrl ===
+      'http://andys-coffee.local/wp-admin/admin.php?page=miles',
+    'wordpress-setup should infer the Local app Miles admin URL',
+  );
+
+  const fakeZipSourceRoot = makeTempDir();
+  const fakeZipPluginDir = join(fakeZipSourceRoot, 'miles');
+  mkdirSync(fakeZipPluginDir, { recursive: true });
+  writeFileSync(
+    join(fakeZipPluginDir, 'miles.php'),
+    "<?php\n/*\nPlugin Name: Miles\nVersion: 8.8.8-zip-test\n*/\n",
+  );
+  const fakeZipDir = makeTempDir();
+  const fakePluginZip = join(fakeZipDir, 'miles.zip');
+  execFileSync('zip', ['-qr', fakePluginZip, 'miles'], {
+    cwd: fakeZipSourceRoot,
+  });
+  const zipInstallMock = await startMockServer((req, res) => {
+    req.on('data', () => {});
+    req.on('end', () => {
+      if (req.url === '/api/v2/headless/capabilities') {
+        sendCapabilities(res, WORDPRESS_BOOTSTRAP_PRIMITIVE);
+        return;
+      }
+      if (req.url === '/miles.zip') {
+        res.writeHead(200, { 'content-type': 'application/zip' });
+        res.end(readFileSync(fakePluginZip));
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+  });
+  const zipInstallRoot = makeTempDir();
+  mkdirSync(join(zipInstallRoot, 'wp-admin'), { recursive: true });
+  mkdirSync(join(zipInstallRoot, 'wp-content', 'plugins'), { recursive: true });
+  writeFileSync(join(zipInstallRoot, 'wp-config.php'), "<?php\n");
+  const zipInstallSetup = await runJsonAsync(
+    [
+      'wordpress-setup',
+      '--use',
+      'local',
+      '--json',
+      '--path',
+      zipInstallRoot,
+      '--wp-cli',
+      missingWpCli,
+      '--plugin-url',
+      `${zipInstallMock.url}/miles.zip`,
+    ],
+    {
+      milesHome: localCopyHome,
+      env: {
+        MILES_PLUGIN_SOURCE: '',
+        MILES_SERVER_URL: zipInstallMock.url,
+      },
+    },
+  );
+  assert(
+    zipInstallSetup.result.status === 2 &&
+      zipInstallSetup.json.manualActivationRequired === true,
+    'wordpress-setup should hand off to manual activation after installing a plugin ZIP without WP-CLI',
+  );
+  assert(
+    zipInstallSetup.json.actions.some(
+      (action) => action.action === 'installed-plugin-files',
+    ),
+    'wordpress-setup should report plugin ZIP file installation',
+  );
+  assert(
+    existsSync(join(zipInstallRoot, 'wp-content', 'plugins', 'miles', 'miles.php')),
+    'wordpress-setup should install downloaded plugin files into wp-content/plugins/miles',
   );
 
   const stalePluginRoot = makeTempDir();
@@ -607,6 +724,55 @@ try {
       (action) => action.action === 'copied-plugin' && action.replaced === true,
     ),
     'wordpress-setup should report when plugin copy replaces an existing directory',
+  );
+
+  const failingWpCliDir = makeTempDir();
+  const failingWpCli = join(failingWpCliDir, 'wp');
+  writeFileSync(
+    failingWpCli,
+    `#!/bin/sh\nprintf '%s\\n' 'Error establishing a database connection' >&2\nexit 1\n`,
+    { mode: 0o755 },
+  );
+  const wpCliFailureRoot = makeTempDir();
+  mkdirSync(join(wpCliFailureRoot, 'wp-admin'), { recursive: true });
+  mkdirSync(join(wpCliFailureRoot, 'wp-content', 'plugins'), {
+    recursive: true,
+  });
+  writeFileSync(join(wpCliFailureRoot, 'wp-config.php'), "<?php\n");
+  const wpCliFailureSetup = await runJsonAsync(
+    [
+      'wordpress-setup',
+      '--use',
+      'local',
+      '--json',
+      '--path',
+      wpCliFailureRoot,
+      '--wp-cli',
+      failingWpCli,
+      '--site-url',
+      'http://custom-local.test',
+    ],
+    {
+      milesHome: localCopyHome,
+      env: {
+        MILES_PLUGIN_SOURCE: fakePluginSource,
+        MILES_SERVER_URL: wordpressBootstrapMock.url,
+      },
+    },
+  );
+  assert(
+    wpCliFailureSetup.result.status === 2 &&
+      wpCliFailureSetup.json.manualActivationRequired === true,
+    'wordpress-setup should fall back to manual activation when WP-CLI cannot bootstrap WordPress',
+  );
+  assert(
+    existsSync(join(wpCliFailureRoot, 'wp-content', 'plugins', 'miles', 'miles.php')),
+    'wordpress-setup should still copy plugin files when WP-CLI fails',
+  );
+  assert(
+    wpCliFailureSetup.json.adminPluginsUrl ===
+      'http://custom-local.test/wp-admin/plugins.php',
+    'wordpress-setup should honor --site-url for manual activation URLs',
   );
 
   const fakeFullSetupWpCliDir = makeTempDir();

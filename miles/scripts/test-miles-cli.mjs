@@ -592,8 +592,18 @@ try {
     'wordpress-setup should mark manual activation as required after copying without WP-CLI',
   );
   assert(
-    localCopySetup.json.next.some((step) => step.includes('activate the Miles plugin')),
-    'wordpress-setup should tell the agent to activate the copied plugin in wp-admin',
+    localCopySetup.json.next.some(
+      (step) =>
+        step.includes('Ask the user to open') &&
+        step.includes('activate the Miles plugin'),
+    ),
+    'wordpress-setup should ask for user activation in wp-admin when the agent cannot rely on clicks',
+  );
+  assert(
+    localCopySetup.json.next.some((step) =>
+      step.includes('After the user confirms activation'),
+    ),
+    'wordpress-setup should wait for user confirmation before continuing to Miles setup',
   );
 
   const localAppRoot = join(

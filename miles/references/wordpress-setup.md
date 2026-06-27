@@ -67,19 +67,19 @@ When WP-CLI cannot activate/pair the plugin, setup exits `2` with plugin files i
   "adminPluginsUrl": "http://sample-site.local/wp-admin/plugins.php",
   "milesAdminUrl": "http://sample-site.local/wp-admin/admin.php?page=miles",
   "next": [
-    "Open http://sample-site.local/wp-admin/plugins.php and activate the Miles plugin.",
-    "Then open http://sample-site.local/wp-admin/admin.php?page=miles to finish Miles setup in WordPress."
+    "Ask the user to open http://sample-site.local/wp-admin/plugins.php, sign in to WordPress if prompted, and activate the Miles plugin.",
+    "After the user confirms activation, ask them to open http://sample-site.local/wp-admin/admin.php?page=miles and finish Miles setup in WordPress."
   ]
 }
 ```
 
-Open `adminPluginsUrl` in the browser surface, ask the user to activate Miles if you cannot click it yourself, then open `milesAdminUrl` and finish the plugin setup flow. Use `--site-url` when the local URL cannot be inferred; Local.app paths like `~/Local Sites/<site>/app/public` infer `http://<site>.local`.
+Do not assume the agent can click WordPress admin controls. The supported fallback is to ask the user to open `adminPluginsUrl`, sign in to WordPress if needed, activate Miles, and confirm when activation is done. Then ask the user to open `milesAdminUrl` and finish the plugin setup flow. Browser automation may assist when available, but user-confirmed activation is the portable path. Use `--site-url` when the local URL cannot be inferred; Local.app paths like `~/Local Sites/<site>/app/public` infer `http://<site>.local`.
 
 ## Recovery
 
 - No local WordPress detected: returns `ok: true`, `mode: "cloud"`, and points you to `site-create`.
 - Missing auth or missing `wordpress-bootstrap`: exits `2`; do not retry until login/server support is fixed.
-- WP-CLI missing or broken: installs/copies plugin files when possible, exits `2` with `manualActivationRequired`, `adminPluginsUrl`, and `next[]`; activate Miles in WordPress admin and continue in the plugin UI.
+- WP-CLI missing or broken: installs/copies plugin files when possible, exits `2` with `manualActivationRequired`, `adminPluginsUrl`, and `next[]`; ask the user to activate Miles in WordPress admin and continue in the plugin UI.
 - Application passwords unavailable: exits `2` with `next[]`; ask the user to enable HTTPS or configure the local environment safely.
 - Plugin setup failure after bootstrap: exits `1` and includes the created `siteId` in the sanitized error. Rerun the same command to relink and finish setup after fixing WordPress.
 

@@ -64,11 +64,11 @@ When WP-CLI cannot activate/pair the plugin, setup exits `2` with plugin files i
   "actions": [
     { "action": "copied-plugin", "targetDir": "/path/to/wp-content/plugins/miles" }
   ],
-  "adminPluginsUrl": "http://andys-coffee.local/wp-admin/plugins.php",
-  "milesAdminUrl": "http://andys-coffee.local/wp-admin/admin.php?page=miles",
+  "adminPluginsUrl": "http://sample-site.local/wp-admin/plugins.php",
+  "milesAdminUrl": "http://sample-site.local/wp-admin/admin.php?page=miles",
   "next": [
-    "Open http://andys-coffee.local/wp-admin/plugins.php and activate the Miles plugin.",
-    "Then open http://andys-coffee.local/wp-admin/admin.php?page=miles to finish Miles setup in WordPress."
+    "Open http://sample-site.local/wp-admin/plugins.php and activate the Miles plugin.",
+    "Then open http://sample-site.local/wp-admin/admin.php?page=miles to finish Miles setup in WordPress."
   ]
 }
 ```

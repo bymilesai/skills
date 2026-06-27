@@ -584,7 +584,7 @@ try {
   const localAppRoot = join(
     makeTempDir(),
     'Local Sites',
-    'andys-coffee',
+    'sample-site',
     'app',
     'public',
   );
@@ -612,13 +612,53 @@ try {
   );
   assert(
     localAppSetup.json.adminPluginsUrl ===
-      'http://andys-coffee.local/wp-admin/plugins.php',
+      'http://sample-site.local/wp-admin/plugins.php',
     'wordpress-setup should infer the Local app plugins page URL',
   );
   assert(
     localAppSetup.json.milesAdminUrl ===
-      'http://andys-coffee.local/wp-admin/admin.php?page=miles',
+      'http://sample-site.local/wp-admin/admin.php?page=miles',
     'wordpress-setup should infer the Local app Miles admin URL',
+  );
+
+  const localSitesRoot = join(
+    makeTempDir(),
+    'Sites',
+    'sample-studio',
+    'app',
+    'public',
+  );
+  mkdirSync(join(localSitesRoot, 'wp-admin'), { recursive: true });
+  mkdirSync(join(localSitesRoot, 'wp-content', 'plugins'), { recursive: true });
+  writeFileSync(join(localSitesRoot, 'wp-config.php'), "<?php\n");
+  const localSitesSetup = await runJsonAsync(
+    [
+      'wordpress-setup',
+      '--use',
+      'local',
+      '--json',
+      '--path',
+      localSitesRoot,
+      '--wp-cli',
+      missingWpCli,
+    ],
+    {
+      milesHome: localCopyHome,
+      env: {
+        MILES_PLUGIN_SOURCE: fakePluginSource,
+        MILES_SERVER_URL: wordpressBootstrapMock.url,
+      },
+    },
+  );
+  assert(
+    localSitesSetup.json.adminPluginsUrl ===
+      'http://sample-studio.local/wp-admin/plugins.php',
+    'wordpress-setup should infer the plugins page URL for Sites/<site>/app/public roots',
+  );
+  assert(
+    localSitesSetup.json.milesAdminUrl ===
+      'http://sample-studio.local/wp-admin/admin.php?page=miles',
+    'wordpress-setup should infer the Miles admin URL for Sites/<site>/app/public roots',
   );
 
   const fakeZipSourceRoot = makeTempDir();

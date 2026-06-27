@@ -3730,20 +3730,26 @@ function localPluginsAdminUrl(siteUrl) {
   return base ? `${base}/wp-admin/plugins.php` : null;
 }
 
+function slugifyLocalSiteName(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 function inferLocalSiteUrlFromRoot(root) {
   const parts = resolve(expandHomePath(root)).split(/[\\/]+/);
-  const localSitesIndex = parts.lastIndexOf('Local Sites');
-  if (
-    localSitesIndex !== -1 &&
-    parts[localSitesIndex + 1] &&
-    parts[localSitesIndex + 2] === 'app' &&
-    parts[localSitesIndex + 3] === 'public'
-  ) {
-    const slug = parts[localSitesIndex + 1]
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/g, '-')
-      .replace(/^-+|-+$/g, '');
-    return slug ? `http://${slug}.local` : null;
+  for (const sitesDir of ['Local Sites', 'Sites']) {
+    const sitesIndex = parts.lastIndexOf(sitesDir);
+    if (
+      sitesIndex !== -1 &&
+      parts[sitesIndex + 1] &&
+      parts[sitesIndex + 2] === 'app' &&
+      parts[sitesIndex + 3] === 'public'
+    ) {
+      const slug = slugifyLocalSiteName(parts[sitesIndex + 1]);
+      return slug ? `http://${slug}.local` : null;
+    }
   }
   return null;
 }

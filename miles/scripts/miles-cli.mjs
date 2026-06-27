@@ -3859,12 +3859,7 @@ function copyMilesPluginSource(sourceDir, wordpressRoot) {
       const name = basename(src);
       if (name === '.env' || name.startsWith('.env.')) return false;
       if (name === '.git' || name.startsWith('.git')) return false;
-      return ![
-        'node_modules',
-        'dist',
-        '.DS_Store',
-        '.wordpress-org',
-      ].includes(name);
+      return !['node_modules', '.DS_Store', '.wordpress-org'].includes(name);
     },
   });
   return { targetDir, replaced };

@@ -455,6 +455,8 @@ try {
     join(fakePluginSource, 'miles.php'),
     "<?php\n/*\nPlugin Name: Miles\nVersion: 9.9.9-test\n*/\n",
   );
+  mkdirSync(join(fakePluginSource, 'dist'), { recursive: true });
+  writeFileSync(join(fakePluginSource, 'dist', 'manifest.json'), '{}\n');
   writeFileSync(join(fakePluginSource, '.env.local'), 'SHOULD_NOT_COPY=1\n');
   writeFileSync(join(fakePluginSource, '.gitignore'), "*.log\n");
 
@@ -556,6 +558,19 @@ try {
   assert(
     existsSync(join(fakeWpRoot, 'wp-content', 'plugins', 'miles', 'miles.php')),
     'wordpress-setup should copy local plugin files into wp-content/plugins/miles',
+  );
+  assert(
+    existsSync(
+      join(
+        fakeWpRoot,
+        'wp-content',
+        'plugins',
+        'miles',
+        'dist',
+        'manifest.json',
+      ),
+    ),
+    'wordpress-setup should preserve plugin runtime assets from local plugin sources',
   );
   assert(
     !existsSync(
@@ -668,6 +683,8 @@ try {
     join(fakeZipPluginDir, 'miles.php'),
     "<?php\n/*\nPlugin Name: Miles\nVersion: 8.8.8-zip-test\n*/\n",
   );
+  mkdirSync(join(fakeZipPluginDir, 'dist'), { recursive: true });
+  writeFileSync(join(fakeZipPluginDir, 'dist', 'manifest.json'), '{}\n');
   const fakeZipDir = makeTempDir();
   const fakePluginZip = join(fakeZipDir, 'miles.zip');
   execFileSync('zip', ['-qr', fakePluginZip, 'miles'], {
@@ -729,6 +746,19 @@ try {
     existsSync(join(zipInstallRoot, 'wp-content', 'plugins', 'miles', 'miles.php')),
     'wordpress-setup should install downloaded plugin files into wp-content/plugins/miles',
   );
+  assert(
+    existsSync(
+      join(
+        zipInstallRoot,
+        'wp-content',
+        'plugins',
+        'miles',
+        'dist',
+        'manifest.json',
+      ),
+    ),
+    'wordpress-setup should preserve plugin runtime assets from downloaded plugin ZIPs',
+  );
 
   const ancestorRoot = makeTempDir();
   const ancestorPluginSource = join(
@@ -785,6 +815,19 @@ try {
     ),
     '8.8.8-zip-test',
     'wordpress-setup should install the ZIP plugin rather than an ancestor source',
+  );
+  assert(
+    existsSync(
+      join(
+        ancestorWpRoot,
+        'wp-content',
+        'plugins',
+        'miles',
+        'dist',
+        'manifest.json',
+      ),
+    ),
+    'wordpress-setup should preserve runtime assets when installing the ZIP plugin near an ancestor source tree',
   );
 
   const stalePluginRoot = makeTempDir();

@@ -3825,29 +3825,14 @@ function isAutoConfigurableLocalWordPressUrl(value) {
   }
 }
 
-function findLocalMilesPluginSource(startPath = process.cwd()) {
-  const candidates = [];
-  if (MILES_PLUGIN_SOURCE) {
-    candidates.push(resolve(expandHomePath(MILES_PLUGIN_SOURCE)));
-  }
-
-  let current = resolve(expandHomePath(startPath));
-  if (existingFile(current)) current = dirname(current);
-  while (true) {
-    candidates.push(join(current, 'packages', 'miles-plugin'));
-    candidates.push(join(current, 'miles-plugin'));
-    const parent = dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-
-  for (const candidate of candidates) {
-    if (
-      existingDirectory(candidate) &&
-      existingFile(join(candidate, 'miles.php'))
-    ) {
-      return candidate;
-    }
+function findLocalMilesPluginSource() {
+  if (!MILES_PLUGIN_SOURCE) return null;
+  const candidate = resolve(expandHomePath(MILES_PLUGIN_SOURCE));
+  if (
+    existingDirectory(candidate) &&
+    existingFile(join(candidate, 'miles.php'))
+  ) {
+    return candidate;
   }
   return null;
 }

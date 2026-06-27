@@ -18,7 +18,7 @@ This matters during staged rollout: the public skill can contain the command bef
 Only after the user explicitly chooses local WordPress, the command may:
 
 - run WP-CLI in the selected WordPress root
-- copy a local Miles plugin source into `wp-content/plugins/miles`
+- copy a local Miles plugin source into `wp-content/plugins/miles` when `MILES_PLUGIN_SOURCE` is explicitly set
 - download/copy Miles plugin files into `wp-content/plugins/miles`
 - install or activate the Miles plugin through WP-CLI when it works
 - set `WP_ENVIRONMENT_TYPE=local` for clearly local/dev URLs when WordPress application passwords need it
@@ -28,7 +28,7 @@ Only after the user explicitly chooses local WordPress, the command may:
 
 Do not write plugin options, shared secrets, application passwords, or site tokens yourself.
 
-WP-CLI is optional. If it is missing or cannot load WordPress in the local runtime, the command should still install plugin files when possible and return a manual activation handoff.
+WP-CLI is optional. If it is missing or cannot load WordPress in the local runtime, the command should still install plugin files when possible and return a manual activation handoff. Normal user installs download the plugin from the release manifest; local source copying is only for explicit `MILES_PLUGIN_SOURCE` overrides.
 
 ## JSON Success
 

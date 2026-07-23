@@ -4715,10 +4715,11 @@ async function cmdWordPressSetup(args = []) {
   }
 
   if (!creds.sites) creds.sites = {};
+  const existingSite = creds.sites[bootstrap.siteId];
   creds.sites[bootstrap.siteId] = {
     siteToken: bootstrap.siteToken,
     name: bootstrap.siteName || refreshed.site.name || siteUrl,
-    conversationId: null,
+    conversationId: existingSite?.conversationId || null,
     dashboardUrl:
       bootstrap.localDashboardUrl ||
       refreshed.site.dashboardUrl ||

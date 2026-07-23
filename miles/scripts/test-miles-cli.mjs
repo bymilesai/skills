@@ -1510,7 +1510,20 @@ esac
   const fullSetupHome = makeTempDir();
   writeFileSync(
     join(fullSetupHome, 'credentials.json'),
-    JSON.stringify({ apiKey: 'mk_live_test_key' }),
+    JSON.stringify({
+      apiKey: 'mk_live_test_key',
+      activeSite: 'local-site-1',
+      sites: {
+        'local-site-1': {
+          siteToken: 'existing-site-token',
+          conversationId: 'existing-conversation',
+          dashboardUrl:
+            'http://localhost:9988/wp-admin/admin.php?page=miles',
+          siteUrl: 'http://localhost:9988',
+          connection: { kind: 'local-wordpress' },
+        },
+      },
+    }),
     { mode: 0o600 },
   );
   let fullSetupBootstrapPayload = null;
@@ -1603,6 +1616,14 @@ esac
   assert(
     !JSON.stringify(fullSetupJson).includes('should-not-leak'),
     'wordpress-setup JSON output must not include plugin-returned secrets',
+  );
+  const fullSetupCredentials = JSON.parse(
+    readFileSync(join(fullSetupHome, 'credentials.json'), 'utf8'),
+  );
+  assert(
+    fullSetupCredentials.sites['local-site-1'].conversationId ===
+      'existing-conversation',
+    'wordpress-setup relink should preserve the existing local conversation',
   );
 
   const failedSetupHome = makeTempDir();

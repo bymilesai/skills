@@ -1392,6 +1392,10 @@ esac
   });
   writeFileSync(join(stalePluginRoot, 'wp-config.php'), "<?php\n");
   writeFileSync(
+    join(stalePluginRoot, 'wp-content', 'plugins', 'miles', 'miles.php'),
+    "<?php\n/*\nPlugin Name: Miles\nVersion: 0.1.0-stale\n*/\n",
+  );
+  writeFileSync(
     join(stalePluginRoot, 'wp-content', 'plugins', 'miles', 'local-note.txt'),
     'stale local plugin directory',
   );
@@ -1419,6 +1423,14 @@ esac
       (action) => action.action === 'copied-plugin' && action.replaced === true,
     ),
     'wordpress-setup should report when plugin copy replaces an existing directory',
+  );
+  assertIncludes(
+    readFileSync(
+      join(stalePluginRoot, 'wp-content', 'plugins', 'miles', 'miles.php'),
+      'utf8',
+    ),
+    '9.9.9-test',
+    'wordpress-setup should refresh an installed plugin from an explicit local source',
   );
 
   const failingWpCliDir = makeTempDir();

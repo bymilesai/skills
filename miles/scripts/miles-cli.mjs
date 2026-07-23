@@ -4320,19 +4320,15 @@ async function ensureMilesPluginInstalled(detection, args = []) {
       'plugins',
       'miles',
     );
-    if (detection.plugin.installed) {
-      return pluginWordPressCompatibility(
-        installedPluginDir,
-        detection.site.wordpressVersion,
-      );
-    }
-
     if (detection.plugin.source) {
       const compatibility = pluginWordPressCompatibility(
         detection.plugin.source,
         detection.site.wordpressVersion,
       );
       if (!compatibility.ok) return compatibility;
+      if (resolve(detection.plugin.source) === resolve(installedPluginDir)) {
+        return { ok: true, pluginHeaders: compatibility.headers };
+      }
       const copyResult = copyMilesPluginSource(
         detection.plugin.source,
         detection.root,
@@ -4343,6 +4339,13 @@ async function ensureMilesPluginInstalled(detection, args = []) {
         replaced: copyResult.replaced || undefined,
       });
       return { ok: true, pluginHeaders: compatibility.headers };
+    }
+
+    if (detection.plugin.installed) {
+      return pluginWordPressCompatibility(
+        installedPluginDir,
+        detection.site.wordpressVersion,
+      );
     }
 
     pluginUrl = pluginUrl || (await getPluginDownloadUrl().catch(() => null));

@@ -40,6 +40,8 @@ miles wordpress-detect --json [--path <dir>] [--wp-cli <path>]
 
 `found: false` means continue with Miles cloud (`site-create`) unless the user explicitly points you at another WordPress path.
 
+The `site` fields intentionally remain `null` during passive detection, including `wordpressVersion`. `wordpress-setup --use local` is the consent boundary that runs WP-CLI, reports the detected version, and checks it against the plugin requirement before installation.
+
 ## Rules
 
 - Treat this as passive only: no PHP, WP-CLI, plugin, theme, or database execution.

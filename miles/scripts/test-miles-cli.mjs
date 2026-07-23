@@ -432,6 +432,14 @@ try {
     helpSafetyRequests.length === 0,
     'site-create --help must not call capabilities, create a site, or spend credits',
   );
+  const shortHelpSafetyResult = await runAsync(['site-create', '-h'], {
+    milesHome: helpSafetyHome,
+    env: { MILES_SERVER_URL: helpSafetyMock.url },
+  });
+  assert(
+    shortHelpSafetyResult.status === 0 && helpSafetyRequests.length === 0,
+    'site-create -h must be just as side-effect free as --help',
+  );
 
   const fakeRuntimeDir = makeTempDir();
   const fakeRuntime = join(fakeRuntimeDir, 'runtime');
@@ -669,6 +677,18 @@ printf '%s|%s|%s\\n' "\${MILES_SERVER_URL-unset}" "\${MILES_PLUGIN_SOURCE-unset}
       localConnection.json.realtime?.connected === null &&
       localConnection.json.realtime?.reason.includes('No conversation'),
     'connect-browser should explain why realtime status is unavailable before a conversation exists',
+  );
+  const localStateWithoutConversation = runJson(['site-state', '--json'], {
+    milesHome: unsupportedLocalHome,
+  });
+  assert(
+    localStateWithoutConversation.result.status === 2,
+    'site-state should fail cleanly before a local conversation exists',
+  );
+  assertIncludes(
+    localStateWithoutConversation.json.error,
+    'this exact site',
+    'site-state should direct a paired local site to safe local site-create rather than site-attach or cloud creation',
   );
 
   const accountStatusHome = makeTempDir();
@@ -986,6 +1006,84 @@ printf '%s|%s|%s\\n' "\${MILES_SERVER_URL-unset}" "\${MILES_PLUGIN_SOURCE-unset}
     'wordpress-setup should wait for user confirmation before continuing to Miles setup',
   );
 
+  const legacyWpCliDir = makeTempDir();
+  const legacyWpCli = join(legacyWpCliDir, 'wp');
+  writeFileSync(
+    legacyWpCli,
+    `#!/bin/sh
+case "$*" in
+  *"core is-installed") exit 0 ;;
+  *"option get siteurl") printf '%s\\n' 'http://legacy.test' ;;
+  *"option get blogname") printf '%s\\n' 'Legacy WordPress' ;;
+  *"option get admin_email") printf '%s\\n' 'admin@example.test' ;;
+  *"core version") printf '%s\\n' '6.8.3' ;;
+  *"eval echo wp_get_environment_type();") printf '%s\\n' 'local' ;;
+  *) exit 1 ;;
+esac
+`,
+    { mode: 0o755 },
+  );
+  const incompatiblePluginSource = makeTempDir();
+  writeFileSync(
+    join(incompatiblePluginSource, 'miles.php'),
+    "<?php\n/*\nPlugin Name: Miles\nVersion: 10.0.0-test\nRequires at least: 7.0\n*/\n",
+  );
+  const incompatibleSourceRoot = makeTempDir();
+  mkdirSync(join(incompatibleSourceRoot, 'wp-admin'), { recursive: true });
+  mkdirSync(join(incompatibleSourceRoot, 'wp-content', 'plugins'), {
+    recursive: true,
+  });
+  writeFileSync(join(incompatibleSourceRoot, 'wp-config.php'), "<?php\n");
+  const incompatibleSourceSetup = await runJsonAsync(
+    [
+      'wordpress-setup',
+      '--use',
+      'local',
+      '--json',
+      '--path',
+      incompatibleSourceRoot,
+      '--wp-cli',
+      legacyWpCli,
+    ],
+    {
+      milesHome: localCopyHome,
+      env: {
+        MILES_PLUGIN_SOURCE: incompatiblePluginSource,
+        MILES_SERVER_URL: wordpressBootstrapMock.url,
+      },
+    },
+  );
+  assert(
+    incompatibleSourceSetup.result.status === 2 &&
+      incompatibleSourceSetup.json.code ===
+        'wordpress_version_unsupported',
+    'wordpress-setup should reject an incompatible plugin before copying it',
+  );
+  assert(
+    incompatibleSourceSetup.json.detectedWordPressVersion === '6.8.3' &&
+      incompatibleSourceSetup.json.requiredWordPressVersion === '7.0' &&
+      incompatibleSourceSetup.json.pluginVersion === '10.0.0-test',
+    'WordPress compatibility failures should report detected, required, and plugin versions',
+  );
+  assert(
+    !existsSync(
+      join(
+        incompatibleSourceRoot,
+        'wp-content',
+        'plugins',
+        'miles',
+        'miles.php',
+      ),
+    ),
+    'an incompatible local plugin source must not be installed',
+  );
+  assert(
+    incompatibleSourceSetup.json.next.some((step) =>
+      step.includes('Upgrade WordPress to 7.0 or newer'),
+    ),
+    'the compatibility failure should provide a specific upgrade recovery',
+  );
+
   const localAppRoot = join(
     makeTempDir(),
     'Local Sites',
@@ -1080,6 +1178,17 @@ printf '%s|%s|%s\\n' "\${MILES_SERVER_URL-unset}" "\${MILES_PLUGIN_SOURCE-unset}
   execFileSync('zip', ['-qr', fakePluginZip, 'miles'], {
     cwd: fakeZipSourceRoot,
   });
+  const incompatibleZipSourceRoot = makeTempDir();
+  const incompatibleZipPluginDir = join(incompatibleZipSourceRoot, 'miles');
+  mkdirSync(incompatibleZipPluginDir, { recursive: true });
+  writeFileSync(
+    join(incompatibleZipPluginDir, 'miles.php'),
+    "<?php\n/*\nPlugin Name: Miles\nVersion: 10.0.0-zip-test\nRequires at least: 7.0\n*/\n",
+  );
+  const incompatiblePluginZip = join(fakeZipDir, 'miles-incompatible.zip');
+  execFileSync('zip', ['-qr', incompatiblePluginZip, 'miles'], {
+    cwd: incompatibleZipSourceRoot,
+  });
   const zipInstallMock = await startMockServer((req, res) => {
     req.on('data', () => {});
     req.on('end', () => {
@@ -1090,6 +1199,11 @@ printf '%s|%s|%s\\n' "\${MILES_SERVER_URL-unset}" "\${MILES_PLUGIN_SOURCE-unset}
       if (req.url === '/miles.zip') {
         res.writeHead(200, { 'content-type': 'application/zip' });
         res.end(readFileSync(fakePluginZip));
+        return;
+      }
+      if (req.url === '/miles-incompatible.zip') {
+        res.writeHead(200, { 'content-type': 'application/zip' });
+        res.end(readFileSync(incompatiblePluginZip));
         return;
       }
       res.writeHead(404, { 'content-type': 'application/json' });
@@ -1148,6 +1262,51 @@ printf '%s|%s|%s\\n' "\${MILES_SERVER_URL-unset}" "\${MILES_PLUGIN_SOURCE-unset}
       ),
     ),
     'wordpress-setup should preserve plugin runtime assets from downloaded plugin ZIPs',
+  );
+
+  const incompatibleZipRoot = makeTempDir();
+  mkdirSync(join(incompatibleZipRoot, 'wp-admin'), { recursive: true });
+  mkdirSync(join(incompatibleZipRoot, 'wp-content', 'plugins'), {
+    recursive: true,
+  });
+  writeFileSync(join(incompatibleZipRoot, 'wp-config.php'), "<?php\n");
+  const incompatibleZipSetup = await runJsonAsync(
+    [
+      'wordpress-setup',
+      '--use',
+      'local',
+      '--json',
+      '--path',
+      incompatibleZipRoot,
+      '--wp-cli',
+      legacyWpCli,
+      '--plugin-url',
+      `${zipInstallMock.url}/miles-incompatible.zip`,
+    ],
+    {
+      milesHome: localCopyHome,
+      env: {
+        MILES_PLUGIN_SOURCE: '',
+        MILES_SERVER_URL: zipInstallMock.url,
+      },
+    },
+  );
+  assert(
+    incompatibleZipSetup.result.status === 2 &&
+      incompatibleZipSetup.json.code === 'wordpress_version_unsupported',
+    'wordpress-setup should inspect a downloaded plugin ZIP before installation',
+  );
+  assert(
+    !existsSync(
+      join(
+        incompatibleZipRoot,
+        'wp-content',
+        'plugins',
+        'miles',
+        'miles.php',
+      ),
+    ),
+    'an incompatible downloaded plugin must not be copied into WordPress',
   );
 
   const ancestorRoot = makeTempDir();
@@ -1429,6 +1588,11 @@ esac
     'wordpress bootstrap should use the local site URL from WP-CLI',
   );
   assert(
+    fullSetupJson.wordpressVersion === '6.5.0' &&
+      fullSetupJson.pluginVersion === '9.9.9-test',
+    'wordpress-setup success should report the versions used for compatibility checks',
+  );
+  assert(
     fullSetupJson.setup.success === true,
     'wordpress-setup should preserve sanitized setup success',
   );
@@ -1500,6 +1664,23 @@ esac
   assert(
     doctor.checks.some((check) => check.name === 'credentials' && !check.ok),
     'doctor should report missing credentials as setup needed',
+  );
+  const invalidHomeParent = makeTempDir();
+  const invalidHomeFile = join(invalidHomeParent, 'not-a-directory');
+  writeFileSync(invalidHomeFile, 'blocked');
+  const invalidDoctor = runJson(['doctor', '--json'], {
+    milesHome: join(invalidHomeFile, 'miles-home'),
+  });
+  const invalidHomeCheck = invalidDoctor.json.checks.find(
+    (check) => check.name === 'milesHome',
+  );
+  assert(
+    invalidDoctor.result.status === 1 &&
+      invalidHomeCheck?.ok === false &&
+      invalidHomeCheck?.code === 'filesystem_not_writable' &&
+      invalidHomeCheck?.retryOutsideSandbox === false &&
+      invalidHomeCheck?.remediation,
+    'doctor should return structured remediation for a real filesystem path failure',
   );
 
   const whoamiHome = makeTempDir();

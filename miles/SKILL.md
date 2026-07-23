@@ -49,6 +49,7 @@ This is the supported public command surface. Do not invent other commands. HEAD
 | `miles approval-respond --grant <id> --response approved\|declined` | CONDITIONAL | Answer a protected live-site approval after explicit user consent/refusal | [live-protection.md](references/live-protection.md) |
 | `miles undo` | HEADLESS | Revert the last turn: site + chat together, one level | [undo.md](references/undo.md) |
 | `miles site-state [--full] --json` | HEADLESS | Phase, directions, connection, site plan, suggested next moves; `--full` adds brief text, direction detail, session memory | [site-state.md](references/site-state.md) |
+| `miles site-plan [--history] --json` | HEADLESS | Lossless current Site Plan; optionally include deduplicated revisions and item-level changes | [site-plan.md](references/site-plan.md) |
 | `miles site-attach <siteId> [--duplicate]` | HEADLESS | Resume any owned site; fork before risky changes | [site-attach.md](references/site-attach.md) |
 | `miles wordpress-detect --json` | LOCAL | Passively detect a local WordPress install in/above the current folder | [wordpress-detect.md](references/wordpress-detect.md) |
 | `miles wordpress-setup --use local --json` | LOCAL | Install/activate/connect Miles on a chosen local WordPress install | [wordpress-setup.md](references/wordpress-setup.md) |
@@ -120,7 +121,8 @@ State is derived from the conversation and monotonic — you can enter at whatev
 - **"I already have the content / a brief — design around it"** → write the brief to a file → `site-create --brief brief.md "<summary>"` (add `--attach logo.svg` for any logo/imagery the user supplied, and say what each file is) → discovery never runs → `design-directions` → present → `build-site`.
 - **"Give me design options for this"** → `site-create --brief ...` → `design-directions --json` → `screenshot` each preview → present in your own UI. Never build until something is chosen.
 - **"Edit my Miles site" / "resume where I left off"** → `site-attach <siteId>` (cross-machine) or `use <siteId>` (local) → `site-state --json` → follow its `next[]` hints. When you need the full picture (brief text, what was discussed), add `site-state --full --json` and `history`.
-- **"What should we work on next?"** → `site-state --json` → read `siteCompletionPlan` → present the pending/failed items and let the user pick → `say` the chosen work.
+- **"What should we work on next?"** → `site-state --json` for phase/blockers, then `site-plan --json` for the complete current plan → present the pending/failed items and let the user pick → `say` the chosen work.
+- **"How has the Site Plan changed?"** → `site-plan --history --json` → compare the deduplicated revisions and their `added`/`removed`/`changed` item sets.
 - **"Make it a WordPress theme"** → `connect-browser` → `convert-theme` → `export --type theme`.
 - **"Undo that last change"** → `miles undo` reverts the most recent turn (site + chat together, one level). For anything deeper, `site-attach <siteId> --duplicate` first — the fork is the branch.
 - **"Show me how the site looks now" (after conversion)** → `screenshot --live` captures the running WordPress frontend through the connected dashboard; stored-preview screenshots only show the pre-conversion HTML site.

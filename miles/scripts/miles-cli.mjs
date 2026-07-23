@@ -113,6 +113,7 @@ const JSON_COMMANDS = new Set([
   'convert-theme',
   'build-theme',
   'site-state',
+  'site-plan',
   'site-attach',
   'wordpress-detect',
   'wordpress-setup',
@@ -5427,6 +5428,259 @@ async function cmdSiteStateFull(site, serverUrl) {
   console.log('Full detail: miles site-state --full --json');
 }
 
+function summarizeSitePlan(plan) {
+  if (!plan?.items?.length) {
+    return {
+      total: 0,
+      statuses: {
+        pending: 0,
+        in_progress: 0,
+        completed: 0,
+        failed: 0,
+        dismissed: 0,
+      },
+      curated: 0,
+      uncurated: 0,
+    };
+  }
+
+  const statuses = {
+    pending: 0,
+    in_progress: 0,
+    completed: 0,
+    failed: 0,
+    dismissed: 0,
+  };
+  let curated = 0;
+  let uncurated = 0;
+
+  for (const item of plan.items) {
+    if (Object.hasOwn(statuses, item.status)) {
+      statuses[item.status] += 1;
+    }
+    if (item.curated === false) uncurated += 1;
+    else curated += 1;
+  }
+
+  return {
+    total: plan.items.length,
+    statuses,
+    curated,
+    uncurated,
+  };
+}
+
+function sitePlanItemChanges(previousItem, nextItem) {
+  const fields = new Set([
+    ...Object.keys(previousItem || {}),
+    ...Object.keys(nextItem || {}),
+  ]);
+  fields.delete('id');
+  const changedFields = [...fields].filter(
+    (field) =>
+      JSON.stringify(previousItem?.[field]) !==
+      JSON.stringify(nextItem?.[field]),
+  );
+
+  if (!changedFields.length) return null;
+  return {
+    id: nextItem.id,
+    changedFields,
+    before: previousItem,
+    after: nextItem,
+  };
+}
+
+function diffSitePlans(previousPlan, nextPlan) {
+  if (!previousPlan) {
+    return {
+      added: (nextPlan?.items || []).map((item) => item.id),
+      removed: [],
+      changed: [],
+    };
+  }
+
+  const previousItems = new Map(
+    (previousPlan.items || []).map((item) => [item.id, item]),
+  );
+  const nextItems = new Map(
+    (nextPlan?.items || []).map((item) => [item.id, item]),
+  );
+  const added = [...nextItems.keys()].filter((id) => !previousItems.has(id));
+  const removed = [...previousItems.keys()].filter((id) => !nextItems.has(id));
+  const changed = [...nextItems.entries()]
+    .filter(([id]) => previousItems.has(id))
+    .map(([id, item]) => sitePlanItemChanges(previousItems.get(id), item))
+    .filter(Boolean);
+
+  return { added, removed, changed };
+}
+
+function collectSitePlanSnapshots(messages) {
+  const snapshots = [];
+  for (const message of messages || []) {
+    for (const part of message.parts || []) {
+      if (
+        part?.type === 'data-site-completion-plan' &&
+        part.data &&
+        Array.isArray(part.data.items)
+      ) {
+        snapshots.push({
+          messageId: message.id || null,
+          siteCompletionPlan: part.data,
+        });
+      }
+    }
+  }
+  return snapshots;
+}
+
+async function readSitePlanHistory(site, serverUrl) {
+  await requirePrimitive('history', serverUrl);
+
+  const messages = [];
+  let offset = 0;
+  let total = null;
+
+  do {
+    const data = await apiRequest(
+      'GET',
+      `/api/v2/headless/conversations/${site.conversationId}/history?limit=100&offset=${offset}`,
+      { auth: site.siteToken, serverUrl },
+    );
+    const page = data.messages || [];
+    messages.push(...page);
+    total = Number.isInteger(data.total) ? data.total : messages.length;
+    offset += page.length;
+    if (!page.length) break;
+  } while (offset < total);
+
+  const revisions = [];
+  let previousPlan = null;
+  let previousSignature = null;
+  for (const snapshot of collectSitePlanSnapshots(messages)) {
+    const signature = JSON.stringify(snapshot.siteCompletionPlan);
+    if (signature === previousSignature) continue;
+
+    revisions.push({
+      revision: revisions.length + 1,
+      messageId: snapshot.messageId,
+      updatedAt: snapshot.siteCompletionPlan.updatedAt || null,
+      summary: summarizeSitePlan(snapshot.siteCompletionPlan),
+      changes: diffSitePlans(previousPlan, snapshot.siteCompletionPlan),
+      siteCompletionPlan: snapshot.siteCompletionPlan,
+    });
+    previousPlan = snapshot.siteCompletionPlan;
+    previousSignature = signature;
+  }
+
+  return revisions;
+}
+
+function printFullSitePlan(plan) {
+  if (!plan?.items?.length) {
+    console.log('[site plan: none]');
+    return;
+  }
+
+  const summary = summarizeSitePlan(plan);
+  console.log(
+    `[site plan: ${summary.statuses.completed}/${summary.total} completed]`,
+  );
+  if (plan.createdAt) console.log(`[created: ${plan.createdAt}]`);
+  if (plan.updatedAt) console.log(`[updated: ${plan.updatedAt}]`);
+
+  for (const item of plan.items) {
+    if (item.curated === false) {
+      console.log(`- [${item.status}] Uncurated generated item (${item.id})`);
+      console.log(
+        '  Hidden from user-facing output until Miles authors safe copy.',
+      );
+      continue;
+    }
+    console.log(`- [${item.status}] ${item.title} (${item.id})`);
+    console.log(`  ${item.description}`);
+    console.log(
+      `  category=${item.category} source=${item.source} curated=${item.curated !== false}`,
+    );
+    if (item.failureReason) {
+      console.log(`  failure: ${item.failureReason}`);
+    }
+    if (item.resultRef && Object.keys(item.resultRef).length) {
+      console.log(`  resultRef: ${JSON.stringify(item.resultRef)}`);
+    }
+  }
+}
+
+/**
+ * Lossless Site Plan read. The default view returns the complete current plan;
+ * --history also walks the sanitized conversation history and reconstructs
+ * deduplicated plan revisions with item-level changes.
+ */
+async function cmdSitePlan(args) {
+  noteActiveRunIfAny();
+  const history = hasCommandFlag(args, '--history');
+  const unsupportedArgs = args.filter((arg) => arg !== '--history');
+  if (unsupportedArgs.length) {
+    exitWithError(
+      'Usage: miles site-plan [--history] [--json]',
+      EXIT_PRECONDITION,
+    );
+  }
+
+  const creds = loadCredentials();
+  const site = getActiveSite(creds);
+  if (!site?.conversationId) {
+    exitWithError('No active conversation.', EXIT_PRECONDITION);
+  }
+
+  const serverUrl = DEFAULT_SERVER_URL;
+  const capabilities = await requirePrimitive('site-state', serverUrl);
+  if (!capabilities?.primitives?.['site-state']?.operations?.full) {
+    exitWithError(
+      'The connected Miles server does not support the full Site Plan read yet.',
+      EXIT_PRECONDITION,
+      { code: 'primitive_unsupported', primitive: 'site-state.full' },
+    );
+  }
+
+  const state = await apiRequest(
+    'GET',
+    `/api/v2/headless/conversations/${site.conversationId}/state`,
+    { auth: site.siteToken, serverUrl },
+  );
+  const plan = state.siteCompletionPlan || null;
+  const revisions = history
+    ? await readSitePlanHistory(site, serverUrl)
+    : undefined;
+  const payload = {
+    siteId: site.id,
+    conversationId: site.conversationId,
+    phase: state.phase || null,
+    summary: summarizeSitePlan(plan),
+    siteCompletionPlan: plan,
+    ...(history ? { revisions } : {}),
+  };
+
+  if (cliOptions.json) {
+    emitJson(payload);
+    return;
+  }
+
+  printFullSitePlan(plan);
+  if (history) {
+    console.log(`[revisions: ${revisions.length}]`);
+    for (const revision of revisions) {
+      const changes = revision.changes;
+      console.log(
+        `  ${revision.revision}. ${revision.updatedAt || 'timestamp unavailable'}: +${changes.added.length} -${changes.removed.length} ~${changes.changed.length}`,
+      );
+    }
+  } else {
+    console.log('Revision history: miles site-plan --history --json');
+  }
+}
+
 /**
  * Export dispatcher over the per-deliverable endpoints.
  * html is fully headless. theme metadata is headless, but downloading the
@@ -5891,6 +6145,7 @@ const commands = {
   'wait-job': cmdWaitJob,
   'approval-respond': cmdApprovalRespond,
   'site-state': cmdSiteState,
+  'site-plan': cmdSitePlan,
   'site-attach': cmdSiteAttach,
   'wordpress-detect': cmdWordPressDetect,
   'wordpress-setup': cmdWordPressSetup,
@@ -5953,6 +6208,7 @@ Sites:
                     [--open]                        when user chooses it
   miles site-state [--full] [--json]      HEADLESS  Phase, directions, next moves
                                                     (--full: brief, plan, memory)
+  miles site-plan [--history] [--json]    HEADLESS  Full Site Plan + revisions
   miles history [--limit <n>] [--offset <n>]
                                           HEADLESS  Conversation transcript
                                                     (paginated, newest by default)

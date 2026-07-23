@@ -314,6 +314,11 @@ try {
   );
   assertIncludes(
     helpResult.stdout,
+    'miles site-plan [--history] [--json]',
+    'help should document the lossless Site Plan read',
+  );
+  assertIncludes(
+    helpResult.stdout,
     'miles convert-theme',
     'help should document theme conversion as browser-gated',
   );
@@ -358,6 +363,7 @@ try {
     'wait-job',
     'approval-respond',
     'site-state',
+    'site-plan',
     'site-attach',
     'wordpress-detect',
     'wordpress-setup',
@@ -2848,6 +2854,226 @@ esac
       approvalState.undoTurnIndex === 7 &&
       approvalState.isSiteBuildingActive === false,
     'site-state should pass through recovery and status detail fields',
+  );
+
+  // site-plan exposes the complete current contract and can reconstruct
+  // deduplicated revisions from sanitized history without losing result refs.
+  const sitePlanHome = makeTempDir();
+  writeFileSync(
+    join(sitePlanHome, 'credentials.json'),
+    JSON.stringify({
+      activeSite: 'site-plan-site',
+      sites: {
+        'site-plan-site': {
+          siteToken: 'site-token',
+          conversationId: 'conversation-site-plan',
+          dashboardUrl: 'https://beta.bymiles.ai/sites/site-plan-site',
+        },
+      },
+    }),
+  );
+  const planV1 = {
+    id: 'site-completion-plan',
+    items: [
+      {
+        id: 'foundation',
+        title: 'Visual system and homepage',
+        description: 'The visual system and editable homepage are complete.',
+        category: 'content',
+        status: 'pending',
+        source: 'brief',
+        curated: true,
+      },
+    ],
+    createdAt: '2026-07-20T10:00:00.000Z',
+    updatedAt: '2026-07-20T10:00:00.000Z',
+  };
+  const planV2 = {
+    ...planV1,
+    items: [
+      {
+        ...planV1.items[0],
+        status: 'completed',
+        resultRef: {
+          pageId: 42,
+          pageSlug: 'home',
+          sectionMarker: 'miles-sec-home',
+          patternId: 99,
+          designArtifactKind: 'wordpress-theme',
+          designArtifactVersion: 2,
+          designArtifactId: 'artifact-home',
+          designArtifactItemKey: 'home:hero',
+          entityType: 'wp_template',
+          entityId: 'theme//home',
+        },
+      },
+      {
+        id: 'contact-form',
+        title: 'Connect the contact form',
+        description: 'The contact form will send real messages.',
+        category: 'form',
+        status: 'pending',
+        source: 'generation',
+        curated: false,
+        resultRef: {
+          intent: 'Connect the contact form to a message delivery workflow',
+          evidence: 'Static form controls are present in the contact section',
+        },
+      },
+    ],
+    updatedAt: '2026-07-20T10:05:00.000Z',
+  };
+  const sitePlanRequests = [];
+  const sitePlanMock = await startMockServer((req, res) => {
+    sitePlanRequests.push(req.url);
+    req.resume();
+    res.writeHead(200, { 'content-type': 'application/json' });
+    if (req.url === '/api/v2/headless/capabilities') {
+      res.end(
+        JSON.stringify({
+          primitives: {
+            'site-state': {
+              tier: 'plumbing',
+              connection: 'none',
+              operations: { full: { connection: 'none' } },
+            },
+            history: { tier: 'plumbing', connection: 'none' },
+          },
+        }),
+      );
+      return;
+    }
+    if (
+      req.url ===
+      '/api/v2/headless/conversations/conversation-site-plan/state'
+    ) {
+      res.end(
+        JSON.stringify({
+          phase: 'complete',
+          status: 'idle',
+          siteCompletionPlan: planV2,
+        }),
+      );
+      return;
+    }
+    if (
+      req.url ===
+      '/api/v2/headless/conversations/conversation-site-plan/history?limit=100&offset=0'
+    ) {
+      res.end(
+        JSON.stringify({
+          total: 3,
+          offset: 0,
+          limit: 100,
+          messages: [
+            {
+              id: 'message-plan-1',
+              role: 'assistant',
+              parts: [
+                { type: 'data-site-completion-plan', data: planV1 },
+              ],
+            },
+            {
+              id: 'message-plan-duplicate',
+              role: 'assistant',
+              parts: [
+                { type: 'data-site-completion-plan', data: planV1 },
+              ],
+            },
+            {
+              id: 'message-plan-2',
+              role: 'assistant',
+              parts: [
+                { type: 'data-site-completion-plan', data: planV2 },
+              ],
+            },
+          ],
+        }),
+      );
+      return;
+    }
+    res.end(JSON.stringify({ error: 'not found' }));
+  });
+  const { result: sitePlanResult, json: sitePlan } = await runJsonAsync(
+    ['site-plan', '--history', '--json'],
+    {
+      milesHome: sitePlanHome,
+      env: { MILES_SERVER_URL: sitePlanMock.url },
+    },
+  );
+  assert(
+    sitePlanResult.status === 0,
+    'site-plan --history --json should return the complete plan',
+  );
+  assert(
+    sitePlan.siteCompletionPlan.items[0].resultRef.designArtifactItemKey ===
+      'home:hero',
+    'site-plan should preserve the current plan result reference contract',
+  );
+  assert(
+    sitePlan.summary.total === 2 &&
+      sitePlan.summary.statuses.completed === 1 &&
+      sitePlan.summary.uncurated === 1,
+    'site-plan should summarize current status and curation state',
+  );
+  assert(
+    sitePlan.revisions.length === 2,
+    'site-plan history should deduplicate repeated plan snapshots',
+  );
+  assert(
+    sitePlan.revisions[1].changes.added[0] === 'contact-form' &&
+      sitePlan.revisions[1].changes.changed[0].id === 'foundation' &&
+      sitePlan.revisions[1].changes.changed[0].changedFields.includes(
+        'status',
+      ) &&
+      sitePlan.revisions[1].changes.changed[0].changedFields.includes(
+        'resultRef',
+      ),
+    'site-plan history should expose item additions and changed fields',
+  );
+  assert(
+    sitePlan.revisions[1].siteCompletionPlan.items[1].resultRef.evidence ===
+      'Static form controls are present in the contact section',
+    'site-plan history should retain the full plan snapshot, including uncurated evidence',
+  );
+
+  const historyRequestCount = sitePlanRequests.filter((url) =>
+    url.includes('/history?'),
+  ).length;
+  const currentSitePlan = await runJsonAsync(['site-plan', '--json'], {
+    milesHome: sitePlanHome,
+    env: { MILES_SERVER_URL: sitePlanMock.url },
+  });
+  assert(
+    currentSitePlan.result.status === 0 &&
+      currentSitePlan.json.siteCompletionPlan.items.length === 2,
+    'site-plan --json should expose the current plan without requiring history',
+  );
+  assert(
+    sitePlanRequests.filter((url) => url.includes('/history?')).length ===
+      historyRequestCount,
+    'current-only site-plan reads should not fetch conversation history',
+  );
+
+  const sitePlanHuman = await runAsync(['site-plan'], {
+    milesHome: sitePlanHome,
+    env: { MILES_SERVER_URL: sitePlanMock.url },
+  });
+  assertIncludes(
+    sitePlanHuman.stdout,
+    'The visual system and editable homepage are complete.',
+    'site-plan human output should include the full item description',
+  );
+  assertIncludes(
+    sitePlanHuman.stdout,
+    'designArtifactItemKey',
+    'site-plan human output should include durable result references',
+  );
+  assert(
+    !sitePlanHuman.stdout.includes(
+      'Connect the contact form to a message delivery workflow',
+    ),
+    'site-plan human output must not paint uncurated machine intent as user copy',
   );
 
   // approval-respond is an explicit grant response primitive. It cannot be

@@ -2706,6 +2706,72 @@ esac
     'wait-job should pass through progress counts and dashboard URL',
   );
 
+  // Completed conversion progress may remain the latest data part during a
+  // later edit. It must not be presented as current work.
+  const staleProgressHome = makeTempDir();
+  writeFileSync(
+    join(staleProgressHome, 'credentials.json'),
+    JSON.stringify({
+      activeSite: 'site-stale-progress',
+      sites: {
+        'site-stale-progress': {
+          siteToken: 'site-token',
+          conversationId: 'conversation-stale-progress',
+        },
+      },
+    }),
+  );
+  let staleProgressPollCount = 0;
+  const staleProgressMock = await startMockServer((req, res) => {
+    req.on('data', () => {});
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      staleProgressPollCount += 1;
+      if (staleProgressPollCount === 1) {
+        res.end(
+          JSON.stringify({
+            status: 'running',
+            phase: 'editing',
+            progress: {
+              type: 'data-conversion-progress',
+              data: {
+                phases: [
+                  {
+                    id: 'theme',
+                    label: 'Converting to WordPress theme',
+                    status: 'complete',
+                  },
+                ],
+              },
+            },
+          }),
+        );
+        return;
+      }
+      res.end(
+        JSON.stringify({
+          status: 'completed',
+          outcome: 'completed',
+          phase: 'complete',
+          milesMessage: 'Navigation updated.',
+        }),
+      );
+    });
+  });
+  const staleProgressResult = await runAsync(['wait-job'], {
+    milesHome: staleProgressHome,
+    env: { MILES_SERVER_URL: staleProgressMock.url },
+  });
+  assert(
+    staleProgressResult.status === 0,
+    `wait-job should settle after stale progress\nstatus: ${staleProgressResult.status}\nstderr:\n${staleProgressResult.stderr}`,
+  );
+  assert(
+    staleProgressResult.stderr.includes('phase: editing') &&
+      !staleProgressResult.stderr.includes('Converting to WordPress theme'),
+    `wait-job should suppress completed conversion progress\nstderr:\n${staleProgressResult.stderr}`,
+  );
+
   // wait-job surfaces live-protection approvals as blocked structured state,
   // with sensitive/internal action details sanitized from public output.
   const approvalWaitHome = makeTempDir();

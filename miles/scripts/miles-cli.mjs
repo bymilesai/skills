@@ -2352,7 +2352,10 @@ function formatProgress(progress, elapsed) {
         : '';
       return `${active.label}${section} (${elapsed}s)`;
     }
-    return `Converting to WordPress theme (${elapsed}s)`;
+    // Completed conversion data can remain the server's latest data part
+    // during later, unrelated turns. The current phase already describes the
+    // active work, so do not revive a finished conversion as live progress.
+    return null;
   }
 
   if (type === 'data-hero-preview-gallery' && data.previews) {

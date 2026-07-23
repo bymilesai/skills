@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -353,6 +354,8 @@ try {
     'help should document the shared exit-code grammar',
   );
 
+  // Invariant: this list must match the `commands` map in miles-cli.mjs.
+  // A command missing here silently skips help-safety coverage.
   const commandsWithSafeHelp = [
     'auth',
     'account-status',
@@ -445,6 +448,14 @@ try {
   assert(
     shortHelpSafetyResult.status === 0 && helpSafetyRequests.length === 0,
     'site-create -h must be just as side-effect free as --help',
+  );
+  const unknownHelpResult = await runAsync(['no-such-command', '--help'], {
+    milesHome: helpSafetyHome,
+    env: { MILES_SERVER_URL: helpSafetyMock.url },
+  });
+  assert(
+    unknownHelpResult.status === 0 && helpSafetyRequests.length === 0,
+    'an unknown command with --help should print help instead of exiting 1',
   );
 
   const fakeRuntimeDir = makeTempDir();
@@ -662,6 +673,152 @@ printf '%s|%s|%s\\n' "\${MILES_SERVER_URL-unset}" "\${MILES_PLUGIN_SOURCE-unset}
       persistedLocalSite.dashboardUrl === supportedLocalDashboard &&
       persistedLocalSite.connection?.kind === 'local-wordpress',
     'local site-create should persist the conversation while preserving the local dashboard and connection kind',
+  );
+
+  const mismatchHome = makeTempDir();
+  writeFileSync(
+    join(mismatchHome, 'credentials.json'),
+    JSON.stringify({
+      apiKey: 'mk_live_test_key',
+      activeSite: 'local-site-mismatch',
+      sites: {
+        'local-site-mismatch': {
+          siteToken: 'local-site-token',
+          name: 'Local Site',
+          conversationId: null,
+          dashboardUrl:
+            'http://local-site.test/wp-admin/admin.php?page=miles',
+          siteUrl: 'http://local-site.test',
+          localWordPressRoot: '/tmp/local-site',
+          connection: { kind: 'local-wordpress' },
+        },
+      },
+    }),
+    { mode: 0o600 },
+  );
+  const mismatchMock = await startMockServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      if (req.url === '/api/v2/headless/capabilities') {
+        sendCapabilities(res, {
+          'site-create': {
+            tier: 'porcelain',
+            connection: 'none',
+            operations: { 'local-wordpress': { connection: 'none' } },
+          },
+        });
+        return;
+      }
+      if (req.method === 'POST' && req.url === '/api/v2/headless/sites') {
+        res.writeHead(201, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            siteId: 'cloud-site-999',
+            siteToken: 'runaway-site-token',
+            conversationId: 'runaway-conversation',
+            dashboardUrl: 'https://app.example.test/sites/cloud-site-999',
+            status: 'streaming',
+          }),
+        );
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+  });
+  const { result: mismatchResult, json: mismatchJson } = await runJsonAsync(
+    ['site-create', 'Build on this local WordPress site', '--json'],
+    {
+      milesHome: mismatchHome,
+      env: { MILES_SERVER_URL: mismatchMock.url },
+    },
+  );
+  assert(
+    mismatchResult.status === 2 &&
+      mismatchJson.detail?.code === 'unexpected_site_returned' &&
+      mismatchJson.detail?.returnedSiteId === 'cloud-site-999' &&
+      mismatchJson.detail?.returnedConversationId === 'runaway-conversation',
+    'site-create must refuse a mismatched site id and surface the runaway site/conversation ids',
+  );
+  assertIncludes(
+    mismatchJson.error,
+    'miles site-attach cloud-site-999',
+    'the mismatch refusal should tell the operator how to inspect the runaway site',
+  );
+  const mismatchCredentials = JSON.parse(
+    readFileSync(join(mismatchHome, 'credentials.json'), 'utf8'),
+  );
+  assert(
+    mismatchCredentials.activeSite === 'local-site-mismatch' &&
+      Object.keys(mismatchCredentials.sites).length === 1 &&
+      mismatchCredentials.sites['local-site-mismatch'].conversationId === null,
+    'a mismatched site-create response must not change the active site or adopt the runaway conversation',
+  );
+
+  const unreachableHome = makeTempDir();
+  writeFileSync(
+    join(unreachableHome, 'credentials.json'),
+    JSON.stringify({
+      apiKey: 'mk_live_test_key',
+      activeSite: 'local-site-unreachable',
+      sites: {
+        'local-site-unreachable': {
+          siteToken: 'local-site-token',
+          conversationId: null,
+          siteUrl: 'http://local-site.test',
+          connection: { kind: 'local-wordpress' },
+        },
+      },
+    }),
+    { mode: 0o600 },
+  );
+  const unreachableRequests = [];
+  const unreachableMock = await startMockServer((req, res) => {
+    unreachableRequests.push({ method: req.method, url: req.url });
+    req.resume();
+    res.writeHead(500, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'capabilities backend down' }));
+  });
+  const { result: unreachableResult, json: unreachableJson } =
+    await runJsonAsync(
+      ['site-create', 'Build on this local WordPress site', '--json'],
+      {
+        milesHome: unreachableHome,
+        env: { MILES_SERVER_URL: unreachableMock.url },
+      },
+    );
+  assert(
+    unreachableResult.status === 2 &&
+      unreachableJson.detail?.code === 'capabilities_unreachable' &&
+      unreachableJson.detail?.safeToRetry === true,
+    'a failed capabilities fetch must fail closed as a retryable outage, not a missing primitive',
+  );
+  assert(
+    unreachableRequests.every(
+      (request) => request.url === '/api/v2/headless/capabilities',
+    ),
+    'a failed capabilities fetch must stop site-create before uploads or site creation',
+  );
+
+  const refusedMock = await startMockServer((req, res) => {
+    req.resume();
+    res.writeHead(404);
+    res.end();
+  });
+  const refusedUrl = refusedMock.url;
+  await new Promise((resolveClose) => refusedMock.server.close(resolveClose));
+  const { result: refusedResult, json: refusedJson } = await runJsonAsync(
+    ['site-create', 'Build on this local WordPress site', '--json'],
+    {
+      milesHome: unreachableHome,
+      env: { MILES_SERVER_URL: refusedUrl },
+    },
+  );
+  assert(
+    refusedResult.status === 2 &&
+      refusedJson.detail?.code === 'capabilities_unreachable' &&
+      refusedJson.detail?.safeToRetry === true,
+    'a connection-refused capabilities fetch must also fail closed as retryable',
   );
 
   const localConnection = runJson(['connect-browser', '--json'], {
@@ -1517,6 +1674,10 @@ case "$cmd" in
       printf '%s\\n' 'sharedSecret=should-not-leak' >&2
       exit 1
     fi
+    if [ "$REPORT_LOCAL_SETUP_FAILURE" = "1" ]; then
+      printf '%s\\n' '{"success":false,"message":"Could not verify the application password with ?token=should-not-leak"}'
+      exit 0
+    fi
     printf '%s\\n' 'notice sharedSecret=should-not-leak'
     printf '%s\\n' '{"success":true,"sharedSecret":"should-not-leak","message":"Connected with ?token=should-not-leak"}'
     ;;
@@ -1689,6 +1850,139 @@ esac
     'wordpress-setup failure output must sanitize WP-CLI stderr',
   );
 
+  const preserveHome = makeTempDir();
+  writeFileSync(
+    join(preserveHome, 'credentials.json'),
+    JSON.stringify({
+      apiKey: 'mk_live_test_key',
+      activeSite: 'local-site-1',
+      sites: {
+        'local-site-1': {
+          siteToken: 'existing-site-token',
+          conversationId: 'existing-conversation',
+          dashboardUrl:
+            'http://localhost:9988/wp-admin/admin.php?page=miles',
+          siteUrl: 'http://localhost:9988',
+          connection: { kind: 'local-wordpress' },
+        },
+      },
+    }),
+    { mode: 0o600 },
+  );
+  const preserveMock = await startMockServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      if (req.url === '/api/v2/headless/capabilities') {
+        sendCapabilities(res, WORDPRESS_BOOTSTRAP_PRIMITIVE);
+        return;
+      }
+      if (
+        req.method === 'POST' &&
+        req.url === '/api/v2/headless/wordpress-sites/bootstrap'
+      ) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            siteId: 'local-site-1',
+            siteToken: 'site-token-1',
+            sharedSecret: 'server-secret-1',
+            serverUrl: preserveMock.url,
+            siteName: 'Local Test Site',
+            dashboardUrl: 'https://example.invalid/sites/local-site-1',
+            localDashboardUrl:
+              'http://localhost:9988/wp-admin/admin.php?page=miles',
+            relinked: true,
+          }),
+        );
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+  });
+  const preserveResult = await runJsonAsync([
+    'wordpress-setup',
+    '--use',
+    'local',
+    '--json',
+    '--path',
+    fakeWpRoot,
+    '--wp-cli',
+    fakeFullSetupWpCli,
+  ], {
+    milesHome: preserveHome,
+    timeout: 30000,
+    env: {
+      MILES_PLUGIN_SOURCE: fakePluginSource,
+      MILES_SERVER_URL: preserveMock.url,
+      WP_LOG: fakeFullSetupWpLog,
+    },
+  });
+  assert(
+    preserveResult.result.status === 0 && preserveResult.json.ok === true,
+    'wordpress-setup rerun should succeed when the bootstrap response has no conversationId',
+  );
+  const preserveCredentials = JSON.parse(
+    readFileSync(join(preserveHome, 'credentials.json'), 'utf8'),
+  );
+  assert(
+    preserveCredentials.sites['local-site-1'].conversationId ===
+      'existing-conversation' &&
+      preserveResult.json.activeSite.conversationId ===
+        'existing-conversation',
+    'wordpress-setup rerun must preserve the existing local conversation when the server omits one',
+  );
+
+  const reportedFailureHome = makeTempDir();
+  writeFileSync(
+    join(reportedFailureHome, 'credentials.json'),
+    JSON.stringify({ apiKey: 'mk_live_test_key' }),
+    { mode: 0o600 },
+  );
+  const reportedFailureResult = await runJsonAsync([
+    'wordpress-setup',
+    '--use',
+    'local',
+    '--json',
+    '--path',
+    fakeWpRoot,
+    '--wp-cli',
+    fakeFullSetupWpCli,
+  ], {
+    milesHome: reportedFailureHome,
+    timeout: 30000,
+    env: {
+      REPORT_LOCAL_SETUP_FAILURE: '1',
+      MILES_PLUGIN_SOURCE: fakePluginSource,
+      MILES_SERVER_URL: fullSetupMock.url,
+      WP_LOG: fakeFullSetupWpLog,
+    },
+  });
+  assert(
+    reportedFailureResult.result.status === 1 &&
+      reportedFailureResult.json.ok === false &&
+      reportedFailureResult.json.code === 'plugin_setup_failed' &&
+      reportedFailureResult.json.setup?.success === false,
+    'wordpress-setup must report ok:false when the plugin setup command reports failure',
+  );
+  assert(
+    reportedFailureResult.json.siteId === 'local-site-1' &&
+      reportedFailureResult.json.next?.[0]?.includes('relink'),
+    'a reported plugin setup failure should keep the bootstrapped site id and point at the relink rerun',
+  );
+  assert(
+    !JSON.stringify(reportedFailureResult.json).includes('should-not-leak'),
+    'a reported plugin setup failure must sanitize plugin-returned secrets',
+  );
+  const reportedFailureCredentials = JSON.parse(
+    readFileSync(join(reportedFailureHome, 'credentials.json'), 'utf8'),
+  );
+  assert(
+    reportedFailureCredentials.sites?.['local-site-1']?.siteToken ===
+      'site-token-1',
+    'a reported plugin setup failure should still persist the site record so rerun can relink',
+  );
+
   const doctorHome = makeTempDir();
   const { result: doctorResult, json: doctor } = runJson(['doctor', '--json'], {
     milesHome: doctorHome,
@@ -1726,6 +2020,51 @@ esac
       invalidHomeCheck?.remediation,
     'doctor should return structured remediation for a real filesystem path failure',
   );
+
+  // A read-only parent makes the MILES_HOME mkdir fail with EACCES for
+  // non-root users, which is the write-denial shape host sandboxes produce.
+  // Root ignores mode bits, so skip the probe-based classification checks.
+  const isRoot =
+    typeof process.getuid === 'function' && process.getuid() === 0;
+  if (!isRoot) {
+    const readOnlyParent = makeTempDir();
+    chmodSync(readOnlyParent, 0o555);
+    const deniedHome = join(readOnlyParent, 'miles-home');
+    const agentEnvOff = {
+      CLAUDECODE: '',
+      CLAUDE_CODE: '',
+      CODEX_SANDBOX: '',
+      CURSOR_AGENT: '',
+    };
+    const sandboxDoctor = runJson(['doctor', '--json'], {
+      milesHome: deniedHome,
+      env: { ...agentEnvOff, CLAUDECODE: '1' },
+    });
+    const sandboxHomeCheck = sandboxDoctor.json.checks.find(
+      (check) => check.name === 'milesHome',
+    );
+    assert(
+      sandboxHomeCheck?.ok === false &&
+        sandboxHomeCheck?.code === 'host_sandbox_denied' &&
+        sandboxHomeCheck?.retryOutsideSandbox === true &&
+        sandboxHomeCheck?.sandboxDetected === true,
+      'doctor should classify a write denial under Claude Code (CLAUDECODE) as host_sandbox_denied',
+    );
+    const plainDeniedDoctor = runJson(['doctor', '--json'], {
+      milesHome: deniedHome,
+      env: agentEnvOff,
+    });
+    const plainDeniedCheck = plainDeniedDoctor.json.checks.find(
+      (check) => check.name === 'milesHome',
+    );
+    assert(
+      plainDeniedCheck?.ok === false &&
+        plainDeniedCheck?.code === 'filesystem_not_writable' &&
+        plainDeniedCheck?.retryOutsideSandbox === false,
+      'doctor should keep a write denial outside any agent host as filesystem_not_writable',
+    );
+    chmodSync(readOnlyParent, 0o755);
+  }
 
   const whoamiHome = makeTempDir();
   const { result: whoamiResult, json: whoami } = runJson(['whoami', '--json'], {

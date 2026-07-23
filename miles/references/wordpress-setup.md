@@ -29,7 +29,7 @@ Only after the user explicitly chooses local WordPress, the command may:
 
 Do not write plugin options, shared secrets, application passwords, or site tokens yourself.
 
-WP-CLI is optional. If it is missing or cannot load WordPress in the local runtime, the command should still install plugin files when possible and return a manual activation handoff. Normal user installs download the plugin from the release manifest; local source copying is only for explicit `MILES_PLUGIN_SOURCE` overrides. Downloaded ZIPs are extracted to a temporary directory and checked for WordPress compatibility before anything is copied into `wp-content/plugins`.
+WP-CLI is optional. If it is missing or cannot load WordPress in the local runtime, the command should still install plugin files when possible and return a manual activation handoff. Normal user installs download the plugin from the release manifest; local source copying is only for explicit `MILES_PLUGIN_SOURCE` overrides. Downloaded ZIPs are extracted to a temporary directory and, when WP-CLI reported the WordPress version, checked for compatibility before anything is copied into `wp-content/plugins`; without WP-CLI the version is unknown and the copy proceeds unchecked into the manual handoff.
 
 ## Containerized WordPress
 
@@ -77,7 +77,7 @@ Save it outside the WordPress document root, make it executable, and supply its 
   "activeSite": { "siteId": "site_...", "name": "Local Site" },
   "next": [
     "Run `miles site-create \"<description>\"` to start a new design on this exact local WordPress site.",
-    "Run `miles connect-browser --open` to open the local Miles admin page."
+    "Run `miles connect-browser --open` when you want to open the local Miles admin page."
   ]
 }
 ```
@@ -130,7 +130,7 @@ Do not assume the agent can click WordPress admin controls. The supported fallba
 - WordPress too old for the plugin: exits `2` with detected and required versions before plugin files are installed; upgrade WordPress and rerun setup.
 - WP-CLI missing or broken: installs/copies plugin files when possible, exits `2` with `manualActivationRequired`, `adminPluginsUrl`, and `next[]`; ask the user to activate Miles in WordPress admin and continue in the plugin UI.
 - Application passwords unavailable: exits `2` with `next[]`; ask the user to enable HTTPS or configure the local environment safely.
-- Plugin setup failure after bootstrap: exits `1` and includes the created `siteId` in the sanitized error. Rerun the same command to relink and finish setup after fixing WordPress.
+- Plugin setup failure after bootstrap: exits `1`. A thrown failure includes the created `siteId` in the sanitized error; a reported failure (`wp miles local-setup` returning `success: false`) emits the full payload with `ok: false`, `code: "plugin_setup_failed"`, and the sanitized message under `setup`. Either way, rerun the same command to relink and finish setup after fixing WordPress.
 
 ## Remote WordPress
 

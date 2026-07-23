@@ -35,6 +35,7 @@ miles account-status [--json]
 
 - Run before `build-site` and `convert-theme` when usage looks high or the user has fired several builds this session.
 - Use `canBuild` and `buildHeadroom`, not `usagePercent` alone. A plan can be at 100% while spendable top-up credits still provide build headroom.
+- When the server returns no credit data, `canBuild` is `null` and `buildHeadroom` is `null` — "balance unavailable", not "zero credits". Do not tell the user to top up on that basis.
 - `usagePercent >= 95` with no top-up credits: stop and tell the user to top up at their dashboard billing page before firing more generative work.
 - Requires a server that advertises `account-status` (exit 2 with a clear message otherwise). On older servers, `miles balance` reads credits through the active conversation instead.
 

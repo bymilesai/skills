@@ -636,11 +636,14 @@ function getLocalRuntimeSummary(creds = loadCredentials()) {
 // ============================================================================
 
 let cachedCapabilities;
+let capabilitiesFetchError = null;
 
 /**
  * Fetch the connected server's primitive contract. Returns null when the
  * server predates the handshake (404) or the fetch fails — callers treat
  * null as "legacy contract": the pre-handshake primitive set only.
+ * `capabilitiesFetchError` distinguishes "the server answered 404" (legacy)
+ * from "the contract could not be read at all" (network, 5xx, bad JSON).
  */
 async function getServerCapabilities(serverUrl = DEFAULT_SERVER_URL) {
   if (cachedCapabilities !== undefined) return cachedCapabilities;
@@ -650,7 +653,8 @@ async function getServerCapabilities(serverUrl = DEFAULT_SERVER_URL) {
       '/api/v2/headless/capabilities',
       { serverUrl },
     );
-  } catch {
+  } catch (err) {
+    if (err?.status !== 404) capabilitiesFetchError = err;
     cachedCapabilities = null;
   }
   return cachedCapabilities;
@@ -658,11 +662,24 @@ async function getServerCapabilities(serverUrl = DEFAULT_SERVER_URL) {
 
 /**
  * Exit 2 when the connected server does not advertise a primitive. Keeps the
- * skill honest: never run an operation the API can't deliver.
+ * skill honest: never run an operation the API can't deliver. A failed
+ * capabilities fetch also stops the command (fail closed), but reports the
+ * outage as retryable instead of claiming the server lacks the primitive.
  */
 async function requirePrimitive(name, serverUrl = DEFAULT_SERVER_URL) {
   const capabilities = await getServerCapabilities(serverUrl);
   if (!capabilities?.primitives?.[name]) {
+    if (!capabilities && capabilitiesFetchError) {
+      exitWithError(
+        `Could not read the connected Miles server's capabilities (${capabilitiesFetchError.message}). \`${name}\` was not run and no remote state was created. Retry once the server is reachable.`,
+        EXIT_PRECONDITION,
+        {
+          code: 'capabilities_unreachable',
+          primitive: name,
+          safeToRetry: true,
+        },
+      );
+    }
     exitWithError(
       `The connected Miles server does not support \`${name}\` yet. Run \`miles doctor --json\` to see the supported primitive set.`,
       EXIT_PRECONDITION,
@@ -1518,12 +1535,15 @@ async function cmdDoctor() {
   } catch (err) {
     milesHomeWritable = false;
     milesHomeDetail = `${MILES_HOME} (${err.message})`;
+    // Claude Code sets CLAUDECODE (no underscore). Seatbelt denials surface
+    // as EPERM on macOS; Linux sandboxes commonly return EACCES or EROFS.
     const sandboxDetected = Boolean(
       process.env.CODEX_SANDBOX ||
         process.env.CURSOR_AGENT ||
-        process.env.CLAUDE_CODE,
+        process.env.CLAUDECODE,
     );
-    const sandboxDenied = err.code === 'EPERM' && sandboxDetected;
+    const sandboxDenied =
+      ['EPERM', 'EACCES', 'EROFS'].includes(err.code) && sandboxDetected;
     milesHomeFailure = {
       code: sandboxDenied
         ? 'host_sandbox_denied'
@@ -1766,8 +1786,19 @@ async function cmdCreateSite(rawArgs) {
   if (!creds.sites) creds.sites = {};
   if (localWordPressTarget) {
     if (data.siteId !== localWordPressTarget.id) {
-      throw new Error(
-        'Miles returned a different site while starting the local WordPress conversation. The CLI refused to change the active site.',
+      // The create call already succeeded server-side, so a conversation may
+      // be running on the returned site. Refuse to adopt it locally, but hand
+      // the operator the ids they need to inspect or stop it.
+      exitWithError(
+        `Miles returned site ${data.siteId} instead of the paired local WordPress site ${localWordPressTarget.id}. The CLI refused to change the active site, but the server may have started a conversation on that other site. Inspect it with \`miles site-attach ${data.siteId}\` and cancel any unwanted run before retrying.`,
+        EXIT_PRECONDITION,
+        {
+          code: 'unexpected_site_returned',
+          expectedSiteId: localWordPressTarget.id,
+          returnedSiteId: data.siteId,
+          returnedConversationId: data.conversationId || null,
+          safeToRetry: false,
+        },
       );
     }
     creds.sites[data.siteId] = {
@@ -4351,12 +4382,19 @@ async function ensureMilesPluginInstalled(detection, args = []) {
       );
     }
 
-    pluginUrl = pluginUrl || (await getPluginDownloadUrl().catch(() => null));
+    let manifestFetchError = null;
+    if (!pluginUrl) {
+      pluginUrl = await getPluginDownloadUrl().catch((err) => {
+        manifestFetchError = err;
+        return null;
+      });
+    }
     if (!pluginUrl) {
       return {
         ok: false,
-        reason:
-          'No local Miles plugin source or plugin download URL was available.',
+        reason: manifestFetchError
+          ? `Could not fetch the Miles plugin release manifest: ${manifestFetchError.message}`
+          : 'No local Miles plugin source or plugin download URL was available.',
       };
     }
 
@@ -4740,9 +4778,15 @@ async function cmdWordPressSetup(args = []) {
   creds.activeSite = bootstrap.siteId;
   saveCredentials(creds);
 
+  const setup = sanitizeLocalSetupResult(setupResult);
+  // The plugin's local-setup command can exit 0 while reporting failure in
+  // its JSON body. That leaves the site bootstrapped but not linked, which
+  // callers must not mistake for a completed setup.
+  const setupFailed = setup.success === false;
   const payload = {
-    ok: true,
+    ok: !setupFailed,
     mode: 'local',
+    ...(setupFailed ? { code: 'plugin_setup_failed' } : {}),
     siteId: bootstrap.siteId,
     siteUrl,
     dashboardUrl: creds.sites[bootstrap.siteId].dashboardUrl,
@@ -4751,17 +4795,29 @@ async function cmdWordPressSetup(args = []) {
     wordpressVersion: refreshed.site.wordpressVersion || null,
     pluginVersion: refreshed.plugin.version || null,
     actions: [...installResult.actions, ...appPasswordResult.actions],
-    setup: sanitizeLocalSetupResult(setupResult),
+    setup,
     activeSite: getActiveSiteSummary(creds),
-    next: [
-      'Run `miles site-create "<description>"` to start a new design on this exact local WordPress site.',
-      'Run `miles connect-browser --open` when you want to open the local Miles admin page.',
-    ],
+    next: setupFailed
+      ? [
+          `Fix the reported setup problem, then rerun \`miles wordpress-setup --use local --json\` to relink site ${bootstrap.siteId} and finish setup.`,
+        ]
+      : [
+          'Run `miles site-create "<description>"` to start a new design on this exact local WordPress site.',
+          'Run `miles connect-browser --open` when you want to open the local Miles admin page.',
+        ],
   };
 
   if (cliOptions.json) {
     emitJson(payload);
+    if (setupFailed) process.exit(1);
     return;
+  }
+
+  if (setupFailed) {
+    console.error(
+      `Local WordPress plugin setup failed after Miles created site ${bootstrap.siteId}${setup.message ? `: ${setup.message}` : '.'} Rerun \`miles wordpress-setup --use local --json\` to relink and finish setup.`,
+    );
+    process.exit(1);
   }
 
   console.log(`Connected local WordPress site: ${siteUrl}`);
@@ -5015,32 +5071,40 @@ async function cmdAccountStatus() {
     serverUrl,
   });
   const credits = data.credits || null;
-  const totalSpendableCredits = Number(credits?.totalSpendableCredits || 0);
   const monthlyRemainingCredits = Number(
     credits?.monthlyRemainingCredits || 0,
   );
   const topUpCredits = Number(
     credits?.topUpBalanceCredits || credits?.topUpCredits || 0,
   );
-  const canBuild = totalSpendableCredits > 0;
-  const buildHeadroom = {
-    spendableCredits: totalSpendableCredits,
-    monthlyRemainingCredits,
-    topUpCredits,
-    source:
-      monthlyRemainingCredits > 0
-        ? topUpCredits > 0
-          ? 'monthly_and_top_up'
-          : 'monthly'
-        : topUpCredits > 0
-          ? 'top_up'
-          : 'none',
-    explanation: canBuild
-      ? monthlyRemainingCredits > 0
-        ? `${totalSpendableCredits.toLocaleString()} credits are available for Miles work.`
-        : `The monthly allowance is exhausted, but ${topUpCredits.toLocaleString()} top-up credits remain available for Miles work.`
-      : 'No spendable credits remain. Add credits before starting a build.',
-  };
+  // Fall back to the component balances so a response missing the total does
+  // not read as "zero credits". No credit data at all must stay distinguishable
+  // from a genuinely empty balance: canBuild is null, not false.
+  const totalSpendableCredits =
+    credits?.totalSpendableCredits !== undefined
+      ? Number(credits.totalSpendableCredits || 0)
+      : monthlyRemainingCredits + topUpCredits;
+  const canBuild = credits ? totalSpendableCredits > 0 : null;
+  const buildHeadroom = credits
+    ? {
+        spendableCredits: totalSpendableCredits,
+        monthlyRemainingCredits,
+        topUpCredits,
+        source:
+          monthlyRemainingCredits > 0
+            ? topUpCredits > 0
+              ? 'monthly_and_top_up'
+              : 'monthly'
+            : topUpCredits > 0
+              ? 'top_up'
+              : 'none',
+        explanation: canBuild
+          ? monthlyRemainingCredits > 0
+            ? `${totalSpendableCredits.toLocaleString()} credits are available for Miles work.`
+            : `The monthly allowance is exhausted, but ${topUpCredits.toLocaleString()} top-up credits remain available for Miles work.`
+          : 'No spendable credits remain. Add credits before starting a build.',
+      }
+    : null;
 
   let siteCount = null;
   try {
@@ -5638,7 +5702,7 @@ async function cmdSitePlan(args) {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    exitWithError('No active conversation.', EXIT_PRECONDITION);
+    exitWithError(noActiveConversationMessage(site), EXIT_PRECONDITION);
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -6279,17 +6343,17 @@ if (!command || command === 'help' || command === '--help') {
   process.exit(0);
 }
 
+if (args.includes('--help') || args.includes('-h')) {
+  printHelp();
+  process.exit(0);
+}
+
 const handler = commands[command];
 if (!handler) {
   console.error(
     `Unknown command: ${command}. Use \`miles help\` for available commands.`,
   );
   process.exit(1);
-}
-
-if (args.includes('--help') || args.includes('-h')) {
-  printHelp();
-  process.exit(0);
 }
 
 if (cliOptions.unsupportedJson) {

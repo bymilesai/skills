@@ -20,6 +20,8 @@ The server must advertise `site-create.operations.local-wordpress`. If it does n
 
 This guard is intentional. A successful `wordpress-setup --use local` may exist before the server has deployed local-site conversation creation; the CLI must report that rollout gap instead of silently creating a different cloud site.
 
+If the server ever returns a different site id than the paired local site, the CLI exits `2` with `code: "unexpected_site_returned"` and refuses to change the active site. The response includes the returned site and conversation ids — a conversation may already be running there, so inspect it with `miles site-attach <returnedSiteId>` and cancel any unwanted run before retrying.
+
 ## Writing a good `--brief`
 
 The brief is the blueprint Miles designs from. Include what the site is for, who it serves, the actual content/copy when the user supplied it (verbatim — Miles designs around their words, it does not rewrite them), page structure, tone, and any constraints (colors, fonts, things to avoid). Markdown headings and lists survive intact.

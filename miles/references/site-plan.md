@@ -103,7 +103,9 @@ repeats, and adds:
 ```
 
 Each revision carries the full snapshot. `changes` is a convenience diff, not
-a replacement for that snapshot. This is the plan-snapshot history preserved
+a replacement for that snapshot; `before` and `after` are the complete
+previous and next item objects (only `changedFields` is trimmed), abbreviated
+in the example above. This is the plan-snapshot history preserved
 in the conversation, not an internal event log; an in-place update that left no
 distinct stored snapshot cannot be reconstructed.
 

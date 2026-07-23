@@ -42,7 +42,7 @@ Before any remote work, verify `site-create --help` exits `0` and does not chang
 Use official WordPress and database images on an isolated Docker network, separate from every Miles development stack. Refresh or pin the WordPress image instead of trusting a cached floating `latest`, and use the official `wordpress:cli-php8.3` image through the adapter documented in [wordpress-setup.md](references/wordpress-setup.md).
 
 1. Run passive detection and confirm it does not execute WP-CLI.
-2. Run `wordpress-setup --use local --json` with the adapter and confirm it reports the WordPress/plugin versions, pairing success, and `conversationId: null`.
+2. Run `wordpress-setup --use local --json` with the adapter and confirm it reports the WordPress/plugin versions, pairing success, and `activeSite.conversationId: null` (the payload has no top-level `conversationId`).
 3. Run `connect-browser --json`; confirm pairing and dashboard availability are true, browser authentication is unknown rather than false, and realtime is unavailable with a no-conversation reason.
 4. Run `site-create`. If production advertises `site-create.operations.local-wordpress`, confirm it uses the same site id and creates a conversation there. If not, confirm exit `2` occurs before attachment upload, remote site creation, active-site change, or credit spend.
 5. Once a local conversation exists, complete design directions and `build-site`, then verify the resulting pages and the local WordPress connection.
@@ -150,7 +150,7 @@ Also verify:
 - The bundled runtime cannot import Miles configuration from a repository `.env`.
 - Every command's `--help` and `-h` paths exit before authentication, validation, network calls, or mutation.
 - A paired local WordPress site is never replaced by an implicit cloud-site fallback.
-- Plugin compatibility is checked before plugin files are copied or activated.
+- Plugin compatibility is checked before plugin files are copied or activated whenever WP-CLI can report the WordPress version.
 - Brief approval and design selection are explicit user decisions.
 - Live-protection approval is an explicit user decision; locking/unlocking Miles is manual in the app and unavailable through the skill.
 - New-site intent never mutates the active site by accident.

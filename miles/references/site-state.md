@@ -46,6 +46,7 @@ miles site-state [--json]
 - `phase` walks: `discovery → brief_review → generating_design_directions → design_directions_ready → building → site_preview → converting → complete` (`validating` is a transient between build and complete; see [state-objects.md](state-objects.md)).
 - `next[]` is **server-derived**: the API reports the legal moves for the real phase, with streaming/unsettled states taking precedence and `undo` included only when actually available. A hint list, not a script — your judgment about the user's goal decides which to take.
 - `siteCompletionPlan` is the site's outstanding-work plan (subpages, forms, plugins, content the brief committed to). Item `status` is one of `pending | in_progress | completed | failed | dismissed`. **When the user asks "what's next for this site?", read this plan, present the pending and failed items, and let them pick** — then `say` the chosen work. `failureReason` on failed items tells you what went wrong.
+- For the lossless plan contract—including curation state, durable result references, and revision history—use [`miles site-plan --json`](site-plan.md). `site-state` remains the phase/blocker snapshot.
 - `undoAvailable: true` means `miles undo` can revert the last turn (see [undo.md](undo.md)).
 - `credits.usagePercent` is the account's period usage — mention it to the user when it is high; never silently stop work over it.
 - `status: "streaming"` means a turn is running: `wait-job` (or `cancel`) before sending anything new.

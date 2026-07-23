@@ -2,18 +2,18 @@
   "name": "miles",
   "version": "2026.06.27.1",
   "root": "miles",
-  "fileCount": 35,
-  "totalBytes": 383577,
+  "fileCount": 36,
+  "totalBytes": 463314,
   "files": [
     {
       "path": "miles/SKILL.md",
-      "size": 23605,
-      "sha256": "1d211411f876ecd46f0e0d37e596c08bbbe585497a978be8f1609353cef91c32"
+      "size": 25113,
+      "sha256": "bf31528c0d2b8a5cbf9e4ea2f4d212a9b3206eb39dbe89b3de25c82eec9b6e86"
     },
     {
       "path": "miles/references/account-status.md",
-      "size": 1237,
-      "sha256": "06ed567991f79106d1026a3fd7c2c946886219bbdb0910712c242673ee478b89"
+      "size": 1805,
+      "sha256": "506fb9e36c0fb505fcdccb2578bab7152ef434749b66c0cf2df4e0b71da0797b"
     },
     {
       "path": "miles/references/auth.md",
@@ -32,8 +32,8 @@
     },
     {
       "path": "miles/references/connect-browser.md",
-      "size": 2223,
-      "sha256": "9c85a5c3da071231e3df350567acb11f95eeaf0133a81ee43c9803acca074ab1"
+      "size": 2868,
+      "sha256": "0001b6af9027302f3fa52867ee7f8d14d4f29b6b669416ffb19f29698234e04d"
     },
     {
       "path": "miles/references/convert-theme.md",
@@ -82,8 +82,8 @@
     },
     {
       "path": "miles/references/sandbox.md",
-      "size": 2655,
-      "sha256": "2f084f26e4da62489c2eda5a67bc34e68cd4c18d23abd4f26efdcb61cd6adfef"
+      "size": 3043,
+      "sha256": "fd0e3dbfb231054301da58b205c8faa590f492fd6808a06defdd729672308c22"
     },
     {
       "path": "miles/references/say.md",
@@ -102,8 +102,8 @@
     },
     {
       "path": "miles/references/site-create.md",
-      "size": 3668,
-      "sha256": "dba4d1678ae9255afb7baac33bea95e2c2987025b03ca30fd1e625c4403b1817"
+      "size": 4702,
+      "sha256": "1b0c58f227a6e72db7ce0322ecba7e57dadc6a7eadfba0c4093cabaaa041f3ae"
     },
     {
       "path": "miles/references/site-pages.md",
@@ -111,9 +111,14 @@
       "sha256": "5f4c3e7bb020835cc984b75bf424437d5e2c6217ca79dad78768a32505ba12fd"
     },
     {
+      "path": "miles/references/site-plan.md",
+      "size": 4216,
+      "sha256": "9791b055b4973eb95b008569a163ec332fcd857c37d94e7d32971a7031ea81d9"
+    },
+    {
       "path": "miles/references/site-state.md",
-      "size": 4666,
-      "sha256": "ea3627867aaa57abcfa74afc13ed9edcd8278b510b945382a102671ea40528c7"
+      "size": 4872,
+      "sha256": "ea79a6f5642eb1f775848ebdb5fd64dd20f2391f2109a76ef6c931d1423604d6"
     },
     {
       "path": "miles/references/state-objects.md",
@@ -142,13 +147,13 @@
     },
     {
       "path": "miles/references/wordpress-detect.md",
-      "size": 1519,
-      "sha256": "5c13be46e85e949ad20eed0fdd3f539731c80085a3bc9e5d66aacacf0ec6daed"
+      "size": 1790,
+      "sha256": "af07ba04f5da21f336034f357c06a9a9c0343b6c8a76a3967c745b26ca4b1021"
     },
     {
       "path": "miles/references/wordpress-setup.md",
-      "size": 5062,
-      "sha256": "865ebe950bd6400871ee849b695f4ec0c57fb5ff45d5eca6732012c1ee991fac"
+      "size": 8152,
+      "sha256": "7c4c706c4b1fca4906f09a321344e3896fadbf47c74eca4cb052ed562f54b68d"
     },
     {
       "path": "miles/sandbox.json.example",
@@ -162,23 +167,23 @@
     },
     {
       "path": "miles/scripts/miles",
-      "size": 1016,
-      "sha256": "32e694eac4f751499fe01597a57aea0c853322a7d6bcfa48b0e2ec3ff10bcb4b"
+      "size": 1841,
+      "sha256": "3c38547a1df67a57f15c59f5db4d539b1c681f11bf0546faa9e72876e7fe923a"
     },
     {
       "path": "miles/scripts/miles-cli.mjs",
-      "size": 182033,
-      "sha256": "be3372c99870b82603883423d292d6265cab7e9c2b7ab1bdf6ab8d53ae0b8d6b"
+      "size": 203109,
+      "sha256": "7f211f1859c0d2e5acdde008376a0fe0fcfcbe2c1c962bb16d74b18e3bdfbba3"
     },
     {
       "path": "miles/scripts/test-miles-cli.mjs",
-      "size": 87189,
-      "sha256": "0e3676e90f1dc892bbb5523708efb44ad10dc47b955ad7ae62f8bf436f100c09"
+      "size": 130877,
+      "sha256": "0c47c59287974ca222ac29c19ab00bb92e3220337b62863d4b370f94d691152e"
     },
     {
       "path": "miles/smoke-checklist.md",
-      "size": 7333,
-      "sha256": "2e1574261723b569e48df1652f2082671db8a77963226914c9427094ea6abc24"
+      "size": 9555,
+      "sha256": "57e069301ad10bdfc2ba77620db3acf9f5a09b70d27f98e17909d51c54a5bc5d"
     }
   ]
 }

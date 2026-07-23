@@ -7,6 +7,15 @@ SKILL_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 RUNTIME="${MILES_RUNTIME_BINARY:-$HOME/.miles/bin/miles-runtime}"
 
 if [ -x "$RUNTIME" ]; then
+  # Pin these to empty-when-unset: a set (even empty) variable stops the
+  # Bun-compiled runtime's automatic .env loading from importing config out
+  # of an unrelated repository. The CLI treats empty as unset.
+  MILES_HOME="${MILES_HOME-}" \
+  MILES_SERVER_URL="${MILES_SERVER_URL-}" \
+  MILES_PLUGIN_MANIFEST_URL="${MILES_PLUGIN_MANIFEST_URL-}" \
+  MILES_PLUGIN_DOWNLOAD_URL="${MILES_PLUGIN_DOWNLOAD_URL-}" \
+  MILES_PLUGIN_SOURCE="${MILES_PLUGIN_SOURCE-}" \
+  WP_CLI="${WP_CLI-}" \
   MILES_SKILL_DIR="${MILES_SKILL_DIR:-$SKILL_DIR}" \
   MILES_CLI="${MILES_CLI:-$0}" \
   exec "$RUNTIME" "$@"
@@ -30,6 +39,13 @@ if [ ! -x "$SCRIPT_DIR/miles-cli.mjs" ]; then
   }
 fi
 
+# Same empty-when-unset pinning as the runtime path above; see that comment.
+MILES_HOME="${MILES_HOME-}" \
+MILES_SERVER_URL="${MILES_SERVER_URL-}" \
+MILES_PLUGIN_MANIFEST_URL="${MILES_PLUGIN_MANIFEST_URL-}" \
+MILES_PLUGIN_DOWNLOAD_URL="${MILES_PLUGIN_DOWNLOAD_URL-}" \
+MILES_PLUGIN_SOURCE="${MILES_PLUGIN_SOURCE-}" \
+WP_CLI="${WP_CLI-}" \
 MILES_SKILL_DIR="${MILES_SKILL_DIR:-$SKILL_DIR}" \
 MILES_CLI="${MILES_CLI:-$0}" \
 exec "$SCRIPT_DIR/miles-cli.mjs" "$@"

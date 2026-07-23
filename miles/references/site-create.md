@@ -1,6 +1,6 @@
 # miles site-create
 
-Create a new site plus its conversation with Miles. Porcelain, HEADLESS. This is the canonical start for new work — and `--brief` is the content-injection seam for agents that already own the content.
+Create a new cloud site plus its conversation, or start a conversation on the active paired local WordPress site. Porcelain, HEADLESS. This is the canonical start for new work — and `--brief` is the content-injection seam for agents that already own the content.
 
 ```bash
 miles site-create "<description>" [--name "Site Name"] [--brief <file>] [--attach <file>] [--no-wait]
@@ -12,7 +12,15 @@ miles site-create "<description>" [--name "Site Name"] [--brief <file>] [--attac
 - `--attach <file>`: upload a brand asset (logo, imagery, content document) and hand it to Miles with the message. Repeat for multiple files. Mention what each file is in the description ("the attached SVG is their logo") so Miles uses it correctly. Details: [upload-assets.md](upload-assets.md).
 - `--no-wait`: return a JSON handle immediately instead of streaming (see [wait-job.md](wait-job.md)).
 
-By default the command streams progress and prints Miles' first settled response (a discovery question, or direction-generation progress when `--brief` was used). The new site becomes the active site in local credentials.
+By default the command streams progress and prints Miles' first settled response (a discovery question, or direction-generation progress when `--brief` was used). For cloud work, the new site becomes active. When the active connection is `local-wordpress`, the command sends that exact site id and preserves its local dashboard, filesystem root, and connection kind.
+
+## Local WordPress safety
+
+The server must advertise `site-create.operations.local-wordpress`. If it does not, the command exits `2` before uploading attachments, creating remote state, starting generation, changing the active site, or spending credits. There is no cloud fallback.
+
+This guard is intentional. A successful `wordpress-setup --use local` may exist before the server has deployed local-site conversation creation; the CLI must report that rollout gap instead of silently creating a different cloud site.
+
+If the server ever returns a different site id than the paired local site, the CLI exits `2` with `code: "unexpected_site_returned"` and refuses to change the active site. The response includes the returned site and conversation ids — a conversation may already be running there, so inspect it with `miles site-attach <returnedSiteId>` and cancel any unwanted run before retrying.
 
 ## Writing a good `--brief`
 
@@ -20,7 +28,7 @@ The brief is the blueprint Miles designs from. Include what the site is for, who
 
 ## Judgment
 
-- This is the primitive that starts a fresh site deliverable. If a site is already active and the user asks for a "new site", "different website", "start over", or another independent build, use `site-create` instead of sending the request through `say` on the active site. To branch an existing site, use `site-attach <siteId> --duplicate`.
+- This is the primitive that starts fresh design work. On an active local WordPress connection it targets that exact site. On a cloud connection it creates a separate cloud deliverable. Never switch a local request to cloud implicitly.
 - If the user may mean a redesign of the active site rather than a new deliverable, ask one direct clarification before spending credits or changing the current site.
 - With `--brief`, this command immediately starts design-direction generation — a multi-minute run. Before firing: set up your host's progress transport (SKILL.md "Long-Running Commands"), tell the user it takes several minutes, and if they are present open the dashboard (`connect-browser --open`) right after the handle exists so they watch the directions appear.
 - User present and wanting the experience → no `--brief`; relay the interview ([full-workflow.md](full-workflow.md)).
@@ -31,4 +39,4 @@ The brief is the blueprint Miles designs from. Include what the site is for, who
 
 ## Exit codes
 
-`0` settled · `2` not logged in / missing description · `4` turn blocked or declined · `5` capacity (another run already streaming) · `1` failed.
+`0` settled · `2` not logged in / missing description / local operation unavailable · `4` turn blocked or declined · `5` capacity (another run already streaming) · `1` failed.

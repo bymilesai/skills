@@ -113,6 +113,7 @@ const JSON_COMMANDS = new Set([
   'convert-theme',
   'build-theme',
   'site-state',
+  'site-plan',
   'site-attach',
   'wordpress-detect',
   'wordpress-setup',
@@ -326,6 +327,13 @@ function getActiveSite(creds) {
   return { id: creds.activeSite, ...creds.sites[creds.activeSite] };
 }
 
+function noActiveConversationMessage(site) {
+  if (site?.connection?.kind === 'local-wordpress') {
+    return 'This paired local WordPress site has no conversation yet. Run `miles site-create "<description>"` to start a design on this exact site. If the server has not deployed local WordPress conversation support, the command will stop before creating remote state or spending credits.';
+  }
+  return 'No active conversation. Use `miles site-create` to start one, or `miles site-attach <siteId>` to resume an existing site.';
+}
+
 function writeLastResponse(text) {
   ensureCredentialsDir();
   writeFileSync(LAST_RESPONSE_FILE, text);
@@ -518,7 +526,8 @@ async function getDashboardOpenUrl(creds, site, serverUrl) {
     return {
       dashboardUrl,
       url: dashboardUrl,
-      authenticated: false,
+      authenticated: null,
+      authenticationKnown: false,
     };
   }
   const authenticatedUrl = await getAuthenticatedDashboardUrl(
@@ -530,6 +539,7 @@ async function getDashboardOpenUrl(creds, site, serverUrl) {
     dashboardUrl,
     url: authenticatedUrl || dashboardUrl,
     authenticated: Boolean(authenticatedUrl),
+    authenticationKnown: true,
   };
 }
 
@@ -626,11 +636,14 @@ function getLocalRuntimeSummary(creds = loadCredentials()) {
 // ============================================================================
 
 let cachedCapabilities;
+let capabilitiesFetchError = null;
 
 /**
  * Fetch the connected server's primitive contract. Returns null when the
  * server predates the handshake (404) or the fetch fails — callers treat
  * null as "legacy contract": the pre-handshake primitive set only.
+ * `capabilitiesFetchError` distinguishes "the server answered 404" (legacy)
+ * from "the contract could not be read at all" (network, 5xx, bad JSON).
  */
 async function getServerCapabilities(serverUrl = DEFAULT_SERVER_URL) {
   if (cachedCapabilities !== undefined) return cachedCapabilities;
@@ -640,7 +653,8 @@ async function getServerCapabilities(serverUrl = DEFAULT_SERVER_URL) {
       '/api/v2/headless/capabilities',
       { serverUrl },
     );
-  } catch {
+  } catch (err) {
+    if (err?.status !== 404) capabilitiesFetchError = err;
     cachedCapabilities = null;
   }
   return cachedCapabilities;
@@ -648,15 +662,49 @@ async function getServerCapabilities(serverUrl = DEFAULT_SERVER_URL) {
 
 /**
  * Exit 2 when the connected server does not advertise a primitive. Keeps the
- * skill honest: never run an operation the API can't deliver.
+ * skill honest: never run an operation the API can't deliver. A failed
+ * capabilities fetch also stops the command (fail closed), but reports the
+ * outage as retryable instead of claiming the server lacks the primitive.
  */
 async function requirePrimitive(name, serverUrl = DEFAULT_SERVER_URL) {
   const capabilities = await getServerCapabilities(serverUrl);
   if (!capabilities?.primitives?.[name]) {
+    if (!capabilities && capabilitiesFetchError) {
+      exitWithError(
+        `Could not read the connected Miles server's capabilities (${capabilitiesFetchError.message}). \`${name}\` was not run and no remote state was created. Retry once the server is reachable.`,
+        EXIT_PRECONDITION,
+        {
+          code: 'capabilities_unreachable',
+          primitive: name,
+          safeToRetry: true,
+        },
+      );
+    }
     exitWithError(
       `The connected Miles server does not support \`${name}\` yet. Run \`miles doctor --json\` to see the supported primitive set.`,
       EXIT_PRECONDITION,
       { code: 'primitive_unsupported', primitive: name },
+    );
+  }
+  return capabilities;
+}
+
+async function requirePrimitiveOperation(
+  name,
+  operation,
+  serverUrl = DEFAULT_SERVER_URL,
+) {
+  const capabilities = await requirePrimitive(name, serverUrl);
+  if (!capabilities.primitives[name]?.operations?.[operation]) {
+    exitWithError(
+      `The connected Miles server cannot run \`${name}\` for ${operation} sites yet. No remote state was created and no credits were spent.`,
+      EXIT_PRECONDITION,
+      {
+        code: 'primitive_operation_unsupported',
+        primitive: name,
+        operation,
+        safeToRetry: false,
+      },
     );
   }
   return capabilities;
@@ -1472,12 +1520,49 @@ async function cmdDoctor() {
   const summary = getLocalRuntimeSummary(creds);
   let milesHomeDetail = MILES_HOME;
   let milesHomeWritable = true;
+  let milesHomeFailure = null;
+  let writeProbePath = null;
   try {
     ensureCredentialsDir();
-    accessSync(MILES_HOME, constants.W_OK);
+    writeProbePath = join(
+      MILES_HOME,
+      `.doctor-write-probe-${process.pid}-${randomUUID()}`,
+    );
+    writeFileSync(writeProbePath, '', {
+      flag: 'wx',
+      mode: 0o600,
+    });
   } catch (err) {
     milesHomeWritable = false;
     milesHomeDetail = `${MILES_HOME} (${err.message})`;
+    // Claude Code sets CLAUDECODE (no underscore). Seatbelt denials surface
+    // as EPERM on macOS; Linux sandboxes commonly return EACCES or EROFS.
+    const sandboxDetected = Boolean(
+      process.env.CODEX_SANDBOX ||
+        process.env.CURSOR_AGENT ||
+        process.env.CLAUDECODE,
+    );
+    const sandboxDenied =
+      ['EPERM', 'EACCES', 'EROFS'].includes(err.code) && sandboxDetected;
+    milesHomeFailure = {
+      code: sandboxDenied
+        ? 'host_sandbox_denied'
+        : 'filesystem_not_writable',
+      errno: err.code || null,
+      sandboxDetected,
+      retryOutsideSandbox: sandboxDenied,
+      remediation: sandboxDenied
+        ? 'Allow this command to run outside the host filesystem sandbox, or set MILES_HOME to a writable approved directory.'
+        : `Make ${MILES_HOME} writable by the current user, or set MILES_HOME to another directory.`,
+    };
+  } finally {
+    if (writeProbePath) {
+      try {
+        unlinkSync(writeProbePath);
+      } catch {
+        // The writability result is already known; cleanup is best effort.
+      }
+    }
   }
   let credentialsReadable = true;
   let credentialsDetail = 'No credentials file found';
@@ -1506,6 +1591,7 @@ async function cmdDoctor() {
       name: 'milesHome',
       ok: milesHomeWritable,
       detail: milesHomeDetail,
+      ...(milesHomeFailure || {}),
     },
     {
       name: 'credentialsFile',
@@ -1657,6 +1743,17 @@ async function cmdCreateSite(rawArgs) {
     );
   }
 
+  const activeSite = getActiveSite(creds);
+  const localWordPressTarget =
+    activeSite?.connection?.kind === 'local-wordpress' ? activeSite : null;
+  if (localWordPressTarget) {
+    await requirePrimitiveOperation(
+      'site-create',
+      'local-wordpress',
+      serverUrl,
+    );
+  }
+
   // Attachments must exist before the create call: the build fires inside
   // the same request. The API key gives them account scope, which is the
   // only scope create-site accepts (the site doesn't exist yet).
@@ -1677,6 +1774,7 @@ async function cmdCreateSite(rawArgs) {
   if (name) body.name = name;
   if (brief) body.brief = brief;
   if (uploadedFiles) body.uploadedFiles = uploadedFiles;
+  if (localWordPressTarget) body.siteId = localWordPressTarget.id;
 
   const data = await apiRequest('POST', '/api/v2/headless/sites', {
     auth: creds.apiKey,
@@ -1686,12 +1784,43 @@ async function cmdCreateSite(rawArgs) {
 
   // Save site credentials
   if (!creds.sites) creds.sites = {};
-  creds.sites[data.siteId] = {
-    siteToken: data.siteToken,
-    name: name || message.substring(0, 50),
-    conversationId: data.conversationId,
-    dashboardUrl: data.dashboardUrl,
-  };
+  if (localWordPressTarget) {
+    if (data.siteId !== localWordPressTarget.id) {
+      // The create call already succeeded server-side, so a conversation may
+      // be running on the returned site. Refuse to adopt it locally, but hand
+      // the operator the ids they need to inspect or stop it.
+      exitWithError(
+        `Miles returned site ${data.siteId} instead of the paired local WordPress site ${localWordPressTarget.id}. The CLI refused to change the active site, but the server may have started a conversation on that other site. Inspect it with \`miles site-attach ${data.siteId}\` and cancel any unwanted run before retrying.`,
+        EXIT_PRECONDITION,
+        {
+          code: 'unexpected_site_returned',
+          expectedSiteId: localWordPressTarget.id,
+          returnedSiteId: data.siteId,
+          returnedConversationId: data.conversationId || null,
+          safeToRetry: false,
+        },
+      );
+    }
+    creds.sites[data.siteId] = {
+      ...creds.sites[data.siteId],
+      siteToken: data.siteToken || localWordPressTarget.siteToken,
+      name:
+        name ||
+        localWordPressTarget.name ||
+        message.substring(0, 50),
+      conversationId: data.conversationId,
+      cloudDashboardUrl:
+        data.dashboardUrl || localWordPressTarget.cloudDashboardUrl || null,
+      connection: { kind: 'local-wordpress' },
+    };
+  } else {
+    creds.sites[data.siteId] = {
+      siteToken: data.siteToken,
+      name: name || message.substring(0, 50),
+      conversationId: data.conversationId,
+      dashboardUrl: data.dashboardUrl,
+    };
+  }
   creds.activeSite = data.siteId;
   saveCredentials(creds);
   writeActiveRun({
@@ -1712,7 +1841,11 @@ async function cmdCreateSite(rawArgs) {
     return cmdWaitJob([]);
   }
 
-  console.log(`Dashboard: ${data.dashboardUrl}`);
+  console.log(
+    `Dashboard: ${
+      localWordPressTarget?.dashboardUrl || data.dashboardUrl
+    }`,
+  );
 
   const settled = await doWait(creds, data.conversationId, serverUrl);
   exitWithTurnOutcome(settled);
@@ -1723,10 +1856,7 @@ async function cmdSay(rawArgs) {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    exitWithError(
-      'No active conversation. Use `miles site-create` to start one, or `miles site-attach <siteId>` to resume an existing site.',
-      EXIT_PRECONDITION,
-    );
+    exitWithError(noActiveConversationMessage(site), EXIT_PRECONDITION);
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -2253,7 +2383,10 @@ function formatProgress(progress, elapsed) {
         : '';
       return `${active.label}${section} (${elapsed}s)`;
     }
-    return `Converting to WordPress theme (${elapsed}s)`;
+    // Completed conversion data can remain the server's latest data part
+    // during later, unrelated turns. The current phase already describes the
+    // active work, so do not revive a finished conversion as live progress.
+    return null;
   }
 
   if (type === 'data-hero-preview-gallery' && data.previews) {
@@ -3857,13 +3990,97 @@ function findLocalMilesPluginSource() {
   return null;
 }
 
-function readMilesPluginVersionFromFile(pluginDir) {
+function readMilesPluginHeadersFromFile(pluginDir) {
   try {
     const contents = readFileSync(join(pluginDir, 'miles.php'), 'utf8');
-    return contents.match(/Version:\s*([^\n]+)/)?.[1]?.trim() || null;
+    return {
+      version:
+        contents.match(/^\s*\*?\s*Version:\s*([^\n\r]+)/im)?.[1]?.trim() ||
+        null,
+      requiresWordPress:
+        contents
+          .match(/^\s*\*?\s*Requires at least:\s*([^\n\r]+)/im)?.[1]
+          ?.trim() || null,
+      requiresPhp:
+        contents
+          .match(/^\s*\*?\s*Requires PHP:\s*([^\n\r]+)/im)?.[1]
+          ?.trim() || null,
+    };
   } catch {
-    return null;
+    return {
+      version: null,
+      requiresWordPress: null,
+      requiresPhp: null,
+    };
   }
+}
+
+function readMilesPluginVersionFromFile(pluginDir) {
+  return readMilesPluginHeadersFromFile(pluginDir).version;
+}
+
+function compareVersions(left, right) {
+  function parse(value) {
+    const match = String(value || '')
+      .trim()
+      .match(/^(\d+(?:\.\d+)*)(.*)$/);
+    if (!match) return null;
+    return {
+      numbers: match[1].split('.').map((part) => Number(part)),
+      suffix: match[2].replace(/^[.-]+/, '').trim().toLowerCase(),
+    };
+  }
+
+  const leftVersion = parse(left);
+  const rightVersion = parse(right);
+  if (!leftVersion || !rightVersion) return null;
+
+  const segmentCount = Math.max(
+    leftVersion.numbers.length,
+    rightVersion.numbers.length,
+  );
+  for (let index = 0; index < segmentCount; index += 1) {
+    const leftSegment = leftVersion.numbers[index] || 0;
+    const rightSegment = rightVersion.numbers[index] || 0;
+    if (leftSegment !== rightSegment) {
+      return leftSegment > rightSegment ? 1 : -1;
+    }
+  }
+
+  if (leftVersion.suffix === rightVersion.suffix) return 0;
+  if (!leftVersion.suffix) return 1;
+  if (!rightVersion.suffix) return -1;
+  return leftVersion.suffix.localeCompare(rightVersion.suffix);
+}
+
+function pluginWordPressCompatibility(pluginDir, wordpressVersion) {
+  const headers = readMilesPluginHeadersFromFile(pluginDir);
+  // `compatibilityChecked: false` means the gate could not run (no WP-CLI
+  // version, unreadable plugin header, or unparseable versions) and the
+  // install proceeds unverified — callers surface that rather than implying
+  // a compatibility guarantee.
+  if (!headers.requiresWordPress || !wordpressVersion) {
+    return { ok: true, compatibilityChecked: false, headers };
+  }
+  const comparison = compareVersions(
+    wordpressVersion,
+    headers.requiresWordPress,
+  );
+  if (comparison === null) {
+    return { ok: true, compatibilityChecked: false, headers };
+  }
+  if (comparison >= 0) {
+    return { ok: true, compatibilityChecked: true, headers };
+  }
+  return {
+    ok: false,
+    compatibilityChecked: true,
+    code: 'wordpress_version_unsupported',
+    detectedWordPressVersion: wordpressVersion,
+    requiredWordPressVersion: headers.requiresWordPress,
+    pluginVersion: headers.version,
+    reason: `Miles ${headers.version || 'plugin'} requires WordPress ${headers.requiresWordPress} or newer, but this site is running WordPress ${wordpressVersion}. Upgrade WordPress before installing or activating Miles.`,
+  };
 }
 
 function copyMilesPluginSource(sourceDir, wordpressRoot) {
@@ -3900,7 +4117,11 @@ function findExtractedMilesPluginSource(extractDir) {
   return null;
 }
 
-async function copyMilesPluginDownload(pluginUrl, wordpressRoot) {
+async function copyMilesPluginDownload(
+  pluginUrl,
+  wordpressRoot,
+  wordpressVersion,
+) {
   const unzip = executableOnPath('unzip');
   if (!unzip) {
     return {
@@ -3945,8 +4166,21 @@ async function copyMilesPluginDownload(pluginUrl, wordpressRoot) {
       };
     }
 
+    const compatibility = pluginWordPressCompatibility(
+      sourceDir,
+      wordpressVersion,
+    );
+    if (!compatibility.ok) {
+      return compatibility;
+    }
+
     const copyResult = copyMilesPluginSource(sourceDir, wordpressRoot);
-    return { ok: true, ...copyResult };
+    return {
+      ok: true,
+      ...copyResult,
+      pluginHeaders: compatibility.headers,
+      compatibilityChecked: compatibility.compatibilityChecked,
+    };
   } catch (err) {
     return {
       ok: false,
@@ -4121,12 +4355,27 @@ async function ensureMilesPluginInstalled(detection, args = []) {
     getOptionalCommandFlagValue(args, '--plugin-url') ||
     MILES_PLUGIN_DOWNLOAD_URL ||
     null;
-  let wpCliFailure = null;
 
   async function ensurePluginFiles() {
-    if (detection.plugin.installed) return { ok: true };
-
+    const installedPluginDir = join(
+      detection.root,
+      'wp-content',
+      'plugins',
+      'miles',
+    );
     if (detection.plugin.source) {
+      const compatibility = pluginWordPressCompatibility(
+        detection.plugin.source,
+        detection.site.wordpressVersion,
+      );
+      if (!compatibility.ok) return compatibility;
+      if (resolve(detection.plugin.source) === resolve(installedPluginDir)) {
+        return {
+          ok: true,
+          pluginHeaders: compatibility.headers,
+          compatibilityChecked: compatibility.compatibilityChecked,
+        };
+      }
       const copyResult = copyMilesPluginSource(
         detection.plugin.source,
         detection.root,
@@ -4136,19 +4385,47 @@ async function ensureMilesPluginInstalled(detection, args = []) {
         targetDir: copyResult.targetDir,
         replaced: copyResult.replaced || undefined,
       });
-      return { ok: true };
-    }
-
-    pluginUrl = pluginUrl || (await getPluginDownloadUrl().catch(() => null));
-    if (!pluginUrl) {
       return {
-        ok: false,
-        reason:
-          'No local Miles plugin source or plugin download URL was available.',
+        ok: true,
+        pluginHeaders: compatibility.headers,
+        compatibilityChecked: compatibility.compatibilityChecked,
       };
     }
 
-    const copyResult = await copyMilesPluginDownload(pluginUrl, detection.root);
+    if (detection.plugin.installed) {
+      const compatibility = pluginWordPressCompatibility(
+        installedPluginDir,
+        detection.site.wordpressVersion,
+      );
+      if (!compatibility.ok) return compatibility;
+      return {
+        ok: true,
+        pluginHeaders: compatibility.headers,
+        compatibilityChecked: compatibility.compatibilityChecked,
+      };
+    }
+
+    let manifestFetchError = null;
+    if (!pluginUrl) {
+      pluginUrl = await getPluginDownloadUrl().catch((err) => {
+        manifestFetchError = err;
+        return null;
+      });
+    }
+    if (!pluginUrl) {
+      return {
+        ok: false,
+        reason: manifestFetchError
+          ? `Could not fetch the Miles plugin release manifest: ${manifestFetchError.message}`
+          : 'No local Miles plugin source or plugin download URL was available.',
+      };
+    }
+
+    const copyResult = await copyMilesPluginDownload(
+      pluginUrl,
+      detection.root,
+      detection.site.wordpressVersion,
+    );
     if (!copyResult.ok) return copyResult;
     actions.push({
       action: 'installed-plugin-files',
@@ -4156,30 +4433,11 @@ async function ensureMilesPluginInstalled(detection, args = []) {
       targetDir: copyResult.targetDir,
       replaced: copyResult.replaced || undefined,
     });
-    return { ok: true };
-  }
-
-  if (
-    !detection.plugin.installed &&
-    detection.wpCli.available &&
-    !detection.plugin.source
-  ) {
-    pluginUrl = pluginUrl || (await getPluginDownloadUrl().catch(() => null));
-    if (pluginUrl) {
-      try {
-        runWpCli(detection.wpCli.path, detection.root, [
-          'plugin',
-          'install',
-          pluginUrl,
-          '--activate',
-          '--force',
-        ]);
-        actions.push({ action: 'installed-plugin', source: pluginUrl });
-        return { ok: true, actions };
-      } catch (err) {
-        wpCliFailure = sanitizeLocalSetupFailure(err);
-      }
-    }
+    return {
+      ok: true,
+      pluginHeaders: copyResult.pluginHeaders,
+      compatibilityChecked: copyResult.compatibilityChecked === true,
+    };
   }
 
   const fileInstall = await ensurePluginFiles();
@@ -4188,15 +4446,18 @@ async function ensureMilesPluginInstalled(detection, args = []) {
       ok: false,
       actions,
       pluginUrl,
-      reason: fileInstall.reason,
+      ...fileInstall,
     };
   }
+
+  const compatibilityChecked = fileInstall.compatibilityChecked === true;
 
   if (!detection.wpCli.available) {
     return {
       ok: false,
       actions,
       pluginUrl,
+      compatibilityChecked,
       manualActivationRequired: true,
       reason:
         'Miles plugin files are installed, but WP-CLI is not available to activate them automatically.',
@@ -4211,19 +4472,19 @@ async function ensureMilesPluginInstalled(detection, args = []) {
   ]);
   if (!activate.ok) {
     const reason =
-      wpCliFailure ||
       sanitizeProgressText(activate.error || activate.output) ||
       'Failed to activate the Miles plugin with WP-CLI.';
     return {
       ok: false,
       actions,
       pluginUrl,
+      compatibilityChecked,
       manualActivationRequired: true,
       reason: `Miles plugin files are installed, but WP-CLI could not activate them automatically. ${reason}`,
     };
   }
   actions.push({ action: 'activated-plugin' });
-  return { ok: true, actions };
+  return { ok: true, actions, compatibilityChecked };
 }
 
 function wordpressApplicationPasswordsAvailable(detection) {
@@ -4431,14 +4692,26 @@ async function cmdWordPressSetup(args = []) {
             : 'After the user confirms activation, ask them to open Miles in wp-admin and finish setup.',
         ]
       : [
-          'Ask the user to install and activate the Miles plugin in this WordPress admin, then open the Miles plugin page to finish setup.',
+          installResult.code === 'wordpress_version_unsupported'
+            ? `Upgrade WordPress to ${installResult.requiredWordPressVersion} or newer, then rerun \`miles wordpress-setup --use local --json\`.`
+            : 'Ask the user to install and activate the Miles plugin in this WordPress admin, then open the Miles plugin page to finish setup.',
         ];
     const payload = {
       ok: false,
       mode: 'local',
+      code: installResult.code || null,
       localWordPress: detection,
       actions: installResult.actions,
       reason: installResult.reason,
+      wordpressCompatibilityChecked:
+        installResult.compatibilityChecked === true,
+      detectedWordPressVersion:
+        installResult.detectedWordPressVersion ||
+        detection.site.wordpressVersion ||
+        null,
+      requiredWordPressVersion:
+        installResult.requiredWordPressVersion || null,
+      pluginVersion: installResult.pluginVersion || detection.plugin.version || null,
       pluginUrl,
       siteUrl: adminUrls.siteUrl,
       adminPluginsUrl: adminUrls.adminPluginsUrl,
@@ -4520,10 +4793,12 @@ async function cmdWordPressSetup(args = []) {
   }
 
   if (!creds.sites) creds.sites = {};
+  const existingSite = creds.sites[bootstrap.siteId];
   creds.sites[bootstrap.siteId] = {
     siteToken: bootstrap.siteToken,
     name: bootstrap.siteName || refreshed.site.name || siteUrl,
-    conversationId: null,
+    conversationId:
+      bootstrap.conversationId || existingSite?.conversationId || null,
     dashboardUrl:
       bootstrap.localDashboardUrl ||
       refreshed.site.dashboardUrl ||
@@ -4536,23 +4811,48 @@ async function cmdWordPressSetup(args = []) {
   creds.activeSite = bootstrap.siteId;
   saveCredentials(creds);
 
+  const setup = sanitizeLocalSetupResult(setupResult);
+  // The plugin's local-setup command can exit 0 while reporting failure in
+  // its JSON body. That leaves the site bootstrapped but not linked, which
+  // callers must not mistake for a completed setup.
+  const setupFailed = setup.success === false;
   const payload = {
-    ok: true,
+    ok: !setupFailed,
     mode: 'local',
+    ...(setupFailed ? { code: 'plugin_setup_failed' } : {}),
     siteId: bootstrap.siteId,
     siteUrl,
     dashboardUrl: creds.sites[bootstrap.siteId].dashboardUrl,
     cloudDashboardUrl: bootstrap.dashboardUrl,
     relinked: bootstrap.relinked,
+    wordpressVersion: refreshed.site.wordpressVersion || null,
+    pluginVersion: refreshed.plugin.version || null,
+    wordpressCompatibilityChecked:
+      installResult.compatibilityChecked === true,
     actions: [...installResult.actions, ...appPasswordResult.actions],
-    setup: sanitizeLocalSetupResult(setupResult),
+    setup,
     activeSite: getActiveSiteSummary(creds),
-    next: ['Run `miles connect-browser --open` to open the local Miles admin page.'],
+    next: setupFailed
+      ? [
+          `Fix the reported setup problem, then rerun \`miles wordpress-setup --use local --json\` to relink site ${bootstrap.siteId} and finish setup.`,
+        ]
+      : [
+          'Run `miles site-create "<description>"` to start a new design on this exact local WordPress site.',
+          'Run `miles connect-browser --open` when you want to open the local Miles admin page.',
+        ],
   };
 
   if (cliOptions.json) {
     emitJson(payload);
+    if (setupFailed) process.exit(1);
     return;
+  }
+
+  if (setupFailed) {
+    console.error(
+      `Local WordPress plugin setup failed after Miles created site ${bootstrap.siteId}${setup.message ? `: ${setup.message}` : '.'} Rerun \`miles wordpress-setup --use local --json\` to relink and finish setup.`,
+    );
+    process.exit(1);
   }
 
   console.log(`Connected local WordPress site: ${siteUrl}`);
@@ -4688,12 +4988,37 @@ async function cmdConnectBrowser(args = []) {
   }
 
   if (cliOptions.json) {
+    const localWordPress = site.connection?.kind === 'local-wordpress';
+    const pairingComplete = localWordPress
+      ? Boolean(site.siteToken)
+      : Boolean(site.siteToken && site.conversationId);
+    const realtimeAvailable = Boolean(site.conversationId);
     const payload = {
       url: dashboard.url,
       dashboardUrl: dashboard.dashboardUrl,
       authenticated: dashboard.authenticated,
       connected,
       connection: site.connection || { kind: 'browser-dashboard' },
+      pairing: {
+        paired: pairingComplete,
+        kind: localWordPress ? 'local-wordpress' : 'browser-dashboard',
+      },
+      dashboard: {
+        available: Boolean(dashboard.url),
+        authenticationKnown: dashboard.authenticationKnown,
+        authenticated: dashboard.authenticated,
+        reason:
+          dashboard.authenticationKnown === false
+            ? 'The CLI cannot inspect the browser-local WordPress admin session.'
+            : null,
+      },
+      realtime: {
+        available: realtimeAvailable,
+        connected,
+        reason: realtimeAvailable
+          ? connectionStatusError
+          : 'No conversation exists yet, so there is no real-time conversation connection to check.',
+      },
       activeSite: getActiveSiteSummary(creds),
     };
     if (connectionStatusError) {
@@ -4780,6 +5105,41 @@ async function cmdAccountStatus() {
     auth: creds.apiKey,
     serverUrl,
   });
+  const credits = data.credits || null;
+  const monthlyRemainingCredits = Number(
+    credits?.monthlyRemainingCredits || 0,
+  );
+  const topUpCredits = Number(
+    credits?.topUpBalanceCredits || credits?.topUpCredits || 0,
+  );
+  // Fall back to the component balances so a response missing the total does
+  // not read as "zero credits". No credit data at all must stay distinguishable
+  // from a genuinely empty balance: canBuild is null, not false.
+  const totalSpendableCredits =
+    credits?.totalSpendableCredits !== undefined
+      ? Number(credits.totalSpendableCredits || 0)
+      : monthlyRemainingCredits + topUpCredits;
+  const canBuild = credits ? totalSpendableCredits > 0 : null;
+  const buildHeadroom = credits
+    ? {
+        spendableCredits: totalSpendableCredits,
+        monthlyRemainingCredits,
+        topUpCredits,
+        source:
+          monthlyRemainingCredits > 0
+            ? topUpCredits > 0
+              ? 'monthly_and_top_up'
+              : 'monthly'
+            : topUpCredits > 0
+              ? 'top_up'
+              : 'none',
+        explanation: canBuild
+          ? monthlyRemainingCredits > 0
+            ? `${totalSpendableCredits.toLocaleString()} credits are available for Miles work.`
+            : `The monthly allowance is exhausted, but ${topUpCredits.toLocaleString()} top-up credits remain available for Miles work.`
+          : 'No spendable credits remain. Add credits before starting a build.',
+      }
+    : null;
 
   let siteCount = null;
   try {
@@ -4795,7 +5155,9 @@ async function cmdAccountStatus() {
   if (cliOptions.json) {
     emitJson({
       plan: data.plan || null,
-      credits: data.credits || null,
+      credits,
+      canBuild,
+      buildHeadroom,
       siteCount,
       activeSite: getActiveSiteSummary(creds),
     });
@@ -4812,6 +5174,7 @@ async function cmdAccountStatus() {
         `Top-up credits: ${data.credits.topUpBalanceCredits.toLocaleString()}`,
       );
     }
+    console.log(buildHeadroom.explanation);
   }
   if (siteCount !== null) {
     console.log(`Sites: ${siteCount}`);
@@ -4932,10 +5295,7 @@ async function cmdSiteState(args = []) {
   const creds = loadCredentials();
   const site = getActiveSite(creds);
   if (!site?.conversationId) {
-    exitWithError(
-      'No active conversation. Use `miles site-create` or `miles site-attach <siteId>` first.',
-      EXIT_PRECONDITION,
-    );
+    exitWithError(noActiveConversationMessage(site), EXIT_PRECONDITION);
   }
 
   const serverUrl = DEFAULT_SERVER_URL;
@@ -5172,6 +5532,259 @@ async function cmdSiteStateFull(site, serverUrl) {
   approvalLines.forEach((line) => console.log(line));
   console.log(`[messages: ${state.messageCount}]`);
   console.log('Full detail: miles site-state --full --json');
+}
+
+function summarizeSitePlan(plan) {
+  if (!plan?.items?.length) {
+    return {
+      total: 0,
+      statuses: {
+        pending: 0,
+        in_progress: 0,
+        completed: 0,
+        failed: 0,
+        dismissed: 0,
+      },
+      curated: 0,
+      uncurated: 0,
+    };
+  }
+
+  const statuses = {
+    pending: 0,
+    in_progress: 0,
+    completed: 0,
+    failed: 0,
+    dismissed: 0,
+  };
+  let curated = 0;
+  let uncurated = 0;
+
+  for (const item of plan.items) {
+    if (Object.hasOwn(statuses, item.status)) {
+      statuses[item.status] += 1;
+    }
+    if (item.curated === false) uncurated += 1;
+    else curated += 1;
+  }
+
+  return {
+    total: plan.items.length,
+    statuses,
+    curated,
+    uncurated,
+  };
+}
+
+function sitePlanItemChanges(previousItem, nextItem) {
+  const fields = new Set([
+    ...Object.keys(previousItem || {}),
+    ...Object.keys(nextItem || {}),
+  ]);
+  fields.delete('id');
+  const changedFields = [...fields].filter(
+    (field) =>
+      JSON.stringify(previousItem?.[field]) !==
+      JSON.stringify(nextItem?.[field]),
+  );
+
+  if (!changedFields.length) return null;
+  return {
+    id: nextItem.id,
+    changedFields,
+    before: previousItem,
+    after: nextItem,
+  };
+}
+
+function diffSitePlans(previousPlan, nextPlan) {
+  if (!previousPlan) {
+    return {
+      added: (nextPlan?.items || []).map((item) => item.id),
+      removed: [],
+      changed: [],
+    };
+  }
+
+  const previousItems = new Map(
+    (previousPlan.items || []).map((item) => [item.id, item]),
+  );
+  const nextItems = new Map(
+    (nextPlan?.items || []).map((item) => [item.id, item]),
+  );
+  const added = [...nextItems.keys()].filter((id) => !previousItems.has(id));
+  const removed = [...previousItems.keys()].filter((id) => !nextItems.has(id));
+  const changed = [...nextItems.entries()]
+    .filter(([id]) => previousItems.has(id))
+    .map(([id, item]) => sitePlanItemChanges(previousItems.get(id), item))
+    .filter(Boolean);
+
+  return { added, removed, changed };
+}
+
+function collectSitePlanSnapshots(messages) {
+  const snapshots = [];
+  for (const message of messages || []) {
+    for (const part of message.parts || []) {
+      if (
+        part?.type === 'data-site-completion-plan' &&
+        part.data &&
+        Array.isArray(part.data.items)
+      ) {
+        snapshots.push({
+          messageId: message.id || null,
+          siteCompletionPlan: part.data,
+        });
+      }
+    }
+  }
+  return snapshots;
+}
+
+async function readSitePlanHistory(site, serverUrl) {
+  await requirePrimitive('history', serverUrl);
+
+  const messages = [];
+  let offset = 0;
+  let total = null;
+
+  do {
+    const data = await apiRequest(
+      'GET',
+      `/api/v2/headless/conversations/${site.conversationId}/history?limit=100&offset=${offset}`,
+      { auth: site.siteToken, serverUrl },
+    );
+    const page = data.messages || [];
+    messages.push(...page);
+    total = Number.isInteger(data.total) ? data.total : messages.length;
+    offset += page.length;
+    if (!page.length) break;
+  } while (offset < total);
+
+  const revisions = [];
+  let previousPlan = null;
+  let previousSignature = null;
+  for (const snapshot of collectSitePlanSnapshots(messages)) {
+    const signature = JSON.stringify(snapshot.siteCompletionPlan);
+    if (signature === previousSignature) continue;
+
+    revisions.push({
+      revision: revisions.length + 1,
+      messageId: snapshot.messageId,
+      updatedAt: snapshot.siteCompletionPlan.updatedAt || null,
+      summary: summarizeSitePlan(snapshot.siteCompletionPlan),
+      changes: diffSitePlans(previousPlan, snapshot.siteCompletionPlan),
+      siteCompletionPlan: snapshot.siteCompletionPlan,
+    });
+    previousPlan = snapshot.siteCompletionPlan;
+    previousSignature = signature;
+  }
+
+  return revisions;
+}
+
+function printFullSitePlan(plan) {
+  if (!plan?.items?.length) {
+    console.log('[site plan: none]');
+    return;
+  }
+
+  const summary = summarizeSitePlan(plan);
+  console.log(
+    `[site plan: ${summary.statuses.completed}/${summary.total} completed]`,
+  );
+  if (plan.createdAt) console.log(`[created: ${plan.createdAt}]`);
+  if (plan.updatedAt) console.log(`[updated: ${plan.updatedAt}]`);
+
+  for (const item of plan.items) {
+    if (item.curated === false) {
+      console.log(`- [${item.status}] Uncurated generated item (${item.id})`);
+      console.log(
+        '  Hidden from user-facing output until Miles authors safe copy.',
+      );
+      continue;
+    }
+    console.log(`- [${item.status}] ${item.title} (${item.id})`);
+    console.log(`  ${item.description}`);
+    console.log(
+      `  category=${item.category} source=${item.source} curated=${item.curated !== false}`,
+    );
+    if (item.failureReason) {
+      console.log(`  failure: ${item.failureReason}`);
+    }
+    if (item.resultRef && Object.keys(item.resultRef).length) {
+      console.log(`  resultRef: ${JSON.stringify(item.resultRef)}`);
+    }
+  }
+}
+
+/**
+ * Lossless Site Plan read. The default view returns the complete current plan;
+ * --history also walks the sanitized conversation history and reconstructs
+ * deduplicated plan revisions with item-level changes.
+ */
+async function cmdSitePlan(args) {
+  noteActiveRunIfAny();
+  const history = hasCommandFlag(args, '--history');
+  const unsupportedArgs = args.filter((arg) => arg !== '--history');
+  if (unsupportedArgs.length) {
+    exitWithError(
+      'Usage: miles site-plan [--history] [--json]',
+      EXIT_PRECONDITION,
+    );
+  }
+
+  const creds = loadCredentials();
+  const site = getActiveSite(creds);
+  if (!site?.conversationId) {
+    exitWithError(noActiveConversationMessage(site), EXIT_PRECONDITION);
+  }
+
+  const serverUrl = DEFAULT_SERVER_URL;
+  const capabilities = await requirePrimitive('site-state', serverUrl);
+  if (!capabilities?.primitives?.['site-state']?.operations?.full) {
+    exitWithError(
+      'The connected Miles server does not support the full Site Plan read yet.',
+      EXIT_PRECONDITION,
+      { code: 'primitive_unsupported', primitive: 'site-state.full' },
+    );
+  }
+
+  const state = await apiRequest(
+    'GET',
+    `/api/v2/headless/conversations/${site.conversationId}/state`,
+    { auth: site.siteToken, serverUrl },
+  );
+  const plan = state.siteCompletionPlan || null;
+  const revisions = history
+    ? await readSitePlanHistory(site, serverUrl)
+    : undefined;
+  const payload = {
+    siteId: site.id,
+    conversationId: site.conversationId,
+    phase: state.phase || null,
+    summary: summarizeSitePlan(plan),
+    siteCompletionPlan: plan,
+    ...(history ? { revisions } : {}),
+  };
+
+  if (cliOptions.json) {
+    emitJson(payload);
+    return;
+  }
+
+  printFullSitePlan(plan);
+  if (history) {
+    console.log(`[revisions: ${revisions.length}]`);
+    for (const revision of revisions) {
+      const changes = revision.changes;
+      console.log(
+        `  ${revision.revision}. ${revision.updatedAt || 'timestamp unavailable'}: +${changes.added.length} -${changes.removed.length} ~${changes.changed.length}`,
+      );
+    }
+  } else {
+    console.log('Revision history: miles site-plan --history --json');
+  }
 }
 
 /**
@@ -5638,6 +6251,7 @@ const commands = {
   'wait-job': cmdWaitJob,
   'approval-respond': cmdApprovalRespond,
   'site-state': cmdSiteState,
+  'site-plan': cmdSitePlan,
   'site-attach': cmdSiteAttach,
   'wordpress-detect': cmdWordPressDetect,
   'wordpress-setup': cmdWordPressSetup,
@@ -5679,7 +6293,7 @@ const commands = {
   'export-site': cmdExportSite,
 };
 
-if (!command || command === 'help' || command === '--help') {
+function printHelp() {
   console.log(`Miles CLI - Design websites with Miles AI
 
 Primitives (HEADLESS = no browser needed, BROWSER = needs connect-browser first):
@@ -5700,6 +6314,7 @@ Sites:
                     [--open]                        when user chooses it
   miles site-state [--full] [--json]      HEADLESS  Phase, directions, next moves
                                                     (--full: brief, plan, memory)
+  miles site-plan [--history] [--json]    HEADLESS  Full Site Plan + revisions
   miles history [--limit <n>] [--offset <n>]
                                           HEADLESS  Conversation transcript
                                                     (paginated, newest by default)
@@ -5756,7 +6371,24 @@ Options:
   --json                            Emit JSON for inspection and long-running
                                     commands (structured handles, errors, and
                                     settled wait results)`);
+}
+
+if (!command || command === 'help' || command === '--help') {
+  printHelp();
   process.exit(0);
+}
+
+if (args.includes('--help') || args.includes('-h')) {
+  printHelp();
+  process.exit(0);
+}
+
+const handler = commands[command];
+if (!handler) {
+  console.error(
+    `Unknown command: ${command}. Use \`miles help\` for available commands.`,
+  );
+  process.exit(1);
 }
 
 if (cliOptions.unsupportedJson) {
@@ -5768,14 +6400,6 @@ if (cliOptions.unsupportedJson) {
       supportedCommands: Array.from(JSON_COMMANDS).sort(),
     },
   );
-}
-
-const handler = commands[command];
-if (!handler) {
-  console.error(
-    `Unknown command: ${command}. Use \`miles help\` for available commands.`,
-  );
-  process.exit(1);
 }
 
 /**

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -44,6 +45,7 @@ function envFor(milesHome, overrides = {}) {
     MILES_HOME: milesHome,
     MILES_CLI: launcherPath,
     MILES_SKILL_DIR: skillDir,
+    MILES_RUNTIME_BINARY: join(milesHome, 'missing-runtime'),
     ...overrides,
   };
 }
@@ -54,6 +56,7 @@ function run(args, options = {}) {
     encoding: 'utf8',
     input: options.input,
     env: envFor(milesHome, options.env),
+    cwd: options.cwd,
     timeout: options.timeout || 15000,
   });
 }
@@ -63,6 +66,7 @@ function runAsync(args, options = {}) {
   return new Promise((resolve) => {
     const child = spawn(launcherPath, args, {
       env: envFor(milesHome, options.env),
+      cwd: options.cwd,
     });
     let stdout = '';
     let stderr = '';
@@ -311,6 +315,11 @@ try {
   );
   assertIncludes(
     helpResult.stdout,
+    'miles site-plan [--history] [--json]',
+    'help should document the lossless Site Plan read',
+  );
+  assertIncludes(
+    helpResult.stdout,
     'miles convert-theme',
     'help should document theme conversion as browser-gated',
   );
@@ -343,6 +352,560 @@ try {
     helpResult.stdout,
     'Exit codes: 0 ok | 1 failed/aborted | 2 precondition | 3 need connection',
     'help should document the shared exit-code grammar',
+  );
+
+  // Invariant: this list must match the `commands` map in miles-cli.mjs.
+  // A command missing here silently skips help-safety coverage.
+  const commandsWithSafeHelp = [
+    'auth',
+    'account-status',
+    'site-create',
+    'say',
+    'design-directions',
+    'build-site',
+    'wait-job',
+    'approval-respond',
+    'site-state',
+    'site-plan',
+    'site-attach',
+    'wordpress-detect',
+    'wordpress-setup',
+    'screenshot',
+    'upload-assets',
+    'export',
+    'connect-browser',
+    'convert-theme',
+    'cancel',
+    'undo',
+    'site-pages',
+    'usage-history',
+    'rename',
+    'history',
+    'doctor',
+    'wait',
+    'status',
+    'sites',
+    'use',
+    'balance',
+    'messages',
+    'check-auth',
+    'hook-init',
+    'hook',
+    'hook-prompt',
+    'login',
+    'logout',
+    'whoami',
+    'create-site',
+    'reply',
+    'select-design-direction',
+    'preview',
+    'build-theme',
+    'export-theme',
+    'export-site',
+  ];
+  for (const helpCommand of commandsWithSafeHelp) {
+    const commandHelp = run([helpCommand, '--help']);
+    assert(
+      commandHelp.status === 0,
+      `${helpCommand} --help should exit 0 before validation or execution`,
+    );
+    assertIncludes(
+      commandHelp.stdout,
+      'Miles CLI - Design websites with Miles AI',
+      `${helpCommand} --help should print help`,
+    );
+  }
+
+  const helpSafetyHome = makeTempDir();
+  writeFileSync(
+    join(helpSafetyHome, 'credentials.json'),
+    JSON.stringify({ apiKey: 'mk_live_test_key' }),
+    { mode: 0o600 },
+  );
+  const helpSafetyRequests = [];
+  const helpSafetyMock = await startMockServer((req, res) => {
+    helpSafetyRequests.push({ method: req.method, url: req.url });
+    req.resume();
+    res.writeHead(500, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'help must not call the API' }));
+  });
+  const helpSafetyResult = await runAsync(['site-create', '--help'], {
+    milesHome: helpSafetyHome,
+    env: { MILES_SERVER_URL: helpSafetyMock.url },
+  });
+  assert(
+    helpSafetyResult.status === 0,
+    'site-create --help should exit 0 for an authenticated user',
+  );
+  assert(
+    helpSafetyRequests.length === 0,
+    'site-create --help must not call capabilities, create a site, or spend credits',
+  );
+  const shortHelpSafetyResult = await runAsync(['site-create', '-h'], {
+    milesHome: helpSafetyHome,
+    env: { MILES_SERVER_URL: helpSafetyMock.url },
+  });
+  assert(
+    shortHelpSafetyResult.status === 0 && helpSafetyRequests.length === 0,
+    'site-create -h must be just as side-effect free as --help',
+  );
+  const unknownHelpResult = await runAsync(['no-such-command', '--help'], {
+    milesHome: helpSafetyHome,
+    env: { MILES_SERVER_URL: helpSafetyMock.url },
+  });
+  assert(
+    unknownHelpResult.status === 0 && helpSafetyRequests.length === 0,
+    'an unknown command with --help should print help instead of exiting 1',
+  );
+
+  const fakeRuntimeDir = makeTempDir();
+  const fakeRuntime = join(fakeRuntimeDir, 'runtime');
+  writeFileSync(
+    fakeRuntime,
+    `#!/bin/sh
+printf '%s|%s|%s\\n' "\${MILES_SERVER_URL-unset}" "\${MILES_PLUGIN_SOURCE-unset}" "\${WP_CLI-unset}"
+`,
+    { mode: 0o755 },
+  );
+  const dotenvDir = makeTempDir();
+  writeFileSync(
+    join(dotenvDir, '.env'),
+    'MILES_SERVER_URL=http://localhost:3999\nMILES_PLUGIN_SOURCE=/private/source\nWP_CLI=/private/wp\n',
+  );
+  const shieldedLauncher = run(['doctor'], {
+    cwd: dotenvDir,
+    env: {
+      MILES_RUNTIME_BINARY: fakeRuntime,
+      MILES_SERVER_URL: undefined,
+      MILES_PLUGIN_SOURCE: undefined,
+      WP_CLI: undefined,
+    },
+  });
+  assert(
+    shieldedLauncher.status === 0 && shieldedLauncher.stdout.trim() === '||',
+    'the launcher should pass explicit empty Miles configuration so bundled Bun cannot import repository .env values',
+  );
+
+  const unsupportedLocalHome = makeTempDir();
+  const unsupportedLocalAsset = join(unsupportedLocalHome, 'logo.svg');
+  writeFileSync(unsupportedLocalAsset, '<svg xmlns="http://www.w3.org/2000/svg"/>');
+  writeFileSync(
+    join(unsupportedLocalHome, 'credentials.json'),
+    JSON.stringify({
+      apiKey: 'mk_live_test_key',
+      activeSite: 'local-site-unsupported',
+      sites: {
+        'local-site-unsupported': {
+          siteToken: 'local-site-token',
+          conversationId: null,
+          dashboardUrl:
+            'http://local-site.test/wp-admin/admin.php?page=miles',
+          siteUrl: 'http://local-site.test',
+          localWordPressRoot: '/tmp/local-site',
+          connection: { kind: 'local-wordpress' },
+        },
+      },
+    }),
+    { mode: 0o600 },
+  );
+  const unsupportedLocalRequests = [];
+  const unsupportedLocalMock = await startMockServer((req, res) => {
+    unsupportedLocalRequests.push({ method: req.method, url: req.url });
+    req.resume();
+    if (req.url === '/api/v2/headless/capabilities') {
+      sendCapabilities(res, {
+        'site-create': { tier: 'porcelain', connection: 'none' },
+      });
+      return;
+    }
+    res.writeHead(500, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'unexpected mutation' }));
+  });
+  const { result: unsupportedLocalResult, json: unsupportedLocalJson } =
+    await runJsonAsync(
+      [
+        'site-create',
+        'Build on this local WordPress site',
+        '--attach',
+        unsupportedLocalAsset,
+        '--json',
+      ],
+      {
+        milesHome: unsupportedLocalHome,
+        env: { MILES_SERVER_URL: unsupportedLocalMock.url },
+      },
+    );
+  assert(
+    unsupportedLocalResult.status === 2,
+    'site-create should fail safely when local WordPress creation is not advertised',
+  );
+  assert(
+    unsupportedLocalJson.detail?.code ===
+      'primitive_operation_unsupported' &&
+      unsupportedLocalJson.detail?.primitive === 'site-create' &&
+      unsupportedLocalJson.detail?.operation === 'local-wordpress',
+    'the safe local-site refusal should identify the missing server operation',
+  );
+  assert(
+    unsupportedLocalRequests.length === 1 &&
+      unsupportedLocalRequests[0].url === '/api/v2/headless/capabilities',
+    'unsupported local site-create must stop before uploads, site creation, or credit spend',
+  );
+
+  const supportedLocalHome = makeTempDir();
+  const supportedLocalDashboard =
+    'http://local-site.test/wp-admin/admin.php?page=miles';
+  writeFileSync(
+    join(supportedLocalHome, 'credentials.json'),
+    JSON.stringify({
+      apiKey: 'mk_live_test_key',
+      activeSite: 'local-site-supported',
+      sites: {
+        'local-site-supported': {
+          siteToken: 'old-local-site-token',
+          name: 'Local Site',
+          conversationId: null,
+          dashboardUrl: supportedLocalDashboard,
+          cloudDashboardUrl:
+            'https://app.example.test/sites/local-site-supported',
+          siteUrl: 'http://local-site.test',
+          localWordPressRoot: '/tmp/local-site',
+          connection: { kind: 'local-wordpress' },
+        },
+      },
+    }),
+    { mode: 0o600 },
+  );
+  const supportedLocalRequests = [];
+  const supportedLocalMock = await startMockServer((req, res) => {
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => {
+      supportedLocalRequests.push({
+        method: req.method,
+        url: req.url,
+        body: body ? JSON.parse(body) : null,
+      });
+      if (req.url === '/api/v2/headless/capabilities') {
+        sendCapabilities(res, {
+          'site-create': {
+            tier: 'porcelain',
+            connection: 'none',
+            operations: {
+              'local-wordpress': { connection: 'none' },
+            },
+          },
+        });
+        return;
+      }
+      if (req.method === 'POST' && req.url === '/api/v2/headless/sites') {
+        res.writeHead(201, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            siteId: 'local-site-supported',
+            siteToken: 'new-local-site-token',
+            conversationId: 'local-conversation',
+            dashboardUrl:
+              'https://app.example.test/sites/local-site-supported',
+            status: 'streaming',
+          }),
+        );
+        return;
+      }
+      if (
+        req.method === 'GET' &&
+        req.url.startsWith(
+          '/api/v2/headless/conversations/local-conversation/wait?',
+        )
+      ) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            status: 'completed',
+            outcome: 'completed',
+            phase: 'brief_review',
+            milesMessage: 'Tell me about the site.',
+          }),
+        );
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+  });
+  const { result: supportedLocalResult, json: supportedLocalJson } =
+    await runJsonAsync(
+      ['site-create', 'Build on this local WordPress site', '--json'],
+      {
+        milesHome: supportedLocalHome,
+        env: { MILES_SERVER_URL: supportedLocalMock.url },
+      },
+    );
+  assert(
+    supportedLocalResult.status === 0 &&
+      supportedLocalJson.outcome === 'completed',
+    'site-create should start and settle a conversation on the active local WordPress site',
+  );
+  const localCreateRequest = supportedLocalRequests.find(
+    (request) =>
+      request.method === 'POST' &&
+      request.url === '/api/v2/headless/sites',
+  );
+  assert(
+    localCreateRequest?.body?.siteId === 'local-site-supported',
+    'local site-create should send the exact active local WordPress site id',
+  );
+  const supportedLocalCredentials = JSON.parse(
+    readFileSync(join(supportedLocalHome, 'credentials.json'), 'utf8'),
+  );
+  const persistedLocalSite =
+    supportedLocalCredentials.sites['local-site-supported'];
+  assert(
+    supportedLocalCredentials.activeSite === 'local-site-supported' &&
+      Object.keys(supportedLocalCredentials.sites).length === 1,
+    'local site-create should not create or activate a second cloud site',
+  );
+  assert(
+    persistedLocalSite.conversationId === 'local-conversation' &&
+      persistedLocalSite.dashboardUrl === supportedLocalDashboard &&
+      persistedLocalSite.connection?.kind === 'local-wordpress',
+    'local site-create should persist the conversation while preserving the local dashboard and connection kind',
+  );
+
+  const mismatchHome = makeTempDir();
+  writeFileSync(
+    join(mismatchHome, 'credentials.json'),
+    JSON.stringify({
+      apiKey: 'mk_live_test_key',
+      activeSite: 'local-site-mismatch',
+      sites: {
+        'local-site-mismatch': {
+          siteToken: 'local-site-token',
+          name: 'Local Site',
+          conversationId: null,
+          dashboardUrl:
+            'http://local-site.test/wp-admin/admin.php?page=miles',
+          siteUrl: 'http://local-site.test',
+          localWordPressRoot: '/tmp/local-site',
+          connection: { kind: 'local-wordpress' },
+        },
+      },
+    }),
+    { mode: 0o600 },
+  );
+  const mismatchMock = await startMockServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      if (req.url === '/api/v2/headless/capabilities') {
+        sendCapabilities(res, {
+          'site-create': {
+            tier: 'porcelain',
+            connection: 'none',
+            operations: { 'local-wordpress': { connection: 'none' } },
+          },
+        });
+        return;
+      }
+      if (req.method === 'POST' && req.url === '/api/v2/headless/sites') {
+        res.writeHead(201, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            siteId: 'cloud-site-999',
+            siteToken: 'runaway-site-token',
+            conversationId: 'runaway-conversation',
+            dashboardUrl: 'https://app.example.test/sites/cloud-site-999',
+            status: 'streaming',
+          }),
+        );
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+  });
+  const { result: mismatchResult, json: mismatchJson } = await runJsonAsync(
+    ['site-create', 'Build on this local WordPress site', '--json'],
+    {
+      milesHome: mismatchHome,
+      env: { MILES_SERVER_URL: mismatchMock.url },
+    },
+  );
+  assert(
+    mismatchResult.status === 2 &&
+      mismatchJson.detail?.code === 'unexpected_site_returned' &&
+      mismatchJson.detail?.returnedSiteId === 'cloud-site-999' &&
+      mismatchJson.detail?.returnedConversationId === 'runaway-conversation',
+    'site-create must refuse a mismatched site id and surface the runaway site/conversation ids',
+  );
+  assertIncludes(
+    mismatchJson.error,
+    'miles site-attach cloud-site-999',
+    'the mismatch refusal should tell the operator how to inspect the runaway site',
+  );
+  const mismatchCredentials = JSON.parse(
+    readFileSync(join(mismatchHome, 'credentials.json'), 'utf8'),
+  );
+  assert(
+    mismatchCredentials.activeSite === 'local-site-mismatch' &&
+      Object.keys(mismatchCredentials.sites).length === 1 &&
+      mismatchCredentials.sites['local-site-mismatch'].conversationId === null,
+    'a mismatched site-create response must not change the active site or adopt the runaway conversation',
+  );
+
+  const unreachableHome = makeTempDir();
+  writeFileSync(
+    join(unreachableHome, 'credentials.json'),
+    JSON.stringify({
+      apiKey: 'mk_live_test_key',
+      activeSite: 'local-site-unreachable',
+      sites: {
+        'local-site-unreachable': {
+          siteToken: 'local-site-token',
+          conversationId: null,
+          siteUrl: 'http://local-site.test',
+          connection: { kind: 'local-wordpress' },
+        },
+      },
+    }),
+    { mode: 0o600 },
+  );
+  const unreachableRequests = [];
+  const unreachableMock = await startMockServer((req, res) => {
+    unreachableRequests.push({ method: req.method, url: req.url });
+    req.resume();
+    res.writeHead(500, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'capabilities backend down' }));
+  });
+  const { result: unreachableResult, json: unreachableJson } =
+    await runJsonAsync(
+      ['site-create', 'Build on this local WordPress site', '--json'],
+      {
+        milesHome: unreachableHome,
+        env: { MILES_SERVER_URL: unreachableMock.url },
+      },
+    );
+  assert(
+    unreachableResult.status === 2 &&
+      unreachableJson.detail?.code === 'capabilities_unreachable' &&
+      unreachableJson.detail?.safeToRetry === true,
+    'a failed capabilities fetch must fail closed as a retryable outage, not a missing primitive',
+  );
+  assert(
+    unreachableRequests.every(
+      (request) => request.url === '/api/v2/headless/capabilities',
+    ),
+    'a failed capabilities fetch must stop site-create before uploads or site creation',
+  );
+
+  const refusedMock = await startMockServer((req, res) => {
+    req.resume();
+    res.writeHead(404);
+    res.end();
+  });
+  const refusedUrl = refusedMock.url;
+  await new Promise((resolveClose) => refusedMock.server.close(resolveClose));
+  const { result: refusedResult, json: refusedJson } = await runJsonAsync(
+    ['site-create', 'Build on this local WordPress site', '--json'],
+    {
+      milesHome: unreachableHome,
+      env: { MILES_SERVER_URL: refusedUrl },
+    },
+  );
+  assert(
+    refusedResult.status === 2 &&
+      refusedJson.detail?.code === 'capabilities_unreachable' &&
+      refusedJson.detail?.safeToRetry === true,
+    'a connection-refused capabilities fetch must also fail closed as retryable',
+  );
+
+  const localConnection = runJson(['connect-browser', '--json'], {
+    milesHome: unsupportedLocalHome,
+  });
+  assert(
+    localConnection.result.status === 0 &&
+      localConnection.json.authenticated === null,
+    'connect-browser should not report local WordPress browser authentication as false when it is unobservable',
+  );
+  assert(
+    localConnection.json.pairing?.paired === true &&
+      localConnection.json.dashboard?.available === true &&
+      localConnection.json.dashboard?.authenticationKnown === false,
+    'connect-browser should report pairing and dashboard availability separately',
+  );
+  assert(
+    localConnection.json.realtime?.available === false &&
+      localConnection.json.realtime?.connected === null &&
+      localConnection.json.realtime?.reason.includes('No conversation'),
+    'connect-browser should explain why realtime status is unavailable before a conversation exists',
+  );
+  const localStateWithoutConversation = runJson(['site-state', '--json'], {
+    milesHome: unsupportedLocalHome,
+  });
+  assert(
+    localStateWithoutConversation.result.status === 2,
+    'site-state should fail cleanly before a local conversation exists',
+  );
+  assertIncludes(
+    localStateWithoutConversation.json.error,
+    'this exact site',
+    'site-state should direct a paired local site to safe local site-create rather than site-attach or cloud creation',
+  );
+
+  const accountStatusHome = makeTempDir();
+  writeFileSync(
+    join(accountStatusHome, 'credentials.json'),
+    JSON.stringify({ apiKey: 'mk_live_test_key' }),
+    { mode: 0o600 },
+  );
+  const accountStatusMock = await startMockServer((req, res) => {
+    req.resume();
+    if (req.url === '/api/v2/headless/capabilities') {
+      sendCapabilities(res, {
+        'account-status': { tier: 'plumbing', connection: 'none' },
+      });
+      return;
+    }
+    if (req.url === '/api/v2/headless/account/balance') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          plan: 'test',
+          credits: {
+            usagePercent: 100,
+            monthlyRemainingCredits: 0,
+            topUpBalanceCredits: 32512,
+            totalSpendableCredits: 32512,
+          },
+        }),
+      );
+      return;
+    }
+    if (req.url === '/api/v2/headless/sites') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ sites: [] }));
+      return;
+    }
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'not found' }));
+  });
+  const { result: accountStatusResult, json: accountStatus } =
+    await runJsonAsync(['account-status', '--json'], {
+      milesHome: accountStatusHome,
+      env: { MILES_SERVER_URL: accountStatusMock.url },
+    });
+  assert(
+    accountStatusResult.status === 0 &&
+      accountStatus.canBuild === true &&
+      accountStatus.buildHeadroom?.source === 'top_up',
+    'account-status should derive build readiness from spendable top-up credits even when monthly usage is 100%',
+  );
+  assertIncludes(
+    accountStatus.buildHeadroom.explanation,
+    'monthly allowance is exhausted',
+    'account-status should explain why a build can still proceed',
   );
 
   const missingWpCli = join(makeTempDir(), 'missing-wp');
@@ -606,6 +1169,88 @@ try {
     'wordpress-setup should wait for user confirmation before continuing to Miles setup',
   );
 
+  const legacyWpCliDir = makeTempDir();
+  const legacyWpCli = join(legacyWpCliDir, 'wp');
+  writeFileSync(
+    legacyWpCli,
+    `#!/bin/sh
+case "$*" in
+  *"core is-installed") exit 0 ;;
+  *"option get siteurl") printf '%s\\n' 'http://legacy.test' ;;
+  *"option get blogname") printf '%s\\n' 'Legacy WordPress' ;;
+  *"option get admin_email") printf '%s\\n' 'admin@example.test' ;;
+  *"core version") printf '%s\\n' '6.8.3' ;;
+  *"eval echo wp_get_environment_type();") printf '%s\\n' 'local' ;;
+  *) exit 1 ;;
+esac
+`,
+    { mode: 0o755 },
+  );
+  const incompatiblePluginSource = makeTempDir();
+  writeFileSync(
+    join(incompatiblePluginSource, 'miles.php'),
+    "<?php\n/*\nPlugin Name: Miles\nVersion: 10.0.0-test\nRequires at least: 7.0\n*/\n",
+  );
+  const incompatibleSourceRoot = makeTempDir();
+  mkdirSync(join(incompatibleSourceRoot, 'wp-admin'), { recursive: true });
+  mkdirSync(join(incompatibleSourceRoot, 'wp-content', 'plugins'), {
+    recursive: true,
+  });
+  writeFileSync(join(incompatibleSourceRoot, 'wp-config.php'), "<?php\n");
+  const incompatibleSourceSetup = await runJsonAsync(
+    [
+      'wordpress-setup',
+      '--use',
+      'local',
+      '--json',
+      '--path',
+      incompatibleSourceRoot,
+      '--wp-cli',
+      legacyWpCli,
+    ],
+    {
+      milesHome: localCopyHome,
+      env: {
+        MILES_PLUGIN_SOURCE: incompatiblePluginSource,
+        MILES_SERVER_URL: wordpressBootstrapMock.url,
+      },
+    },
+  );
+  assert(
+    incompatibleSourceSetup.result.status === 2 &&
+      incompatibleSourceSetup.json.code ===
+        'wordpress_version_unsupported',
+    'wordpress-setup should reject an incompatible plugin before copying it',
+  );
+  assert(
+    incompatibleSourceSetup.json.detectedWordPressVersion === '6.8.3' &&
+      incompatibleSourceSetup.json.requiredWordPressVersion === '7.0' &&
+      incompatibleSourceSetup.json.pluginVersion === '10.0.0-test',
+    'WordPress compatibility failures should report detected, required, and plugin versions',
+  );
+  assert(
+    incompatibleSourceSetup.json.wordpressCompatibilityChecked === true,
+    'a rejected incompatible plugin should report that the compatibility gate ran',
+  );
+  assert(
+    !existsSync(
+      join(
+        incompatibleSourceRoot,
+        'wp-content',
+        'plugins',
+        'miles',
+        'miles.php',
+      ),
+    ),
+    'an incompatible local plugin source must not be installed',
+  );
+  assert(
+    incompatibleSourceSetup.json.next.some((step) =>
+      step.includes('Upgrade WordPress to 7.0 or newer'),
+    ),
+    'the compatibility failure should provide a specific upgrade recovery',
+  );
+
   const localAppRoot = join(
     makeTempDir(),
     'Local Sites',
@@ -700,6 +1345,17 @@ try {
   execFileSync('zip', ['-qr', fakePluginZip, 'miles'], {
     cwd: fakeZipSourceRoot,
   });
+  const incompatibleZipSourceRoot = makeTempDir();
+  const incompatibleZipPluginDir = join(incompatibleZipSourceRoot, 'miles');
+  mkdirSync(incompatibleZipPluginDir, { recursive: true });
+  writeFileSync(
+    join(incompatibleZipPluginDir, 'miles.php'),
+    "<?php\n/*\nPlugin Name: Miles\nVersion: 10.0.0-zip-test\nRequires at least: 7.0\n*/\n",
+  );
+  const incompatiblePluginZip = join(fakeZipDir, 'miles-incompatible.zip');
+  execFileSync('zip', ['-qr', incompatiblePluginZip, 'miles'], {
+    cwd: incompatibleZipSourceRoot,
+  });
   const zipInstallMock = await startMockServer((req, res) => {
     req.on('data', () => {});
     req.on('end', () => {
@@ -710,6 +1366,11 @@ try {
       if (req.url === '/miles.zip') {
         res.writeHead(200, { 'content-type': 'application/zip' });
         res.end(readFileSync(fakePluginZip));
+        return;
+      }
+      if (req.url === '/miles-incompatible.zip') {
+        res.writeHead(200, { 'content-type': 'application/zip' });
+        res.end(readFileSync(incompatiblePluginZip));
         return;
       }
       res.writeHead(404, { 'content-type': 'application/json' });
@@ -768,6 +1429,51 @@ try {
       ),
     ),
     'wordpress-setup should preserve plugin runtime assets from downloaded plugin ZIPs',
+  );
+
+  const incompatibleZipRoot = makeTempDir();
+  mkdirSync(join(incompatibleZipRoot, 'wp-admin'), { recursive: true });
+  mkdirSync(join(incompatibleZipRoot, 'wp-content', 'plugins'), {
+    recursive: true,
+  });
+  writeFileSync(join(incompatibleZipRoot, 'wp-config.php'), "<?php\n");
+  const incompatibleZipSetup = await runJsonAsync(
+    [
+      'wordpress-setup',
+      '--use',
+      'local',
+      '--json',
+      '--path',
+      incompatibleZipRoot,
+      '--wp-cli',
+      legacyWpCli,
+      '--plugin-url',
+      `${zipInstallMock.url}/miles-incompatible.zip`,
+    ],
+    {
+      milesHome: localCopyHome,
+      env: {
+        MILES_PLUGIN_SOURCE: '',
+        MILES_SERVER_URL: zipInstallMock.url,
+      },
+    },
+  );
+  assert(
+    incompatibleZipSetup.result.status === 2 &&
+      incompatibleZipSetup.json.code === 'wordpress_version_unsupported',
+    'wordpress-setup should inspect a downloaded plugin ZIP before installation',
+  );
+  assert(
+    !existsSync(
+      join(
+        incompatibleZipRoot,
+        'wp-content',
+        'plugins',
+        'miles',
+        'miles.php',
+      ),
+    ),
+    'an incompatible downloaded plugin must not be copied into WordPress',
   );
 
   const ancestorRoot = makeTempDir();
@@ -847,6 +1553,10 @@ try {
   });
   writeFileSync(join(stalePluginRoot, 'wp-config.php'), "<?php\n");
   writeFileSync(
+    join(stalePluginRoot, 'wp-content', 'plugins', 'miles', 'miles.php'),
+    "<?php\n/*\nPlugin Name: Miles\nVersion: 0.1.0-stale\n*/\n",
+  );
+  writeFileSync(
     join(stalePluginRoot, 'wp-content', 'plugins', 'miles', 'local-note.txt'),
     'stale local plugin directory',
   );
@@ -874,6 +1584,14 @@ try {
       (action) => action.action === 'copied-plugin' && action.replaced === true,
     ),
     'wordpress-setup should report when plugin copy replaces an existing directory',
+  );
+  assertIncludes(
+    readFileSync(
+      join(stalePluginRoot, 'wp-content', 'plugins', 'miles', 'miles.php'),
+      'utf8',
+    ),
+    '9.9.9-test',
+    'wordpress-setup should refresh an installed plugin from an explicit local source',
   );
 
   const failingWpCliDir = makeTempDir();
@@ -960,6 +1678,10 @@ case "$cmd" in
       printf '%s\\n' 'sharedSecret=should-not-leak' >&2
       exit 1
     fi
+    if [ "$REPORT_LOCAL_SETUP_FAILURE" = "1" ]; then
+      printf '%s\\n' '{"success":false,"message":"Could not verify the application password with ?token=should-not-leak"}'
+      exit 0
+    fi
     printf '%s\\n' 'notice sharedSecret=should-not-leak'
     printf '%s\\n' '{"success":true,"sharedSecret":"should-not-leak","message":"Connected with ?token=should-not-leak"}'
     ;;
@@ -971,7 +1693,20 @@ esac
   const fullSetupHome = makeTempDir();
   writeFileSync(
     join(fullSetupHome, 'credentials.json'),
-    JSON.stringify({ apiKey: 'mk_live_test_key' }),
+    JSON.stringify({
+      apiKey: 'mk_live_test_key',
+      activeSite: 'local-site-1',
+      sites: {
+        'local-site-1': {
+          siteToken: 'existing-site-token',
+          conversationId: 'existing-conversation',
+          dashboardUrl:
+            'http://localhost:9988/wp-admin/admin.php?page=miles',
+          siteUrl: 'http://localhost:9988',
+          connection: { kind: 'local-wordpress' },
+        },
+      },
+    }),
     { mode: 0o600 },
   );
   let fullSetupBootstrapPayload = null;
@@ -995,6 +1730,7 @@ esac
         res.end(
           JSON.stringify({
             siteId: 'local-site-1',
+            conversationId: 'server-conversation',
             siteToken: 'site-token-1',
             sharedSecret: 'server-secret-1',
             serverUrl: fullSetupMock.url,
@@ -1049,6 +1785,15 @@ esac
     'wordpress bootstrap should use the local site URL from WP-CLI',
   );
   assert(
+    fullSetupJson.wordpressVersion === '6.5.0' &&
+      fullSetupJson.pluginVersion === '9.9.9-test',
+    'wordpress-setup success should report the versions used for compatibility checks',
+  );
+  assert(
+    fullSetupJson.wordpressCompatibilityChecked === false,
+    'a plugin without a Requires-at-least header must report the compatibility gate as skipped, not passed',
+  );
+  assert(
     fullSetupJson.setup.success === true,
     'wordpress-setup should preserve sanitized setup success',
   );
@@ -1059,6 +1804,18 @@ esac
   assert(
     !JSON.stringify(fullSetupJson).includes('should-not-leak'),
     'wordpress-setup JSON output must not include plugin-returned secrets',
+  );
+  const fullSetupCredentials = JSON.parse(
+    readFileSync(join(fullSetupHome, 'credentials.json'), 'utf8'),
+  );
+  assert(
+    fullSetupCredentials.sites['local-site-1'].conversationId ===
+      'server-conversation',
+    'wordpress-setup relink should recover the server conversation instead of trusting stale local state',
+  );
+  assert(
+    fullSetupJson.activeSite.conversationId === 'server-conversation',
+    'wordpress-setup JSON should return the recovered local conversation',
   );
 
   const failedSetupHome = makeTempDir();
@@ -1101,6 +1858,139 @@ esac
     'wordpress-setup failure output must sanitize WP-CLI stderr',
   );
 
+  const preserveHome = makeTempDir();
+  writeFileSync(
+    join(preserveHome, 'credentials.json'),
+    JSON.stringify({
+      apiKey: 'mk_live_test_key',
+      activeSite: 'local-site-1',
+      sites: {
+        'local-site-1': {
+          siteToken: 'existing-site-token',
+          conversationId: 'existing-conversation',
+          dashboardUrl:
+            'http://localhost:9988/wp-admin/admin.php?page=miles',
+          siteUrl: 'http://localhost:9988',
+          connection: { kind: 'local-wordpress' },
+        },
+      },
+    }),
+    { mode: 0o600 },
+  );
+  const preserveMock = await startMockServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      if (req.url === '/api/v2/headless/capabilities') {
+        sendCapabilities(res, WORDPRESS_BOOTSTRAP_PRIMITIVE);
+        return;
+      }
+      if (
+        req.method === 'POST' &&
+        req.url === '/api/v2/headless/wordpress-sites/bootstrap'
+      ) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            siteId: 'local-site-1',
+            siteToken: 'site-token-1',
+            sharedSecret: 'server-secret-1',
+            serverUrl: preserveMock.url,
+            siteName: 'Local Test Site',
+            dashboardUrl: 'https://example.invalid/sites/local-site-1',
+            localDashboardUrl:
+              'http://localhost:9988/wp-admin/admin.php?page=miles',
+            relinked: true,
+          }),
+        );
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+  });
+  const preserveResult = await runJsonAsync([
+    'wordpress-setup',
+    '--use',
+    'local',
+    '--json',
+    '--path',
+    fakeWpRoot,
+    '--wp-cli',
+    fakeFullSetupWpCli,
+  ], {
+    milesHome: preserveHome,
+    timeout: 30000,
+    env: {
+      MILES_PLUGIN_SOURCE: fakePluginSource,
+      MILES_SERVER_URL: preserveMock.url,
+      WP_LOG: fakeFullSetupWpLog,
+    },
+  });
+  assert(
+    preserveResult.result.status === 0 && preserveResult.json.ok === true,
+    'wordpress-setup rerun should succeed when the bootstrap response has no conversationId',
+  );
+  const preserveCredentials = JSON.parse(
+    readFileSync(join(preserveHome, 'credentials.json'), 'utf8'),
+  );
+  assert(
+    preserveCredentials.sites['local-site-1'].conversationId ===
+      'existing-conversation' &&
+      preserveResult.json.activeSite.conversationId ===
+        'existing-conversation',
+    'wordpress-setup rerun must preserve the existing local conversation when the server omits one',
+  );
+
+  const reportedFailureHome = makeTempDir();
+  writeFileSync(
+    join(reportedFailureHome, 'credentials.json'),
+    JSON.stringify({ apiKey: 'mk_live_test_key' }),
+    { mode: 0o600 },
+  );
+  const reportedFailureResult = await runJsonAsync([
+    'wordpress-setup',
+    '--use',
+    'local',
+    '--json',
+    '--path',
+    fakeWpRoot,
+    '--wp-cli',
+    fakeFullSetupWpCli,
+  ], {
+    milesHome: reportedFailureHome,
+    timeout: 30000,
+    env: {
+      REPORT_LOCAL_SETUP_FAILURE: '1',
+      MILES_PLUGIN_SOURCE: fakePluginSource,
+      MILES_SERVER_URL: fullSetupMock.url,
+      WP_LOG: fakeFullSetupWpLog,
+    },
+  });
+  assert(
+    reportedFailureResult.result.status === 1 &&
+      reportedFailureResult.json.ok === false &&
+      reportedFailureResult.json.code === 'plugin_setup_failed' &&
+      reportedFailureResult.json.setup?.success === false,
+    'wordpress-setup must report ok:false when the plugin setup command reports failure',
+  );
+  assert(
+    reportedFailureResult.json.siteId === 'local-site-1' &&
+      reportedFailureResult.json.next?.[0]?.includes('relink'),
+    'a reported plugin setup failure should keep the bootstrapped site id and point at the relink rerun',
+  );
+  assert(
+    !JSON.stringify(reportedFailureResult.json).includes('should-not-leak'),
+    'a reported plugin setup failure must sanitize plugin-returned secrets',
+  );
+  const reportedFailureCredentials = JSON.parse(
+    readFileSync(join(reportedFailureHome, 'credentials.json'), 'utf8'),
+  );
+  assert(
+    reportedFailureCredentials.sites?.['local-site-1']?.siteToken ===
+      'site-token-1',
+    'a reported plugin setup failure should still persist the site record so rerun can relink',
+  );
+
   const doctorHome = makeTempDir();
   const { result: doctorResult, json: doctor } = runJson(['doctor', '--json'], {
     milesHome: doctorHome,
@@ -1121,6 +2011,68 @@ esac
     doctor.checks.some((check) => check.name === 'credentials' && !check.ok),
     'doctor should report missing credentials as setup needed',
   );
+  const invalidHomeParent = makeTempDir();
+  const invalidHomeFile = join(invalidHomeParent, 'not-a-directory');
+  writeFileSync(invalidHomeFile, 'blocked');
+  const invalidDoctor = runJson(['doctor', '--json'], {
+    milesHome: join(invalidHomeFile, 'miles-home'),
+  });
+  const invalidHomeCheck = invalidDoctor.json.checks.find(
+    (check) => check.name === 'milesHome',
+  );
+  assert(
+    invalidDoctor.result.status === 1 &&
+      invalidHomeCheck?.ok === false &&
+      invalidHomeCheck?.code === 'filesystem_not_writable' &&
+      invalidHomeCheck?.retryOutsideSandbox === false &&
+      invalidHomeCheck?.remediation,
+    'doctor should return structured remediation for a real filesystem path failure',
+  );
+
+  // A read-only parent makes the MILES_HOME mkdir fail with EACCES for
+  // non-root users, which is the write-denial shape host sandboxes produce.
+  // Root ignores mode bits, so skip the probe-based classification checks.
+  const isRoot =
+    typeof process.getuid === 'function' && process.getuid() === 0;
+  if (!isRoot) {
+    const readOnlyParent = makeTempDir();
+    chmodSync(readOnlyParent, 0o555);
+    const deniedHome = join(readOnlyParent, 'miles-home');
+    const agentEnvOff = {
+      CLAUDECODE: '',
+      CLAUDE_CODE: '',
+      CODEX_SANDBOX: '',
+      CURSOR_AGENT: '',
+    };
+    const sandboxDoctor = runJson(['doctor', '--json'], {
+      milesHome: deniedHome,
+      env: { ...agentEnvOff, CLAUDECODE: '1' },
+    });
+    const sandboxHomeCheck = sandboxDoctor.json.checks.find(
+      (check) => check.name === 'milesHome',
+    );
+    assert(
+      sandboxHomeCheck?.ok === false &&
+        sandboxHomeCheck?.code === 'host_sandbox_denied' &&
+        sandboxHomeCheck?.retryOutsideSandbox === true &&
+        sandboxHomeCheck?.sandboxDetected === true,
+      'doctor should classify a write denial under Claude Code (CLAUDECODE) as host_sandbox_denied',
+    );
+    const plainDeniedDoctor = runJson(['doctor', '--json'], {
+      milesHome: deniedHome,
+      env: agentEnvOff,
+    });
+    const plainDeniedCheck = plainDeniedDoctor.json.checks.find(
+      (check) => check.name === 'milesHome',
+    );
+    assert(
+      plainDeniedCheck?.ok === false &&
+        plainDeniedCheck?.code === 'filesystem_not_writable' &&
+        plainDeniedCheck?.retryOutsideSandbox === false,
+      'doctor should keep a write denial outside any agent host as filesystem_not_writable',
+    );
+    chmodSync(readOnlyParent, 0o755);
+  }
 
   const whoamiHome = makeTempDir();
   const { result: whoamiResult, json: whoami } = runJson(['whoami', '--json'], {
@@ -2101,6 +3053,72 @@ esac
     'wait-job should pass through progress counts and dashboard URL',
   );
 
+  // Completed conversion progress may remain the latest data part during a
+  // later edit. It must not be presented as current work.
+  const staleProgressHome = makeTempDir();
+  writeFileSync(
+    join(staleProgressHome, 'credentials.json'),
+    JSON.stringify({
+      activeSite: 'site-stale-progress',
+      sites: {
+        'site-stale-progress': {
+          siteToken: 'site-token',
+          conversationId: 'conversation-stale-progress',
+        },
+      },
+    }),
+  );
+  let staleProgressPollCount = 0;
+  const staleProgressMock = await startMockServer((req, res) => {
+    req.on('data', () => {});
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      staleProgressPollCount += 1;
+      if (staleProgressPollCount === 1) {
+        res.end(
+          JSON.stringify({
+            status: 'running',
+            phase: 'editing',
+            progress: {
+              type: 'data-conversion-progress',
+              data: {
+                phases: [
+                  {
+                    id: 'theme',
+                    label: 'Converting to WordPress theme',
+                    status: 'complete',
+                  },
+                ],
+              },
+            },
+          }),
+        );
+        return;
+      }
+      res.end(
+        JSON.stringify({
+          status: 'completed',
+          outcome: 'completed',
+          phase: 'complete',
+          milesMessage: 'Navigation updated.',
+        }),
+      );
+    });
+  });
+  const staleProgressResult = await runAsync(['wait-job'], {
+    milesHome: staleProgressHome,
+    env: { MILES_SERVER_URL: staleProgressMock.url },
+  });
+  assert(
+    staleProgressResult.status === 0,
+    `wait-job should settle after stale progress\nstatus: ${staleProgressResult.status}\nstderr:\n${staleProgressResult.stderr}`,
+  );
+  assert(
+    staleProgressResult.stderr.includes('phase: editing') &&
+      !staleProgressResult.stderr.includes('Converting to WordPress theme'),
+    `wait-job should suppress completed conversion progress\nstderr:\n${staleProgressResult.stderr}`,
+  );
+
   // wait-job surfaces live-protection approvals as blocked structured state,
   // with sensitive/internal action details sanitized from public output.
   const approvalWaitHome = makeTempDir();
@@ -2266,6 +3284,313 @@ esac
       approvalState.undoTurnIndex === 7 &&
       approvalState.isSiteBuildingActive === false,
     'site-state should pass through recovery and status detail fields',
+  );
+
+  // site-plan exposes the complete current contract and can reconstruct
+  // deduplicated revisions from sanitized history without losing result refs.
+  const sitePlanHome = makeTempDir();
+  writeFileSync(
+    join(sitePlanHome, 'credentials.json'),
+    JSON.stringify({
+      activeSite: 'site-plan-site',
+      sites: {
+        'site-plan-site': {
+          siteToken: 'site-token',
+          conversationId: 'conversation-site-plan',
+          dashboardUrl: 'https://beta.bymiles.ai/sites/site-plan-site',
+        },
+      },
+    }),
+  );
+  const planV1 = {
+    id: 'site-completion-plan',
+    items: [
+      {
+        id: 'foundation',
+        title: 'Visual system and homepage',
+        description: 'The visual system and editable homepage are complete.',
+        category: 'content',
+        status: 'pending',
+        source: 'brief',
+        curated: true,
+      },
+    ],
+    createdAt: '2026-07-20T10:00:00.000Z',
+    updatedAt: '2026-07-20T10:00:00.000Z',
+  };
+  const planV2 = {
+    ...planV1,
+    items: [
+      {
+        ...planV1.items[0],
+        status: 'completed',
+        resultRef: {
+          pageId: 42,
+          pageSlug: 'home',
+          sectionMarker: 'miles-sec-home',
+          patternId: 99,
+          designArtifactKind: 'wordpress-theme',
+          designArtifactVersion: 2,
+          designArtifactId: 'artifact-home',
+          designArtifactItemKey: 'home:hero',
+          entityType: 'wp_template',
+          entityId: 'theme//home',
+        },
+      },
+      {
+        id: 'contact-form',
+        title: 'Connect the contact form',
+        description: 'The contact form will send real messages.',
+        category: 'form',
+        status: 'pending',
+        source: 'generation',
+        curated: false,
+        resultRef: {
+          intent: 'Connect the contact form to a message delivery workflow',
+          evidence: 'Static form controls are present in the contact section',
+        },
+      },
+    ],
+    updatedAt: '2026-07-20T10:05:00.000Z',
+  };
+  const sitePlanRequests = [];
+  const sitePlanMock = await startMockServer((req, res) => {
+    sitePlanRequests.push(req.url);
+    req.resume();
+    res.writeHead(200, { 'content-type': 'application/json' });
+    if (req.url === '/api/v2/headless/capabilities') {
+      res.end(
+        JSON.stringify({
+          primitives: {
+            'site-state': {
+              tier: 'plumbing',
+              connection: 'none',
+              operations: { full: { connection: 'none' } },
+            },
+            history: { tier: 'plumbing', connection: 'none' },
+          },
+        }),
+      );
+      return;
+    }
+    if (
+      req.url ===
+      '/api/v2/headless/conversations/conversation-site-plan/state'
+    ) {
+      res.end(
+        JSON.stringify({
+          phase: 'complete',
+          status: 'idle',
+          siteCompletionPlan: planV2,
+        }),
+      );
+      return;
+    }
+    if (
+      req.url ===
+      '/api/v2/headless/conversations/conversation-site-plan/history?limit=100&offset=0'
+    ) {
+      res.end(
+        JSON.stringify({
+          total: 3,
+          offset: 0,
+          limit: 100,
+          messages: [
+            {
+              id: 'message-plan-1',
+              role: 'assistant',
+              parts: [
+                { type: 'data-site-completion-plan', data: planV1 },
+              ],
+            },
+            {
+              id: 'message-plan-duplicate',
+              role: 'assistant',
+              parts: [
+                { type: 'data-site-completion-plan', data: planV1 },
+              ],
+            },
+            {
+              id: 'message-plan-2',
+              role: 'assistant',
+              parts: [
+                { type: 'data-site-completion-plan', data: planV2 },
+              ],
+            },
+          ],
+        }),
+      );
+      return;
+    }
+    res.end(JSON.stringify({ error: 'not found' }));
+  });
+  const { result: sitePlanResult, json: sitePlan } = await runJsonAsync(
+    ['site-plan', '--history', '--json'],
+    {
+      milesHome: sitePlanHome,
+      env: { MILES_SERVER_URL: sitePlanMock.url },
+    },
+  );
+  assert(
+    sitePlanResult.status === 0,
+    'site-plan --history --json should return the complete plan',
+  );
+  assert(
+    sitePlan.siteCompletionPlan.items[0].resultRef.designArtifactItemKey ===
+      'home:hero',
+    'site-plan should preserve the current plan result reference contract',
+  );
+  assert(
+    sitePlan.summary.total === 2 &&
+      sitePlan.summary.statuses.completed === 1 &&
+      sitePlan.summary.uncurated === 1,
+    'site-plan should summarize current status and curation state',
+  );
+  assert(
+    sitePlan.revisions.length === 2,
+    'site-plan history should deduplicate repeated plan snapshots',
+  );
+  assert(
+    sitePlan.revisions[1].changes.added[0] === 'contact-form' &&
+      sitePlan.revisions[1].changes.changed[0].id === 'foundation' &&
+      sitePlan.revisions[1].changes.changed[0].changedFields.includes(
+        'status',
+      ) &&
+      sitePlan.revisions[1].changes.changed[0].changedFields.includes(
+        'resultRef',
+      ),
+    'site-plan history should expose item additions and changed fields',
+  );
+  assert(
+    sitePlan.revisions[1].siteCompletionPlan.items[1].resultRef.evidence ===
+      'Static form controls are present in the contact section',
+    'site-plan history should retain the full plan snapshot, including uncurated evidence',
+  );
+
+  const historyRequestCount = sitePlanRequests.filter((url) =>
+    url.includes('/history?'),
+  ).length;
+  const currentSitePlan = await runJsonAsync(['site-plan', '--json'], {
+    milesHome: sitePlanHome,
+    env: { MILES_SERVER_URL: sitePlanMock.url },
+  });
+  assert(
+    currentSitePlan.result.status === 0 &&
+      currentSitePlan.json.siteCompletionPlan.items.length === 2,
+    'site-plan --json should expose the current plan without requiring history',
+  );
+  assert(
+    sitePlanRequests.filter((url) => url.includes('/history?')).length ===
+      historyRequestCount,
+    'current-only site-plan reads should not fetch conversation history',
+  );
+
+  const sitePlanHuman = await runAsync(['site-plan'], {
+    milesHome: sitePlanHome,
+    env: { MILES_SERVER_URL: sitePlanMock.url },
+  });
+  assertIncludes(
+    sitePlanHuman.stdout,
+    'The visual system and editable homepage are complete.',
+    'site-plan human output should include the full item description',
+  );
+  assertIncludes(
+    sitePlanHuman.stdout,
+    'designArtifactItemKey',
+    'site-plan human output should include durable result references',
+  );
+  assert(
+    !sitePlanHuman.stdout.includes(
+      'Connect the contact form to a message delivery workflow',
+    ),
+    'site-plan human output must not paint uncurated machine intent as user copy',
+  );
+
+  // A server may return fewer messages per page than requested; the history
+  // walk must follow offset/total instead of assuming one page holds all.
+  const pagedPlanMessages = [
+    {
+      id: 'message-plan-1',
+      role: 'assistant',
+      parts: [{ type: 'data-site-completion-plan', data: planV1 }],
+    },
+    {
+      id: 'message-plan-duplicate',
+      role: 'assistant',
+      parts: [{ type: 'data-site-completion-plan', data: planV1 }],
+    },
+    {
+      id: 'message-plan-2',
+      role: 'assistant',
+      parts: [{ type: 'data-site-completion-plan', data: planV2 }],
+    },
+  ];
+  const pagedPlanHistoryRequests = [];
+  const pagedPlanMock = await startMockServer((req, res) => {
+    req.resume();
+    res.writeHead(200, { 'content-type': 'application/json' });
+    if (req.url === '/api/v2/headless/capabilities') {
+      res.end(
+        JSON.stringify({
+          primitives: {
+            'site-state': {
+              tier: 'plumbing',
+              connection: 'none',
+              operations: { full: { connection: 'none' } },
+            },
+            history: { tier: 'plumbing', connection: 'none' },
+          },
+        }),
+      );
+      return;
+    }
+    if (
+      req.url ===
+      '/api/v2/headless/conversations/conversation-site-plan/state'
+    ) {
+      res.end(
+        JSON.stringify({
+          phase: 'complete',
+          status: 'idle',
+          siteCompletionPlan: planV2,
+        }),
+      );
+      return;
+    }
+    const pageMatch = req.url.match(
+      /\/conversations\/conversation-site-plan\/history\?limit=\d+&offset=(\d+)$/,
+    );
+    if (pageMatch) {
+      const offset = Number(pageMatch[1]);
+      pagedPlanHistoryRequests.push(offset);
+      res.end(
+        JSON.stringify({
+          total: pagedPlanMessages.length,
+          offset,
+          limit: 100,
+          messages: pagedPlanMessages.slice(offset, offset + 1),
+        }),
+      );
+      return;
+    }
+    res.end(JSON.stringify({ error: 'not found' }));
+  });
+  const pagedSitePlan = await runJsonAsync(
+    ['site-plan', '--history', '--json'],
+    {
+      milesHome: sitePlanHome,
+      env: { MILES_SERVER_URL: pagedPlanMock.url },
+    },
+  );
+  assert(
+    pagedSitePlan.result.status === 0 &&
+      pagedSitePlan.json.revisions.length === 2 &&
+      pagedSitePlan.json.revisions[1].changes.added[0] === 'contact-form',
+    'site-plan --history must reconstruct all revisions when history arrives one message per page',
+  );
+  assert(
+    pagedPlanHistoryRequests.join(',') === '0,1,2',
+    'site-plan --history must page through offsets until total is reached, without over-fetching',
   );
 
   // approval-respond is an explicit grant response primitive. It cannot be

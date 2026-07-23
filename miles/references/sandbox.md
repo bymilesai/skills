@@ -19,6 +19,8 @@ Signatures: `SANDBOX_NETWORK_BLOCKED`, `sandbox_network_blocked`, `Blocked by sa
 3. Make the remediation visible in the FINAL user response for that turn — never only in an intermediate progress note.
 4. Offer exactly two paths: allow the Miles hosts in the agent sandbox, or run the command in the user's normal terminal outside the sandbox.
 
+`doctor --json` also performs a real create/delete write probe in `MILES_HOME`. When a known host sandbox returns a write denial (`EPERM`, `EACCES`, or `EROFS`), the `milesHome` check includes `code: "host_sandbox_denied"`, `retryOutsideSandbox: true`, and explicit remediation. Treat that separately from `filesystem_not_writable`, which indicates an ordinary path/permissions problem.
+
 ## Cursor remediation
 
 ```json

@@ -17,9 +17,23 @@ miles connect-browser --wait [seconds]  # poll until connected (default 30s; exi
   "authenticated": true,
   "connected": false,
   "connection": { "kind": "browser-dashboard" },
+  "pairing": { "paired": true, "kind": "browser-dashboard" },
+  "dashboard": {
+    "available": true,
+    "authenticationKnown": true,
+    "authenticated": true,
+    "reason": null
+  },
+  "realtime": {
+    "available": true,
+    "connected": false,
+    "reason": null
+  },
   "activeSite": { "id": "…", "name": "…" }
 }
 ```
+
+For local WordPress, browser authentication is not observable from the CLI, so legacy `authenticated` is `null` rather than a misleading `false`. Read `pairing`, `dashboard`, and `realtime` separately. A freshly paired local site with no conversation reports `pairing.paired: true`, `dashboard.available: true`, and `realtime.available: false` with an actionable reason.
 
 ## The rules that make the handoff work
 

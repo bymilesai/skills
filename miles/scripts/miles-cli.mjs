@@ -4723,7 +4723,8 @@ async function cmdWordPressSetup(args = []) {
   creds.sites[bootstrap.siteId] = {
     siteToken: bootstrap.siteToken,
     name: bootstrap.siteName || refreshed.site.name || siteUrl,
-    conversationId: existingSite?.conversationId || null,
+    conversationId:
+      bootstrap.conversationId || existingSite?.conversationId || null,
     dashboardUrl:
       bootstrap.localDashboardUrl ||
       refreshed.site.dashboardUrl ||

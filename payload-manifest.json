@@ -3,7 +3,7 @@
   "version": "2026.06.27.1",
   "root": "miles",
   "fileCount": 36,
-  "totalBytes": 438989,
+  "totalBytes": 439262,
   "files": [
     {
       "path": "miles/SKILL.md",
@@ -172,13 +172,13 @@
     },
     {
       "path": "miles/scripts/miles-cli.mjs",
-      "size": 198285,
-      "sha256": "9e695bc3ce36ee982b48dee5d014bfd4956e6fded6ec7444af0edc253d565f35"
+      "size": 198319,
+      "sha256": "5722cb094fca0ead33114cbd216f4f50f0902f85349520e24f473a9f409de2ea"
     },
     {
       "path": "miles/scripts/test-miles-cli.mjs",
-      "size": 113700,
-      "sha256": "d2e3a9ac617cab3a2fcb6976b2403c23d05c3f4da8ef73fe5bd5fb2653ae256f"
+      "size": 113939,
+      "sha256": "9901c7e06c971210d69b9e67abf9e74df768da8fd99822aef696551fd71b646d"
     },
     {
       "path": "miles/smoke-checklist.md",

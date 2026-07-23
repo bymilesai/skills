@@ -1565,6 +1565,7 @@ esac
         res.end(
           JSON.stringify({
             siteId: 'local-site-1',
+            conversationId: 'server-conversation',
             siteToken: 'site-token-1',
             sharedSecret: 'server-secret-1',
             serverUrl: fullSetupMock.url,
@@ -1640,8 +1641,12 @@ esac
   );
   assert(
     fullSetupCredentials.sites['local-site-1'].conversationId ===
-      'existing-conversation',
-    'wordpress-setup relink should preserve the existing local conversation',
+      'server-conversation',
+    'wordpress-setup relink should recover the server conversation instead of trusting stale local state',
+  );
+  assert(
+    fullSetupJson.activeSite.conversationId === 'server-conversation',
+    'wordpress-setup JSON should return the recovered local conversation',
   );
 
   const failedSetupHome = makeTempDir();

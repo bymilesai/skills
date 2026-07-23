@@ -518,7 +518,8 @@ async function getDashboardOpenUrl(creds, site, serverUrl) {
     return {
       dashboardUrl,
       url: dashboardUrl,
-      authenticated: false,
+      authenticated: null,
+      authenticationKnown: false,
     };
   }
   const authenticatedUrl = await getAuthenticatedDashboardUrl(
@@ -530,6 +531,7 @@ async function getDashboardOpenUrl(creds, site, serverUrl) {
     dashboardUrl,
     url: authenticatedUrl || dashboardUrl,
     authenticated: Boolean(authenticatedUrl),
+    authenticationKnown: true,
   };
 }
 
@@ -657,6 +659,27 @@ async function requirePrimitive(name, serverUrl = DEFAULT_SERVER_URL) {
       `The connected Miles server does not support \`${name}\` yet. Run \`miles doctor --json\` to see the supported primitive set.`,
       EXIT_PRECONDITION,
       { code: 'primitive_unsupported', primitive: name },
+    );
+  }
+  return capabilities;
+}
+
+async function requirePrimitiveOperation(
+  name,
+  operation,
+  serverUrl = DEFAULT_SERVER_URL,
+) {
+  const capabilities = await requirePrimitive(name, serverUrl);
+  if (!capabilities.primitives[name]?.operations?.[operation]) {
+    exitWithError(
+      `The connected Miles server cannot run \`${name}\` for ${operation} sites yet. No remote state was created and no credits were spent.`,
+      EXIT_PRECONDITION,
+      {
+        code: 'primitive_operation_unsupported',
+        primitive: name,
+        operation,
+        safeToRetry: false,
+      },
     );
   }
   return capabilities;
@@ -1472,12 +1495,46 @@ async function cmdDoctor() {
   const summary = getLocalRuntimeSummary(creds);
   let milesHomeDetail = MILES_HOME;
   let milesHomeWritable = true;
+  let milesHomeFailure = null;
+  let writeProbePath = null;
   try {
     ensureCredentialsDir();
-    accessSync(MILES_HOME, constants.W_OK);
+    writeProbePath = join(
+      MILES_HOME,
+      `.doctor-write-probe-${process.pid}-${randomUUID()}`,
+    );
+    writeFileSync(writeProbePath, '', {
+      flag: 'wx',
+      mode: 0o600,
+    });
   } catch (err) {
     milesHomeWritable = false;
     milesHomeDetail = `${MILES_HOME} (${err.message})`;
+    const sandboxDetected = Boolean(
+      process.env.CODEX_SANDBOX ||
+        process.env.CURSOR_AGENT ||
+        process.env.CLAUDE_CODE,
+    );
+    const sandboxDenied = err.code === 'EPERM' && sandboxDetected;
+    milesHomeFailure = {
+      code: sandboxDenied
+        ? 'host_sandbox_denied'
+        : 'filesystem_not_writable',
+      errno: err.code || null,
+      sandboxDetected,
+      retryOutsideSandbox: sandboxDenied,
+      remediation: sandboxDenied
+        ? 'Allow this command to run outside the host filesystem sandbox, or set MILES_HOME to a writable approved directory.'
+        : `Make ${MILES_HOME} writable by the current user, or set MILES_HOME to another directory.`,
+    };
+  } finally {
+    if (writeProbePath) {
+      try {
+        unlinkSync(writeProbePath);
+      } catch {
+        // The writability result is already known; cleanup is best effort.
+      }
+    }
   }
   let credentialsReadable = true;
   let credentialsDetail = 'No credentials file found';
@@ -1506,6 +1563,7 @@ async function cmdDoctor() {
       name: 'milesHome',
       ok: milesHomeWritable,
       detail: milesHomeDetail,
+      ...(milesHomeFailure || {}),
     },
     {
       name: 'credentialsFile',
@@ -1657,6 +1715,17 @@ async function cmdCreateSite(rawArgs) {
     );
   }
 
+  const activeSite = getActiveSite(creds);
+  const localWordPressTarget =
+    activeSite?.connection?.kind === 'local-wordpress' ? activeSite : null;
+  if (localWordPressTarget) {
+    await requirePrimitiveOperation(
+      'site-create',
+      'local-wordpress',
+      serverUrl,
+    );
+  }
+
   // Attachments must exist before the create call: the build fires inside
   // the same request. The API key gives them account scope, which is the
   // only scope create-site accepts (the site doesn't exist yet).
@@ -1677,6 +1746,7 @@ async function cmdCreateSite(rawArgs) {
   if (name) body.name = name;
   if (brief) body.brief = brief;
   if (uploadedFiles) body.uploadedFiles = uploadedFiles;
+  if (localWordPressTarget) body.siteId = localWordPressTarget.id;
 
   const data = await apiRequest('POST', '/api/v2/headless/sites', {
     auth: creds.apiKey,
@@ -1686,12 +1756,32 @@ async function cmdCreateSite(rawArgs) {
 
   // Save site credentials
   if (!creds.sites) creds.sites = {};
-  creds.sites[data.siteId] = {
-    siteToken: data.siteToken,
-    name: name || message.substring(0, 50),
-    conversationId: data.conversationId,
-    dashboardUrl: data.dashboardUrl,
-  };
+  if (localWordPressTarget) {
+    if (data.siteId !== localWordPressTarget.id) {
+      throw new Error(
+        'Miles returned a different site while starting the local WordPress conversation. The CLI refused to change the active site.',
+      );
+    }
+    creds.sites[data.siteId] = {
+      ...creds.sites[data.siteId],
+      siteToken: data.siteToken || localWordPressTarget.siteToken,
+      name:
+        name ||
+        localWordPressTarget.name ||
+        message.substring(0, 50),
+      conversationId: data.conversationId,
+      cloudDashboardUrl:
+        data.dashboardUrl || localWordPressTarget.cloudDashboardUrl || null,
+      connection: { kind: 'local-wordpress' },
+    };
+  } else {
+    creds.sites[data.siteId] = {
+      siteToken: data.siteToken,
+      name: name || message.substring(0, 50),
+      conversationId: data.conversationId,
+      dashboardUrl: data.dashboardUrl,
+    };
+  }
   creds.activeSite = data.siteId;
   saveCredentials(creds);
   writeActiveRun({
@@ -1712,7 +1802,11 @@ async function cmdCreateSite(rawArgs) {
     return cmdWaitJob([]);
   }
 
-  console.log(`Dashboard: ${data.dashboardUrl}`);
+  console.log(
+    `Dashboard: ${
+      localWordPressTarget?.dashboardUrl || data.dashboardUrl
+    }`,
+  );
 
   const settled = await doWait(creds, data.conversationId, serverUrl);
   exitWithTurnOutcome(settled);
@@ -4688,12 +4782,37 @@ async function cmdConnectBrowser(args = []) {
   }
 
   if (cliOptions.json) {
+    const localWordPress = site.connection?.kind === 'local-wordpress';
+    const pairingComplete = localWordPress
+      ? Boolean(site.siteToken)
+      : Boolean(site.siteToken && site.conversationId);
+    const realtimeAvailable = Boolean(site.conversationId);
     const payload = {
       url: dashboard.url,
       dashboardUrl: dashboard.dashboardUrl,
       authenticated: dashboard.authenticated,
       connected,
       connection: site.connection || { kind: 'browser-dashboard' },
+      pairing: {
+        paired: pairingComplete,
+        kind: localWordPress ? 'local-wordpress' : 'browser-dashboard',
+      },
+      dashboard: {
+        available: Boolean(dashboard.url),
+        authenticationKnown: dashboard.authenticationKnown,
+        authenticated: dashboard.authenticated,
+        reason:
+          dashboard.authenticationKnown === false
+            ? 'The CLI cannot inspect the browser-local WordPress admin session.'
+            : null,
+      },
+      realtime: {
+        available: realtimeAvailable,
+        connected,
+        reason: realtimeAvailable
+          ? connectionStatusError
+          : 'No conversation exists yet, so there is no real-time conversation connection to check.',
+      },
       activeSite: getActiveSiteSummary(creds),
     };
     if (connectionStatusError) {
@@ -4780,6 +4899,33 @@ async function cmdAccountStatus() {
     auth: creds.apiKey,
     serverUrl,
   });
+  const credits = data.credits || null;
+  const totalSpendableCredits = Number(credits?.totalSpendableCredits || 0);
+  const monthlyRemainingCredits = Number(
+    credits?.monthlyRemainingCredits || 0,
+  );
+  const topUpCredits = Number(
+    credits?.topUpBalanceCredits || credits?.topUpCredits || 0,
+  );
+  const canBuild = totalSpendableCredits > 0;
+  const buildHeadroom = {
+    spendableCredits: totalSpendableCredits,
+    monthlyRemainingCredits,
+    topUpCredits,
+    source:
+      monthlyRemainingCredits > 0
+        ? topUpCredits > 0
+          ? 'monthly_and_top_up'
+          : 'monthly'
+        : topUpCredits > 0
+          ? 'top_up'
+          : 'none',
+    explanation: canBuild
+      ? monthlyRemainingCredits > 0
+        ? `${totalSpendableCredits.toLocaleString()} credits are available for Miles work.`
+        : `The monthly allowance is exhausted, but ${topUpCredits.toLocaleString()} top-up credits remain available for Miles work.`
+      : 'No spendable credits remain. Add credits before starting a build.',
+  };
 
   let siteCount = null;
   try {
@@ -4795,7 +4941,9 @@ async function cmdAccountStatus() {
   if (cliOptions.json) {
     emitJson({
       plan: data.plan || null,
-      credits: data.credits || null,
+      credits,
+      canBuild,
+      buildHeadroom,
       siteCount,
       activeSite: getActiveSiteSummary(creds),
     });
@@ -4812,6 +4960,7 @@ async function cmdAccountStatus() {
         `Top-up credits: ${data.credits.topUpBalanceCredits.toLocaleString()}`,
       );
     }
+    console.log(buildHeadroom.explanation);
   }
   if (siteCount !== null) {
     console.log(`Sites: ${siteCount}`);
@@ -5679,7 +5828,7 @@ const commands = {
   'export-site': cmdExportSite,
 };
 
-if (!command || command === 'help' || command === '--help') {
+function printHelp() {
   console.log(`Miles CLI - Design websites with Miles AI
 
 Primitives (HEADLESS = no browser needed, BROWSER = needs connect-browser first):
@@ -5756,6 +5905,23 @@ Options:
   --json                            Emit JSON for inspection and long-running
                                     commands (structured handles, errors, and
                                     settled wait results)`);
+}
+
+if (!command || command === 'help' || command === '--help') {
+  printHelp();
+  process.exit(0);
+}
+
+const handler = commands[command];
+if (!handler) {
+  console.error(
+    `Unknown command: ${command}. Use \`miles help\` for available commands.`,
+  );
+  process.exit(1);
+}
+
+if (args.includes('--help') || args.includes('-h')) {
+  printHelp();
   process.exit(0);
 }
 
@@ -5768,14 +5934,6 @@ if (cliOptions.unsupportedJson) {
       supportedCommands: Array.from(JSON_COMMANDS).sort(),
     },
   );
-}
-
-const handler = commands[command];
-if (!handler) {
-  console.error(
-    `Unknown command: ${command}. Use \`miles help\` for available commands.`,
-  );
-  process.exit(1);
 }
 
 /**

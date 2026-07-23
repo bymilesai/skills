@@ -44,6 +44,7 @@ function envFor(milesHome, overrides = {}) {
     MILES_HOME: milesHome,
     MILES_CLI: launcherPath,
     MILES_SKILL_DIR: skillDir,
+    MILES_RUNTIME_BINARY: join(milesHome, 'missing-runtime'),
     ...overrides,
   };
 }
@@ -54,6 +55,7 @@ function run(args, options = {}) {
     encoding: 'utf8',
     input: options.input,
     env: envFor(milesHome, options.env),
+    cwd: options.cwd,
     timeout: options.timeout || 15000,
   });
 }
@@ -63,6 +65,7 @@ function runAsync(args, options = {}) {
   return new Promise((resolve) => {
     const child = spawn(launcherPath, args, {
       env: envFor(milesHome, options.env),
+      cwd: options.cwd,
     });
     let stdout = '';
     let stderr = '';
@@ -343,6 +346,383 @@ try {
     helpResult.stdout,
     'Exit codes: 0 ok | 1 failed/aborted | 2 precondition | 3 need connection',
     'help should document the shared exit-code grammar',
+  );
+
+  const commandsWithSafeHelp = [
+    'auth',
+    'account-status',
+    'site-create',
+    'say',
+    'design-directions',
+    'build-site',
+    'wait-job',
+    'approval-respond',
+    'site-state',
+    'site-attach',
+    'wordpress-detect',
+    'wordpress-setup',
+    'screenshot',
+    'upload-assets',
+    'export',
+    'connect-browser',
+    'convert-theme',
+    'cancel',
+    'undo',
+    'site-pages',
+    'usage-history',
+    'rename',
+    'history',
+    'doctor',
+    'wait',
+    'status',
+    'sites',
+    'use',
+    'balance',
+    'messages',
+    'check-auth',
+    'hook-init',
+    'hook',
+    'hook-prompt',
+    'login',
+    'logout',
+    'whoami',
+    'create-site',
+    'reply',
+    'select-design-direction',
+    'preview',
+    'build-theme',
+    'export-theme',
+    'export-site',
+  ];
+  for (const helpCommand of commandsWithSafeHelp) {
+    const commandHelp = run([helpCommand, '--help']);
+    assert(
+      commandHelp.status === 0,
+      `${helpCommand} --help should exit 0 before validation or execution`,
+    );
+    assertIncludes(
+      commandHelp.stdout,
+      'Miles CLI - Design websites with Miles AI',
+      `${helpCommand} --help should print help`,
+    );
+  }
+
+  const helpSafetyHome = makeTempDir();
+  writeFileSync(
+    join(helpSafetyHome, 'credentials.json'),
+    JSON.stringify({ apiKey: 'mk_live_test_key' }),
+    { mode: 0o600 },
+  );
+  const helpSafetyRequests = [];
+  const helpSafetyMock = await startMockServer((req, res) => {
+    helpSafetyRequests.push({ method: req.method, url: req.url });
+    req.resume();
+    res.writeHead(500, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'help must not call the API' }));
+  });
+  const helpSafetyResult = await runAsync(['site-create', '--help'], {
+    milesHome: helpSafetyHome,
+    env: { MILES_SERVER_URL: helpSafetyMock.url },
+  });
+  assert(
+    helpSafetyResult.status === 0,
+    'site-create --help should exit 0 for an authenticated user',
+  );
+  assert(
+    helpSafetyRequests.length === 0,
+    'site-create --help must not call capabilities, create a site, or spend credits',
+  );
+
+  const fakeRuntimeDir = makeTempDir();
+  const fakeRuntime = join(fakeRuntimeDir, 'runtime');
+  writeFileSync(
+    fakeRuntime,
+    `#!/bin/sh
+printf '%s|%s|%s\\n' "\${MILES_SERVER_URL-unset}" "\${MILES_PLUGIN_SOURCE-unset}" "\${WP_CLI-unset}"
+`,
+    { mode: 0o755 },
+  );
+  const dotenvDir = makeTempDir();
+  writeFileSync(
+    join(dotenvDir, '.env'),
+    'MILES_SERVER_URL=http://localhost:3999\nMILES_PLUGIN_SOURCE=/private/source\nWP_CLI=/private/wp\n',
+  );
+  const shieldedLauncher = run(['doctor'], {
+    cwd: dotenvDir,
+    env: {
+      MILES_RUNTIME_BINARY: fakeRuntime,
+      MILES_SERVER_URL: undefined,
+      MILES_PLUGIN_SOURCE: undefined,
+      WP_CLI: undefined,
+    },
+  });
+  assert(
+    shieldedLauncher.status === 0 && shieldedLauncher.stdout.trim() === '||',
+    'the launcher should pass explicit empty Miles configuration so bundled Bun cannot import repository .env values',
+  );
+
+  const unsupportedLocalHome = makeTempDir();
+  const unsupportedLocalAsset = join(unsupportedLocalHome, 'logo.svg');
+  writeFileSync(unsupportedLocalAsset, '<svg xmlns="http://www.w3.org/2000/svg"/>');
+  writeFileSync(
+    join(unsupportedLocalHome, 'credentials.json'),
+    JSON.stringify({
+      apiKey: 'mk_live_test_key',
+      activeSite: 'local-site-unsupported',
+      sites: {
+        'local-site-unsupported': {
+          siteToken: 'local-site-token',
+          conversationId: null,
+          dashboardUrl:
+            'http://local-site.test/wp-admin/admin.php?page=miles',
+          siteUrl: 'http://local-site.test',
+          localWordPressRoot: '/tmp/local-site',
+          connection: { kind: 'local-wordpress' },
+        },
+      },
+    }),
+    { mode: 0o600 },
+  );
+  const unsupportedLocalRequests = [];
+  const unsupportedLocalMock = await startMockServer((req, res) => {
+    unsupportedLocalRequests.push({ method: req.method, url: req.url });
+    req.resume();
+    if (req.url === '/api/v2/headless/capabilities') {
+      sendCapabilities(res, {
+        'site-create': { tier: 'porcelain', connection: 'none' },
+      });
+      return;
+    }
+    res.writeHead(500, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'unexpected mutation' }));
+  });
+  const { result: unsupportedLocalResult, json: unsupportedLocalJson } =
+    await runJsonAsync(
+      [
+        'site-create',
+        'Build on this local WordPress site',
+        '--attach',
+        unsupportedLocalAsset,
+        '--json',
+      ],
+      {
+        milesHome: unsupportedLocalHome,
+        env: { MILES_SERVER_URL: unsupportedLocalMock.url },
+      },
+    );
+  assert(
+    unsupportedLocalResult.status === 2,
+    'site-create should fail safely when local WordPress creation is not advertised',
+  );
+  assert(
+    unsupportedLocalJson.detail?.code ===
+      'primitive_operation_unsupported' &&
+      unsupportedLocalJson.detail?.primitive === 'site-create' &&
+      unsupportedLocalJson.detail?.operation === 'local-wordpress',
+    'the safe local-site refusal should identify the missing server operation',
+  );
+  assert(
+    unsupportedLocalRequests.length === 1 &&
+      unsupportedLocalRequests[0].url === '/api/v2/headless/capabilities',
+    'unsupported local site-create must stop before uploads, site creation, or credit spend',
+  );
+
+  const supportedLocalHome = makeTempDir();
+  const supportedLocalDashboard =
+    'http://local-site.test/wp-admin/admin.php?page=miles';
+  writeFileSync(
+    join(supportedLocalHome, 'credentials.json'),
+    JSON.stringify({
+      apiKey: 'mk_live_test_key',
+      activeSite: 'local-site-supported',
+      sites: {
+        'local-site-supported': {
+          siteToken: 'old-local-site-token',
+          name: 'Local Site',
+          conversationId: null,
+          dashboardUrl: supportedLocalDashboard,
+          cloudDashboardUrl:
+            'https://app.example.test/sites/local-site-supported',
+          siteUrl: 'http://local-site.test',
+          localWordPressRoot: '/tmp/local-site',
+          connection: { kind: 'local-wordpress' },
+        },
+      },
+    }),
+    { mode: 0o600 },
+  );
+  const supportedLocalRequests = [];
+  const supportedLocalMock = await startMockServer((req, res) => {
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => {
+      supportedLocalRequests.push({
+        method: req.method,
+        url: req.url,
+        body: body ? JSON.parse(body) : null,
+      });
+      if (req.url === '/api/v2/headless/capabilities') {
+        sendCapabilities(res, {
+          'site-create': {
+            tier: 'porcelain',
+            connection: 'none',
+            operations: {
+              'local-wordpress': { connection: 'none' },
+            },
+          },
+        });
+        return;
+      }
+      if (req.method === 'POST' && req.url === '/api/v2/headless/sites') {
+        res.writeHead(201, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            siteId: 'local-site-supported',
+            siteToken: 'new-local-site-token',
+            conversationId: 'local-conversation',
+            dashboardUrl:
+              'https://app.example.test/sites/local-site-supported',
+            status: 'streaming',
+          }),
+        );
+        return;
+      }
+      if (
+        req.method === 'GET' &&
+        req.url.startsWith(
+          '/api/v2/headless/conversations/local-conversation/wait?',
+        )
+      ) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            status: 'completed',
+            outcome: 'completed',
+            phase: 'brief_review',
+            milesMessage: 'Tell me about the site.',
+          }),
+        );
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+  });
+  const { result: supportedLocalResult, json: supportedLocalJson } =
+    await runJsonAsync(
+      ['site-create', 'Build on this local WordPress site', '--json'],
+      {
+        milesHome: supportedLocalHome,
+        env: { MILES_SERVER_URL: supportedLocalMock.url },
+      },
+    );
+  assert(
+    supportedLocalResult.status === 0 &&
+      supportedLocalJson.outcome === 'completed',
+    'site-create should start and settle a conversation on the active local WordPress site',
+  );
+  const localCreateRequest = supportedLocalRequests.find(
+    (request) =>
+      request.method === 'POST' &&
+      request.url === '/api/v2/headless/sites',
+  );
+  assert(
+    localCreateRequest?.body?.siteId === 'local-site-supported',
+    'local site-create should send the exact active local WordPress site id',
+  );
+  const supportedLocalCredentials = JSON.parse(
+    readFileSync(join(supportedLocalHome, 'credentials.json'), 'utf8'),
+  );
+  const persistedLocalSite =
+    supportedLocalCredentials.sites['local-site-supported'];
+  assert(
+    supportedLocalCredentials.activeSite === 'local-site-supported' &&
+      Object.keys(supportedLocalCredentials.sites).length === 1,
+    'local site-create should not create or activate a second cloud site',
+  );
+  assert(
+    persistedLocalSite.conversationId === 'local-conversation' &&
+      persistedLocalSite.dashboardUrl === supportedLocalDashboard &&
+      persistedLocalSite.connection?.kind === 'local-wordpress',
+    'local site-create should persist the conversation while preserving the local dashboard and connection kind',
+  );
+
+  const localConnection = runJson(['connect-browser', '--json'], {
+    milesHome: unsupportedLocalHome,
+  });
+  assert(
+    localConnection.result.status === 0 &&
+      localConnection.json.authenticated === null,
+    'connect-browser should not report local WordPress browser authentication as false when it is unobservable',
+  );
+  assert(
+    localConnection.json.pairing?.paired === true &&
+      localConnection.json.dashboard?.available === true &&
+      localConnection.json.dashboard?.authenticationKnown === false,
+    'connect-browser should report pairing and dashboard availability separately',
+  );
+  assert(
+    localConnection.json.realtime?.available === false &&
+      localConnection.json.realtime?.connected === null &&
+      localConnection.json.realtime?.reason.includes('No conversation'),
+    'connect-browser should explain why realtime status is unavailable before a conversation exists',
+  );
+
+  const accountStatusHome = makeTempDir();
+  writeFileSync(
+    join(accountStatusHome, 'credentials.json'),
+    JSON.stringify({ apiKey: 'mk_live_test_key' }),
+    { mode: 0o600 },
+  );
+  const accountStatusMock = await startMockServer((req, res) => {
+    req.resume();
+    if (req.url === '/api/v2/headless/capabilities') {
+      sendCapabilities(res, {
+        'account-status': { tier: 'plumbing', connection: 'none' },
+      });
+      return;
+    }
+    if (req.url === '/api/v2/headless/account/balance') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          plan: 'test',
+          credits: {
+            usagePercent: 100,
+            monthlyRemainingCredits: 0,
+            topUpBalanceCredits: 32512,
+            totalSpendableCredits: 32512,
+          },
+        }),
+      );
+      return;
+    }
+    if (req.url === '/api/v2/headless/sites') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ sites: [] }));
+      return;
+    }
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'not found' }));
+  });
+  const { result: accountStatusResult, json: accountStatus } =
+    await runJsonAsync(['account-status', '--json'], {
+      milesHome: accountStatusHome,
+      env: { MILES_SERVER_URL: accountStatusMock.url },
+    });
+  assert(
+    accountStatusResult.status === 0 &&
+      accountStatus.canBuild === true &&
+      accountStatus.buildHeadroom?.source === 'top_up',
+    'account-status should derive build readiness from spendable top-up credits even when monthly usage is 100%',
+  );
+  assertIncludes(
+    accountStatus.buildHeadroom.explanation,
+    'monthly allowance is exhausted',
+    'account-status should explain why a build can still proceed',
   );
 
   const missingWpCli = join(makeTempDir(), 'missing-wp');

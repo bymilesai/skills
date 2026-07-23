@@ -1229,6 +1229,10 @@ esac
     'WordPress compatibility failures should report detected, required, and plugin versions',
   );
   assert(
+    incompatibleSourceSetup.json.wordpressCompatibilityChecked === true,
+    'a rejected incompatible plugin should report that the compatibility gate ran',
+  );
+  assert(
     !existsSync(
       join(
         incompatibleSourceRoot,
@@ -1784,6 +1788,10 @@ esac
     fullSetupJson.wordpressVersion === '6.5.0' &&
       fullSetupJson.pluginVersion === '9.9.9-test',
     'wordpress-setup success should report the versions used for compatibility checks',
+  );
+  assert(
+    fullSetupJson.wordpressCompatibilityChecked === false,
+    'a plugin without a Requires-at-least header must report the compatibility gate as skipped, not passed',
   );
   assert(
     fullSetupJson.setup.success === true,
@@ -3496,6 +3504,93 @@ esac
       'Connect the contact form to a message delivery workflow',
     ),
     'site-plan human output must not paint uncurated machine intent as user copy',
+  );
+
+  // A server may return fewer messages per page than requested; the history
+  // walk must follow offset/total instead of assuming one page holds all.
+  const pagedPlanMessages = [
+    {
+      id: 'message-plan-1',
+      role: 'assistant',
+      parts: [{ type: 'data-site-completion-plan', data: planV1 }],
+    },
+    {
+      id: 'message-plan-duplicate',
+      role: 'assistant',
+      parts: [{ type: 'data-site-completion-plan', data: planV1 }],
+    },
+    {
+      id: 'message-plan-2',
+      role: 'assistant',
+      parts: [{ type: 'data-site-completion-plan', data: planV2 }],
+    },
+  ];
+  const pagedPlanHistoryRequests = [];
+  const pagedPlanMock = await startMockServer((req, res) => {
+    req.resume();
+    res.writeHead(200, { 'content-type': 'application/json' });
+    if (req.url === '/api/v2/headless/capabilities') {
+      res.end(
+        JSON.stringify({
+          primitives: {
+            'site-state': {
+              tier: 'plumbing',
+              connection: 'none',
+              operations: { full: { connection: 'none' } },
+            },
+            history: { tier: 'plumbing', connection: 'none' },
+          },
+        }),
+      );
+      return;
+    }
+    if (
+      req.url ===
+      '/api/v2/headless/conversations/conversation-site-plan/state'
+    ) {
+      res.end(
+        JSON.stringify({
+          phase: 'complete',
+          status: 'idle',
+          siteCompletionPlan: planV2,
+        }),
+      );
+      return;
+    }
+    const pageMatch = req.url.match(
+      /\/conversations\/conversation-site-plan\/history\?limit=\d+&offset=(\d+)$/,
+    );
+    if (pageMatch) {
+      const offset = Number(pageMatch[1]);
+      pagedPlanHistoryRequests.push(offset);
+      res.end(
+        JSON.stringify({
+          total: pagedPlanMessages.length,
+          offset,
+          limit: 100,
+          messages: pagedPlanMessages.slice(offset, offset + 1),
+        }),
+      );
+      return;
+    }
+    res.end(JSON.stringify({ error: 'not found' }));
+  });
+  const pagedSitePlan = await runJsonAsync(
+    ['site-plan', '--history', '--json'],
+    {
+      milesHome: sitePlanHome,
+      env: { MILES_SERVER_URL: pagedPlanMock.url },
+    },
+  );
+  assert(
+    pagedSitePlan.result.status === 0 &&
+      pagedSitePlan.json.revisions.length === 2 &&
+      pagedSitePlan.json.revisions[1].changes.added[0] === 'contact-form',
+    'site-plan --history must reconstruct all revisions when history arrives one message per page',
+  );
+  assert(
+    pagedPlanHistoryRequests.join(',') === '0,1,2',
+    'site-plan --history must page through offsets until total is reached, without over-fetching',
   );
 
   // approval-respond is an explicit grant response primitive. It cannot be

@@ -4055,18 +4055,26 @@ function compareVersions(left, right) {
 
 function pluginWordPressCompatibility(pluginDir, wordpressVersion) {
   const headers = readMilesPluginHeadersFromFile(pluginDir);
+  // `compatibilityChecked: false` means the gate could not run (no WP-CLI
+  // version, unreadable plugin header, or unparseable versions) and the
+  // install proceeds unverified — callers surface that rather than implying
+  // a compatibility guarantee.
   if (!headers.requiresWordPress || !wordpressVersion) {
-    return { ok: true, headers };
+    return { ok: true, compatibilityChecked: false, headers };
   }
   const comparison = compareVersions(
     wordpressVersion,
     headers.requiresWordPress,
   );
-  if (comparison === null || comparison >= 0) {
-    return { ok: true, headers };
+  if (comparison === null) {
+    return { ok: true, compatibilityChecked: false, headers };
+  }
+  if (comparison >= 0) {
+    return { ok: true, compatibilityChecked: true, headers };
   }
   return {
     ok: false,
+    compatibilityChecked: true,
     code: 'wordpress_version_unsupported',
     detectedWordPressVersion: wordpressVersion,
     requiredWordPressVersion: headers.requiresWordPress,
@@ -4171,6 +4179,7 @@ async function copyMilesPluginDownload(
       ok: true,
       ...copyResult,
       pluginHeaders: compatibility.headers,
+      compatibilityChecked: compatibility.compatibilityChecked,
     };
   } catch (err) {
     return {
@@ -4361,7 +4370,11 @@ async function ensureMilesPluginInstalled(detection, args = []) {
       );
       if (!compatibility.ok) return compatibility;
       if (resolve(detection.plugin.source) === resolve(installedPluginDir)) {
-        return { ok: true, pluginHeaders: compatibility.headers };
+        return {
+          ok: true,
+          pluginHeaders: compatibility.headers,
+          compatibilityChecked: compatibility.compatibilityChecked,
+        };
       }
       const copyResult = copyMilesPluginSource(
         detection.plugin.source,
@@ -4372,14 +4385,24 @@ async function ensureMilesPluginInstalled(detection, args = []) {
         targetDir: copyResult.targetDir,
         replaced: copyResult.replaced || undefined,
       });
-      return { ok: true, pluginHeaders: compatibility.headers };
+      return {
+        ok: true,
+        pluginHeaders: compatibility.headers,
+        compatibilityChecked: compatibility.compatibilityChecked,
+      };
     }
 
     if (detection.plugin.installed) {
-      return pluginWordPressCompatibility(
+      const compatibility = pluginWordPressCompatibility(
         installedPluginDir,
         detection.site.wordpressVersion,
       );
+      if (!compatibility.ok) return compatibility;
+      return {
+        ok: true,
+        pluginHeaders: compatibility.headers,
+        compatibilityChecked: compatibility.compatibilityChecked,
+      };
     }
 
     let manifestFetchError = null;
@@ -4410,7 +4433,11 @@ async function ensureMilesPluginInstalled(detection, args = []) {
       targetDir: copyResult.targetDir,
       replaced: copyResult.replaced || undefined,
     });
-    return { ok: true };
+    return {
+      ok: true,
+      pluginHeaders: copyResult.pluginHeaders,
+      compatibilityChecked: copyResult.compatibilityChecked === true,
+    };
   }
 
   const fileInstall = await ensurePluginFiles();
@@ -4423,11 +4450,14 @@ async function ensureMilesPluginInstalled(detection, args = []) {
     };
   }
 
+  const compatibilityChecked = fileInstall.compatibilityChecked === true;
+
   if (!detection.wpCli.available) {
     return {
       ok: false,
       actions,
       pluginUrl,
+      compatibilityChecked,
       manualActivationRequired: true,
       reason:
         'Miles plugin files are installed, but WP-CLI is not available to activate them automatically.',
@@ -4448,12 +4478,13 @@ async function ensureMilesPluginInstalled(detection, args = []) {
       ok: false,
       actions,
       pluginUrl,
+      compatibilityChecked,
       manualActivationRequired: true,
       reason: `Miles plugin files are installed, but WP-CLI could not activate them automatically. ${reason}`,
     };
   }
   actions.push({ action: 'activated-plugin' });
-  return { ok: true, actions };
+  return { ok: true, actions, compatibilityChecked };
 }
 
 function wordpressApplicationPasswordsAvailable(detection) {
@@ -4672,6 +4703,8 @@ async function cmdWordPressSetup(args = []) {
       localWordPress: detection,
       actions: installResult.actions,
       reason: installResult.reason,
+      wordpressCompatibilityChecked:
+        installResult.compatibilityChecked === true,
       detectedWordPressVersion:
         installResult.detectedWordPressVersion ||
         detection.site.wordpressVersion ||
@@ -4794,6 +4827,8 @@ async function cmdWordPressSetup(args = []) {
     relinked: bootstrap.relinked,
     wordpressVersion: refreshed.site.wordpressVersion || null,
     pluginVersion: refreshed.plugin.version || null,
+    wordpressCompatibilityChecked:
+      installResult.compatibilityChecked === true,
     actions: [...installResult.actions, ...appPasswordResult.actions],
     setup,
     activeSite: getActiveSiteSummary(creds),

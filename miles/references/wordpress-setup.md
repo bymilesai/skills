@@ -70,6 +70,7 @@ Save it outside the WordPress document root, make it executable, and supply its 
   "relinked": false,
   "wordpressVersion": "7.0.2",
   "pluginVersion": "0.12.3-beta",
+  "wordpressCompatibilityChecked": true,
   "actions": [
     { "action": "activated-plugin" }
   ],
@@ -84,6 +85,8 @@ Save it outside the WordPress document root, make it executable, and supply its 
 
 Setup pairing does not itself spend build credits. The next `site-create` targets this exact local site only when the server advertises the local operation; otherwise it fails before mutation or spend.
 
+`wordpressCompatibilityChecked: false` (also emitted on failure payloads) means the version gate could not run — WP-CLI reported no WordPress version, or the plugin header was unreadable — and the plugin files were installed unverified. Tell the user the compatibility check was skipped instead of implying the versions were confirmed compatible.
+
 ## Compatibility failure
 
 When WordPress is older than the downloaded or selected plugin requires, setup exits `2` before copying or activation:
@@ -93,6 +96,7 @@ When WordPress is older than the downloaded or selected plugin requires, setup e
   "ok": false,
   "mode": "local",
   "code": "wordpress_version_unsupported",
+  "wordpressCompatibilityChecked": true,
   "detectedWordPressVersion": "6.8.3",
   "requiredWordPressVersion": "7.0",
   "pluginVersion": "0.12.3-beta",

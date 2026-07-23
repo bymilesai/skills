@@ -3,7 +3,7 @@
   "version": "2026.06.27.1",
   "root": "miles",
   "fileCount": 36,
-  "totalBytes": 458555,
+  "totalBytes": 463314,
   "files": [
     {
       "path": "miles/SKILL.md",
@@ -152,8 +152,8 @@
     },
     {
       "path": "miles/references/wordpress-setup.md",
-      "size": 7718,
-      "sha256": "b07f75647a759f0ebadd01f702ec3fe45c68cd6c8bd078f7eb9085de1f8c35fe"
+      "size": 8152,
+      "sha256": "7c4c706c4b1fca4906f09a321344e3896fadbf47c74eca4cb052ed562f54b68d"
     },
     {
       "path": "miles/sandbox.json.example",
@@ -172,13 +172,13 @@
     },
     {
       "path": "miles/scripts/miles-cli.mjs",
-      "size": 201761,
-      "sha256": "80d573dce89d20dc69eec35f70d65173ec5c9bf05e121b44114a22e1a45ba2ec"
+      "size": 203109,
+      "sha256": "7f211f1859c0d2e5acdde008376a0fe0fcfcbe2c1c962bb16d74b18e3bdfbba3"
     },
     {
       "path": "miles/scripts/test-miles-cli.mjs",
-      "size": 127900,
-      "sha256": "0f9893411499e12d55c783022ac7867ce7f60c44fbb9620df1af2dbf138128e7"
+      "size": 130877,
+      "sha256": "0c47c59287974ca222ac29c19ab00bb92e3220337b62863d4b370f94d691152e"
     },
     {
       "path": "miles/smoke-checklist.md",

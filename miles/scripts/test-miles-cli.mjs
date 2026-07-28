@@ -755,6 +755,167 @@ printf '%s|%s|%s\\n' "\${MILES_SERVER_URL-unset}" "\${MILES_PLUGIN_SOURCE-unset}
     'a mismatched site-create response must not change the active site or adopt the runaway conversation',
   );
 
+  const localLockHome = makeTempDir();
+  writeFileSync(
+    join(localLockHome, 'credentials.json'),
+    JSON.stringify({
+      apiKey: 'mk_live_test_key',
+      activeSite: 'local-site-locked',
+      sites: {
+        'local-site-locked': {
+          siteToken: 'local-site-token',
+          name: 'Locked Local Site',
+          conversationId: null,
+          dashboardUrl:
+            'http://local-site.test/wp-admin/admin.php?page=miles',
+          siteUrl: 'http://local-site.test',
+          localWordPressRoot: '/tmp/local-site',
+          connection: { kind: 'local-wordpress' },
+        },
+        'cloud-site-hidden': {
+          siteToken: 'cloud-site-token',
+          name: 'Hidden Cloud Site',
+          conversationId: 'cloud-conversation',
+          dashboardUrl: 'https://app.example.test/sites/cloud-site-hidden',
+        },
+      },
+    }),
+    { mode: 0o600 },
+  );
+  const localLockRequests = [];
+  const localLockMock = await startMockServer((req, res) => {
+    localLockRequests.push({ method: req.method, url: req.url });
+    req.resume();
+    if (req.url === '/api/v2/headless/capabilities') {
+      sendCapabilities(res, {
+        'account-status': { tier: 'plumbing', connection: 'none' },
+      });
+      return;
+    }
+    if (req.url === '/api/v2/headless/account/balance') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          plan: 'test',
+          credits: {
+            usagePercent: 0,
+            monthlyRemainingCredits: 50000,
+            topUpBalanceCredits: 0,
+            totalSpendableCredits: 50000,
+          },
+        }),
+      );
+      return;
+    }
+    res.writeHead(500, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'unexpected cloud-site request' }));
+  });
+  const localOnlySites = runJson(['sites', '--json'], {
+    milesHome: localLockHome,
+    env: { MILES_SERVER_URL: localLockMock.url },
+  });
+  assert(
+    localOnlySites.result.status === 0 &&
+      localOnlySites.json.localTargetLocked === true &&
+      localOnlySites.json.sites.length === 1 &&
+      localOnlySites.json.sites[0].id === 'local-site-locked',
+    'sites must show only the active local WordPress target while local mode is locked',
+  );
+  assert(
+    localLockRequests.length === 0,
+    'sites must not query cloud sites while local mode is locked',
+  );
+
+  const blockedCloudUse = runJson(
+    ['use', 'cloud-site-hidden', '--json'],
+    {
+      milesHome: localLockHome,
+      env: { MILES_SERVER_URL: localLockMock.url },
+    },
+  );
+  assert(
+    blockedCloudUse.result.status === 2 &&
+      blockedCloudUse.json.detail?.code === 'local_target_locked',
+    'use must not switch from a local WordPress target to a cloud site',
+  );
+
+  const blockedCloudAttach = runJson(
+    ['site-attach', 'cloud-site-hidden', '--json'],
+    {
+      milesHome: localLockHome,
+      env: { MILES_SERVER_URL: localLockMock.url },
+    },
+  );
+  assert(
+    blockedCloudAttach.result.status === 2 &&
+      blockedCloudAttach.json.detail?.code === 'local_target_locked',
+    'site-attach must not attach a cloud site while local mode is locked',
+  );
+
+  const blockedLocalAttach = runJson(
+    ['site-attach', 'local-site-locked', '--json'],
+    {
+      milesHome: localLockHome,
+      env: { MILES_SERVER_URL: localLockMock.url },
+    },
+  );
+  assert(
+    blockedLocalAttach.result.status === 2 &&
+      blockedLocalAttach.json.detail?.code === 'local_target_locked',
+    'site-attach must not replace local WordPress metadata with a remote session token',
+  );
+  assert(
+    localLockRequests.length === 0,
+    'local site listing, switching, and attachment guards must stop before any network request',
+  );
+
+  const { result: localAccountResult, json: localAccountStatus } =
+    await runJsonAsync(['account-status', '--json'], {
+      milesHome: localLockHome,
+      env: { MILES_SERVER_URL: localLockMock.url },
+    });
+  assert(
+    localAccountResult.status === 0 &&
+      localAccountStatus.siteCount === 1 &&
+      localAccountStatus.activeSite?.id === 'local-site-locked',
+    'account-status must represent only the active local WordPress site while local mode is locked',
+  );
+  assert(
+    localLockRequests.every(
+      (request) => request.url !== '/api/v2/headless/sites',
+    ),
+    'account-status must not query cloud sites while local mode is locked',
+  );
+
+  const leaveLocalMode = runJson(
+    ['wordpress-setup', '--use', 'cloud', '--json'],
+    { milesHome: localLockHome },
+  );
+  assert(
+    leaveLocalMode.result.status === 0 &&
+      leaveLocalMode.json.previousLocalSiteId === 'local-site-locked' &&
+      leaveLocalMode.json.localTargetLocked === false,
+    'wordpress-setup --use cloud must explicitly release the local target lock',
+  );
+  const unlockedCredentials = JSON.parse(
+    readFileSync(join(localLockHome, 'credentials.json'), 'utf8'),
+  );
+  assert(
+    unlockedCredentials.activeSite === undefined &&
+      unlockedCredentials.sites['local-site-locked']?.connection?.kind ===
+        'local-wordpress',
+    'leaving local mode must clear the active selection without deleting the local pairing',
+  );
+  const useCloudAfterUnlock = runJson(
+    ['use', 'cloud-site-hidden', '--json'],
+    { milesHome: localLockHome },
+  );
+  assert(
+    useCloudAfterUnlock.result.status === 0 &&
+      useCloudAfterUnlock.json.activeSite?.id === 'cloud-site-hidden',
+    'cloud site selection must remain available after the user explicitly leaves local mode',
+  );
+
   const unreachableHome = makeTempDir();
   writeFileSync(
     join(unreachableHome, 'credentials.json'),

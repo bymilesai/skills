@@ -20,7 +20,9 @@ The server must advertise `site-create.operations.local-wordpress`. If it does n
 
 This guard is intentional. A successful `wordpress-setup --use local` may exist before the server has deployed local-site conversation creation; the CLI must report that rollout gap instead of silently creating a different cloud site.
 
-If the server ever returns a different site id than the paired local site, the CLI exits `2` with `code: "unexpected_site_returned"` and refuses to change the active site. The response includes the returned site and conversation ids — a conversation may already be running there, so inspect it with `miles site-attach <returnedSiteId>` and cancel any unwanted run before retrying.
+If the server ever returns a different site id than the paired local site, the CLI exits `2` with `code: "unexpected_site_returned"` and refuses to change the active site. The response includes the returned site and conversation ids because a conversation may already be running there. Keep the local target locked; inspect or cancel the unexpected remote run through an account administration surface instead of attaching it into the local session.
+
+While the local target is active, cloud sites are excluded from the CLI session: `sites` lists only the local site, `use` cannot switch away, `site-attach` cannot attach or duplicate another site, and account status does not fetch the cloud site list. Only an explicit user-requested `wordpress-setup --use cloud` releases this lock.
 
 ## Writing a good `--brief`
 

@@ -327,6 +327,29 @@ function getActiveSite(creds) {
   return { id: creds.activeSite, ...creds.sites[creds.activeSite] };
 }
 
+function getActiveLocalWordPressTarget(creds) {
+  const site = getActiveSite(creds);
+  return site?.connection?.kind === 'local-wordpress' ? site : null;
+}
+
+function exitWithLocalTargetLock(creds, action) {
+  const site = getActiveLocalWordPressTarget(creds);
+  if (!site) return;
+
+  exitWithError(
+    `Miles is locked to the paired local WordPress site ${site.id} (${site.siteUrl || site.dashboardUrl || 'local WordPress'}). ${action} is unavailable while local mode is active. Run \`miles wordpress-setup --use cloud --json\` only when the user explicitly chooses to leave this local site.`,
+    EXIT_PRECONDITION,
+    {
+      code: 'local_target_locked',
+      localSiteId: site.id,
+      siteUrl: site.siteUrl || null,
+      dashboardUrl: site.dashboardUrl || null,
+      safeToRetry: false,
+      recovery: 'miles wordpress-setup --use cloud --json',
+    },
+  );
+}
+
 function noActiveConversationMessage(site) {
   if (site?.connection?.kind === 'local-wordpress') {
     return 'This paired local WordPress site has no conversation yet. Run `miles site-create "<description>"` to start a design on this exact site. If the server has not deployed local WordPress conversation support, the command will stop before creating remote state or spending credits.';
@@ -4636,9 +4659,17 @@ function sanitizeLocalSetupFailure(err) {
 async function cmdWordPressSetup(args = []) {
   const mode = getOptionalCommandFlagValue(args, '--use');
   if (mode === 'cloud') {
+    const creds = loadCredentials();
+    const localWordPressTarget = getActiveLocalWordPressTarget(creds);
+    if (localWordPressTarget) {
+      delete creds.activeSite;
+      saveCredentials(creds);
+    }
     const payload = {
       ok: true,
       mode: 'cloud',
+      previousLocalSiteId: localWordPressTarget?.id || null,
+      localTargetLocked: false,
       next: ['Use `miles site-create "<description>"` to create a Miles cloud site.'],
     };
     if (cliOptions.json) emitJson(payload);
@@ -4866,6 +4897,32 @@ async function cmdSites() {
     exitWithError('Not logged in.', EXIT_PRECONDITION);
   }
 
+  const localWordPressTarget = getActiveLocalWordPressTarget(creds);
+  if (localWordPressTarget) {
+    const localSite = {
+      id: localWordPressTarget.id,
+      name: localWordPressTarget.name || null,
+      phase: localWordPressTarget.phase || null,
+      dashboardUrl: localWordPressTarget.dashboardUrl || null,
+      siteUrl: localWordPressTarget.siteUrl || null,
+      connection: { kind: 'local-wordpress' },
+      active: true,
+    };
+    if (cliOptions.json) {
+      emitJson({
+        activeSiteId: localWordPressTarget.id,
+        localTargetLocked: true,
+        sites: [localSite],
+      });
+      return;
+    }
+    console.log(`${localSite.name || 'Local WordPress'} (active, local)`);
+    console.log(`  ID: ${localSite.id}`);
+    if (localSite.siteUrl) console.log(`  Site: ${localSite.siteUrl}`);
+    console.log(`  Dashboard: ${localSite.dashboardUrl}`);
+    return;
+  }
+
   const serverUrl = DEFAULT_SERVER_URL;
   const data = await apiRequest('GET', '/api/v2/headless/sites', {
     auth: creds.apiKey,
@@ -4908,6 +4965,10 @@ async function cmdUse(args) {
   }
 
   const creds = loadCredentials();
+  const localWordPressTarget = getActiveLocalWordPressTarget(creds);
+  if (localWordPressTarget && siteId !== localWordPressTarget.id) {
+    exitWithLocalTargetLock(creds, `Switching to site ${siteId}`);
+  }
   if (!creds.sites?.[siteId]) {
     exitWithError(
       `Site ${siteId} not found in local credentials. Use \`miles sites\` to see available sites.`,
@@ -5142,14 +5203,19 @@ async function cmdAccountStatus() {
     : null;
 
   let siteCount = null;
-  try {
-    const sites = await apiRequest('GET', '/api/v2/headless/sites', {
-      auth: creds.apiKey,
-      serverUrl,
-    });
-    siteCount = sites.sites?.length ?? 0;
-  } catch {
-    // Site listing is enrichment only; balance is the primary payload.
+  const localWordPressTarget = getActiveLocalWordPressTarget(creds);
+  if (localWordPressTarget) {
+    siteCount = 1;
+  } else {
+    try {
+      const sites = await apiRequest('GET', '/api/v2/headless/sites', {
+        auth: creds.apiKey,
+        serverUrl,
+      });
+      siteCount = sites.sites?.length ?? 0;
+    } catch {
+      // Site listing is enrichment only; balance is the primary payload.
+    }
   }
 
   if (cliOptions.json) {
@@ -5205,6 +5271,14 @@ async function cmdSiteAttach(args) {
   }
   const duplicate = hasCommandFlag(args, '--duplicate');
   const copyName = getOptionalCommandFlagValue(args, '--name');
+  if (getActiveLocalWordPressTarget(creds)) {
+    exitWithLocalTargetLock(
+      creds,
+      duplicate
+        ? `Duplicating site ${siteId}`
+        : `Attaching to site ${siteId}`,
+    );
+  }
   const serverUrl = DEFAULT_SERVER_URL;
 
   let attachedSiteId;

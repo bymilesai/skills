@@ -9,6 +9,8 @@ miles sites --json          # list owned sites with ids and phases
 miles use <siteId>          # switch between sites already in LOCAL credentials
 ```
 
+These cloud-site operations are unavailable while a paired local WordPress site is active. In local mode, `sites` shows only the paired local target and both `site-attach` and switching to another site with `use` exit `2` with `code: "local_target_locked"` before any network request. Continue on the active local site, or—only when the user explicitly chooses to leave it—run `miles wordpress-setup --use cloud --json` first.
+
 ```json
 {
   "ok": true,

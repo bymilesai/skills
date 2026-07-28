@@ -44,8 +44,10 @@ Use official WordPress and database images on an isolated Docker network, separa
 1. Run passive detection and confirm it does not execute WP-CLI.
 2. Run `wordpress-setup --use local --json` with the adapter and confirm it reports the WordPress/plugin versions, pairing success, and `activeSite.conversationId: null` (the payload has no top-level `conversationId`).
 3. Run `connect-browser --json`; confirm pairing and dashboard availability are true, browser authentication is unknown rather than false, and realtime is unavailable with a no-conversation reason.
-4. Run `site-create`. If production advertises `site-create.operations.local-wordpress`, confirm it uses the same site id and creates a conversation there. If not, confirm exit `2` occurs before attachment upload, remote site creation, active-site change, or credit spend.
-5. Once a local conversation exists, complete design directions and `build-site`, then verify the resulting pages and the local WordPress connection.
+4. Confirm `sites --json` returns only the local site without calling the cloud listing, `use <otherId>` and `site-attach <otherId>` exit `2` with `local_target_locked`, and `account-status --json` reports `siteCount: 1` without fetching cloud sites.
+5. Run `site-create`. If production advertises `site-create.operations.local-wordpress`, confirm it uses the same site id and creates a conversation there. If not, confirm exit `2` occurs before attachment upload, remote site creation, active-site change, or credit spend.
+6. Once a local conversation exists, complete design directions and `build-site`, then verify the resulting pages and the local WordPress connection.
+7. In a disposable credential home, run `wordpress-setup --use cloud --json` and confirm it clears the active selection, reports the previous local site id, preserves the saved pairing, and only then allows selecting a known cloud site.
 
 ## Guided Flow (user present)
 

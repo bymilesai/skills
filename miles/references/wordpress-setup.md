@@ -7,6 +7,8 @@ miles wordpress-setup --use local --json [--path <dir>] [--site-url <url>] [--op
 miles wordpress-setup --use cloud --json
 ```
 
+`--use cloud` is an explicit mode change, not a fallback for failed local work. When a paired local WordPress site is active, it clears the active selection and releases the local target lock while preserving the saved local pairing. Its JSON includes `previousLocalSiteId` and `localTargetLocked: false`. Run it only after the user explicitly chooses to leave the local site.
+
 ## Capability Gate
 
 `--use local` requires the connected Miles server to advertise `wordpress-bootstrap` in `miles doctor --json` under `server.primitives`. If that primitive is missing, the command exits `2` before copying plugin files, activating WordPress plugins, changing `wp-config.php`, or creating a Miles site.
@@ -84,6 +86,8 @@ Save it outside the WordPress document root, make it executable, and supply its 
 ```
 
 Setup pairing does not itself spend build credits. The next `site-create` targets this exact local site only when the server advertises the local operation; otherwise it fails before mutation or spend.
+
+While this local pairing is active, Miles treats it as the only site: `sites` does not query or display cloud sites, `use` cannot switch to one, `site-attach` cannot attach or duplicate one, and `account-status` reports one site without fetching the cloud site list. This lock prevents unrelated cloud state from being selected by an agent or stale credentials.
 
 `wordpressCompatibilityChecked: false` (also emitted on failure payloads) means the version gate could not run — WP-CLI reported no WordPress version, or the plugin header was unreadable — and the plugin files were installed unverified. Tell the user the compatibility check was skipped instead of implying the versions were confirmed compatible.
 

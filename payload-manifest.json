@@ -1,14 +1,14 @@
 {
   "name": "miles",
-  "version": "2026.06.27.1",
+  "version": "2026.07.28.1",
   "root": "miles",
   "fileCount": 36,
-  "totalBytes": 463314,
+  "totalBytes": 474350,
   "files": [
     {
       "path": "miles/SKILL.md",
-      "size": 25113,
-      "sha256": "bf31528c0d2b8a5cbf9e4ea2f4d212a9b3206eb39dbe89b3de25c82eec9b6e86"
+      "size": 25966,
+      "sha256": "98ba461582a6232733234db886ced912741ea0d549e6b3e8a52e1c2bbc46db04"
     },
     {
       "path": "miles/references/account-status.md",
@@ -97,13 +97,13 @@
     },
     {
       "path": "miles/references/site-attach.md",
-      "size": 2025,
-      "sha256": "fcee88a25efaecd8b7512d71112176fb4bfb44ba5c7359346bc8dd4bf957a12a"
+      "size": 2457,
+      "sha256": "aa5342c4684d63b857a0ddff7977d0b8e948f70477aadb90fcfb0b1e5a15c12b"
     },
     {
       "path": "miles/references/site-create.md",
-      "size": 4702,
-      "sha256": "1b0c58f227a6e72db7ce0322ecba7e57dadc6a7eadfba0c4093cabaaa041f3ae"
+      "size": 5104,
+      "sha256": "2b8d6341d187b794b9a7509c284b1e2c2a4c3fd720ee3d42205eefbe35676236"
     },
     {
       "path": "miles/references/site-pages.md",
@@ -152,8 +152,8 @@
     },
     {
       "path": "miles/references/wordpress-setup.md",
-      "size": 8152,
-      "sha256": "7c4c706c4b1fca4906f09a321344e3896fadbf47c74eca4cb052ed562f54b68d"
+      "size": 8893,
+      "sha256": "d91a7643fbbbb0b1e10eb8559eecd9b91b4dfcbd07379c8ba46517332c57ca6e"
     },
     {
       "path": "miles/sandbox.json.example",
@@ -172,18 +172,18 @@
     },
     {
       "path": "miles/scripts/miles-cli.mjs",
-      "size": 203109,
-      "sha256": "7f211f1859c0d2e5acdde008376a0fe0fcfcbe2c1c962bb16d74b18e3bdfbba3"
+      "size": 205726,
+      "sha256": "ea64aaa31a9eaf93b0ce5f4ce23d85538e9f0441fbe80baf35c0ebfa88eed60c"
     },
     {
       "path": "miles/scripts/test-miles-cli.mjs",
-      "size": 130877,
-      "sha256": "0c47c59287974ca222ac29c19ab00bb92e3220337b62863d4b370f94d691152e"
+      "size": 136380,
+      "sha256": "0046d663eb9ca0399c4ae1ac04cec237ba81dbf93fb83bdeb5fbf3b6c8380f37"
     },
     {
       "path": "miles/smoke-checklist.md",
-      "size": 9555,
-      "sha256": "57e069301ad10bdfc2ba77620db3acf9f5a09b70d27f98e17909d51c54a5bc5d"
+      "size": 10043,
+      "sha256": "036f73af13fd8275757a5c17f329ae1b38120a783cac9f31c712824fd45eee51"
     }
   ]
 }

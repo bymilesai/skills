@@ -1769,9 +1769,10 @@ async function cmdCreateSite(rawArgs) {
     );
   }
 
-  // The server validates the slug against its curated parent-theme list and
-  // rejects unknown slugs before creating anything; only shape is checked
-  // here so new curated parents work without a skill update.
+  // The server is the source of truth for the curated parent-theme list;
+  // only shape is checked here so new curated parents work without a skill
+  // update. A server without parent-theme support ignores the field and
+  // builds a standalone theme (see site-create.md caveat).
   if (parentTheme !== null && !/^[a-z0-9][a-z0-9-]*$/.test(parentTheme)) {
     exitWithError(
       `Invalid --parent-theme "${parentTheme}". Use a lowercase theme slug like "ollie".`,

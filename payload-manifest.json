@@ -1,9 +1,9 @@
 {
   "name": "miles",
-  "version": "2026.07.28.1",
+  "version": "2026.08.19.1",
   "root": "miles",
   "fileCount": 36,
-  "totalBytes": 474350,
+  "totalBytes": 476142,
   "files": [
     {
       "path": "miles/SKILL.md",
@@ -102,8 +102,8 @@
     },
     {
       "path": "miles/references/site-create.md",
-      "size": 5104,
-      "sha256": "2b8d6341d187b794b9a7509c284b1e2c2a4c3fd720ee3d42205eefbe35676236"
+      "size": 6172,
+      "sha256": "1b0a87798f797acf16b5b8c93b3b336b363a252c751ea508a066da2b2f5110d7"
     },
     {
       "path": "miles/references/site-pages.md",
@@ -172,8 +172,8 @@
     },
     {
       "path": "miles/scripts/miles-cli.mjs",
-      "size": 205726,
-      "sha256": "ea64aaa31a9eaf93b0ce5f4ce23d85538e9f0441fbe80baf35c0ebfa88eed60c"
+      "size": 206450,
+      "sha256": "4cb733ad06f0f4c6ca9f928a352bfe570d5b50e99ff5592924f42c7c864c72df"
     },
     {
       "path": "miles/scripts/test-miles-cli.mjs",

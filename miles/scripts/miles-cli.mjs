@@ -1737,6 +1737,7 @@ async function cmdCreateSite(rawArgs) {
   let message = '';
   let brief = null;
   let name = null;
+  let parentTheme = null;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--brief' && args[i + 1]) {
@@ -1754,6 +1755,8 @@ async function cmdCreateSite(rawArgs) {
       }
     } else if (args[i] === '--name' && args[i + 1]) {
       name = args[++i];
+    } else if (args[i] === '--parent-theme' && args[i + 1]) {
+      parentTheme = args[++i].trim().toLowerCase();
     } else {
       message = args[i];
     }
@@ -1761,7 +1764,17 @@ async function cmdCreateSite(rawArgs) {
 
   if (!message) {
     exitWithError(
-      'Usage: miles site-create "<description>" [--name "Site Name"] [--brief <file>] [--attach <file>] [--no-wait]',
+      'Usage: miles site-create "<description>" [--name "Site Name"] [--brief <file>] [--attach <file>] [--parent-theme <slug>] [--no-wait]',
+      EXIT_PRECONDITION,
+    );
+  }
+
+  // The server validates the slug against its curated parent-theme list and
+  // rejects unknown slugs before creating anything; only shape is checked
+  // here so new curated parents work without a skill update.
+  if (parentTheme !== null && !/^[a-z0-9][a-z0-9-]*$/.test(parentTheme)) {
+    exitWithError(
+      `Invalid --parent-theme "${parentTheme}". Use a lowercase theme slug like "ollie".`,
       EXIT_PRECONDITION,
     );
   }
@@ -1797,6 +1810,7 @@ async function cmdCreateSite(rawArgs) {
   if (name) body.name = name;
   if (brief) body.brief = brief;
   if (uploadedFiles) body.uploadedFiles = uploadedFiles;
+  if (parentTheme) body.parentThemeSlug = parentTheme;
   if (localWordPressTarget) body.siteId = localWordPressTarget.id;
 
   const data = await apiRequest('POST', '/api/v2/headless/sites', {

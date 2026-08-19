@@ -3,13 +3,14 @@
 Create a new cloud site plus its conversation, or start a conversation on the active paired local WordPress site. Porcelain, HEADLESS. This is the canonical start for new work — and `--brief` is the content-injection seam for agents that already own the content.
 
 ```bash
-miles site-create "<description>" [--name "Site Name"] [--brief <file>] [--attach <file>] [--no-wait]
+miles site-create "<description>" [--name "Site Name"] [--brief <file>] [--attach <file>] [--parent-theme <slug>] [--no-wait]
 ```
 
 - `<description>`: pass the user's words through. The richer the description, the fewer discovery questions Miles asks.
 - `--name`: optional site name (defaults to the first 50 chars of the description).
 - `--brief <file>`: a markdown design brief. Miles treats it as approved, **skips discovery entirely**, and goes straight to design-direction generation. Use this whenever the user already has content, copy, or a written brief — Miles designs around their words instead of interviewing them.
 - `--attach <file>`: upload a brand asset (logo, imagery, content document) and hand it to Miles with the message. Repeat for multiple files. Mention what each file is in the description ("the attached SVG is their logo") so Miles uses it correctly. Details: [upload-assets.md](upload-assets.md).
+- `--parent-theme <slug>`: build the site as a **child theme** of a curated parent instead of a standalone theme. Only use when the user explicitly asks for a specific base/parent theme (e.g. "make it an Ollie child theme" → `--parent-theme ollie`); otherwise omit it — the standalone default is right for almost everyone, and this is not something to proactively offer or ask about. Curated slugs currently include `ollie`, `spectra-one`, `frost`, `ona`, and `twentytwentyfive`; the server is the source of truth for the curated list and rejects the create with a 400 for anything uncurated. The choice is fixed at create time for the life of the site's conversation — a different parent means a new site. **Caveat:** a server that predates parent-theme support ignores the field entirely and builds a standalone theme with a clean exit 0 — after the build, verify the parent actually took effect (e.g. check the installed theme in the dashboard or exported theme's `Template:` header) before telling the user a child theme was built.
 - `--no-wait`: return a JSON handle immediately instead of streaming (see [wait-job.md](wait-job.md)).
 
 By default the command streams progress and prints Miles' first settled response (a discovery question, or direction-generation progress when `--brief` was used). For cloud work, the new site becomes active. When the active connection is `local-wordpress`, the command sends that exact site id and preserves its local dashboard, filesystem root, and connection kind.
